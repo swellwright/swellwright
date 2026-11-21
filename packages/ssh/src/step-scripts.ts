@@ -47,6 +47,9 @@ publish_exit() {
 export const WRAPPER_SCRIPT = `#!/bin/sh
 D=$1
 cd "$D" || exit 70
+# The script runs at most once per step directory, whatever starts this wrapper: the first wrapper to make this
+# directory owns the step, any other one ends here without touching the step (a step must never run twice).
+mkdir .claimed 2>/dev/null || exit 0
 trap '' HUP
 trap : TERM INT
 umask 022
