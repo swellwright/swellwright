@@ -184,7 +184,7 @@ export function HostKeysCard({
     <>
       <SectionCard.Root>
         <SectionCard.Section>
-          <Group align="center" justify="space-between" wrap="nowrap">
+          <Group align="center" justify="space-between" wrap="wrap">
             <OverlayHeader
               icon={IconFingerprint}
               iconColor={server.hostKeys.length > 0 ? 'teal' : 'orange'}
@@ -192,7 +192,7 @@ export function HostKeysCard({
               title={t('hostKeys.title')}
               titleOrder={5}
             />
-            <Group gap="xs" wrap="nowrap">
+            <Group gap="xs" wrap="wrap">
               <Badge
                 color={server.hostKeys.length > 0 ? 'teal' : 'orange'}
                 size="lg"
