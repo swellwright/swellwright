@@ -584,6 +584,41 @@ export function defineStepScenarios(
         assert.equal(await removeStep(conn, id, { baseDir, sudo: env.sudo.options }), true);
       });
 
+      it("cancels and removes a step below the login user's home although sudo resets HOME", async (context) => {
+        if (env.sudo === undefined) {
+          context.skip('no sudo in this environment');
+          return;
+        }
+        // Real sudo (Debian, Ubuntu) gives the command root's HOME: a "~/" directory looked up under sudo would be
+        // the wrong one, the cancel would find no step and the script would run on.
+        const dirName = nextId('.swellwright-test-home');
+        const homeBase = `~/${dirName}`;
+        const id = nextId('home-cancel');
+        try {
+          await startDetachedStep(conn, {
+            id,
+            script: 'sleep 300\n',
+            baseDir: homeBase,
+            sudo: env.sudo.options,
+          });
+          await sleep(500);
+          assert.equal((await getStepStatus(conn, id, homeBase)).state, 'running');
+          await cancelStep(conn, id, { baseDir: homeBase, sudo: env.sudo.options });
+          assert.equal((await getStepStatus(conn, id, homeBase)).state, 'exited');
+          assert.equal(
+            await removeStep(conn, id, { baseDir: homeBase, sudo: env.sudo.options }),
+            true,
+          );
+          await assert.rejects(
+            getStepStatus(conn, id, homeBase),
+            (error: unknown) =>
+              error instanceof SshStepError && error.code === 'ssh_step_not_found',
+          );
+        } finally {
+          await conn.exec(`rm -rf "$HOME"/${shellQuote(dirName)}`);
+        }
+      });
+
       it('hands the sudo password to nothing but sudo: the step never sees it', async (context) => {
         if (env.sudo === undefined) {
           context.skip('no sudo in this environment');

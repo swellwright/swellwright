@@ -41,7 +41,11 @@ defineStepScenarios(
   'detached steps (in-process server, real shell, fake sudo)',
   async () => {
     const home = tempDir('sw-ssh-steps-home-');
-    const sudo = installFakeSudo({ password: FAKE_SUDO_PASSWORD });
+    // Like the real sudo of Debian and Ubuntu, the fake one gives the command another HOME than the caller's.
+    const sudo = installFakeSudo({
+      password: FAKE_SUDO_PASSWORD,
+      resetHome: `${home.path}-sudo-home`,
+    });
     const server = await TestSshServer.start({
       users: USERS,
       exec: shExecHandler({ home: home.path, extraPath: sudo.dir }),

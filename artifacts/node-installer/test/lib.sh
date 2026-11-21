@@ -224,7 +224,17 @@ EOF
 echo node1
 exit 0
 EOF
+    # A process table is "$STUB_STATE/processes", one process per line: the process name, a tab, the command line. As
+    # the real pgrep, -x compares the whole process name and -f matches the command line with an extended expression.
     mkstub pgrep <<'EOF'
+[ -f "$STUB_STATE/processes" ] || exit 1
+_mode=$1; _pattern=$2
+while IFS="$(printf '\t')" read -r _comm _args; do
+    case "$_mode" in
+        -x) [ "$_comm" = "$_pattern" ] && exit 0 ;;
+        -f) printf '%s\n' "$_args" | grep -Eq -- "$_pattern" && exit 0 ;;
+    esac
+done <"$STUB_STATE/processes"
 exit 1
 EOF
     mkstub dpkg <<'EOF'

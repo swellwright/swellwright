@@ -42,7 +42,7 @@ export type {
 export { SshConnection } from './connection.js';
 export type { SshConnectionEvents } from './connection.js';
 
-export { fetchHostKey, fingerprintOf } from './host-key.js';
+export { fetchHostKey, fingerprintOf, hostKeyAlgorithmsPreferring } from './host-key.js';
 export type { FetchHostKeyOptions } from './host-key.js';
 
 export { SftpClient } from './sftp.js';

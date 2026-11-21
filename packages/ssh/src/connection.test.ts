@@ -14,9 +14,11 @@ import {
   SshInputError,
   SshTimeoutError,
 } from './errors.js';
-import { fetchHostKey } from './host-key.js';
+import { fetchHostKey, hostKeyAlgorithmsPreferring } from './host-key.js';
 import {
   generateTestKeyPair,
+  generateTestRsaKeyPair,
+  publicKeyFingerprint,
   startSilentServer,
   startStallingServer,
   TestSshServer,
@@ -214,6 +216,113 @@ describe('host key verification', () => {
     } finally {
       await server.close();
     }
+  });
+});
+
+describe('a server with host keys of several types', () => {
+  // A real sshd has an ed25519, an ECDSA and an RSA key and shows the one the client prefers. A client that pinned the
+  // RSA key (it was the only one when it was scanned, or a person pinned it) must still find it after the server
+  // gained an ed25519 key, and not take the server for another machine.
+  const rsa = generateTestRsaKeyPair();
+  const rsaFingerprint = publicKeyFingerprint(rsa.publicKey);
+  let server: TestSshServer;
+  before(async () => {
+    server = await TestSshServer.start({
+      users: USERS,
+      exec: scripted,
+      extraHostKeys: [rsa],
+    });
+  });
+  after(async () => {
+    await server.close();
+  });
+
+  it('shows the key of the preferred type when nothing is pinned for a type', async () => {
+    const key = await fetchHostKey(server.host, server.port);
+    assert.equal(key.algorithm, 'ssh-ed25519');
+    assert.equal(key.fingerprintSha256, server.hostKeyFingerprint);
+  });
+
+  it('connects with the pinned RSA key although an ed25519 key is preferred by default', async () => {
+    const connection = await SshConnection.connect(
+      targetFor(server, {
+        hostKey: { mode: 'pinned', fingerprints: [rsaFingerprint], keyTypes: ['ssh-rsa'] },
+      }),
+    );
+    try {
+      assert.equal(connection.hostKey.algorithm, 'ssh-rsa');
+      assert.equal(connection.hostKey.fingerprintSha256, rsaFingerprint);
+    } finally {
+      connection.close();
+    }
+  });
+
+  it('takes the key of another type for a mismatch when the types of the pin are not given (what a plain pin does)', async () => {
+    await assert.rejects(
+      SshConnection.connect(
+        targetFor(server, { hostKey: { mode: 'pinned', fingerprints: [rsaFingerprint] } }),
+      ),
+      HostKeyMismatchError,
+    );
+  });
+
+  it('fetchHostKey prefers the algorithms it is given', async () => {
+    const key = await fetchHostKey(server.host, server.port, {
+      algorithms: { serverHostKey: hostKeyAlgorithmsPreferring(['ssh-rsa']) },
+    });
+    assert.equal(key.algorithm, 'ssh-rsa');
+    assert.equal(key.fingerprintSha256, rsaFingerprint);
+  });
+
+  it('never excludes a type: a pinned type the server lacks falls through to the fingerprint check', async () => {
+    const only = await TestSshServer.start({ users: USERS, exec: scripted });
+    try {
+      await assert.rejects(
+        SshConnection.connect(
+          targetFor(only, {
+            hostKey: {
+              mode: 'pinned',
+              fingerprints: [rsaFingerprint],
+              keyTypes: ['ssh-rsa'],
+            },
+          }),
+        ),
+        (error: unknown) =>
+          error instanceof HostKeyMismatchError && error.actual === only.hostKeyFingerprint,
+      );
+      assert.deepEqual(only.authAttempts, []);
+    } finally {
+      await only.close();
+    }
+  });
+
+  it('puts the pinned types first and keeps every other one', () => {
+    const rsaFirst = hostKeyAlgorithmsPreferring(['ssh-rsa']);
+    assert.deepEqual(rsaFirst.slice(0, 3), ['rsa-sha2-512', 'rsa-sha2-256', 'ssh-rsa']);
+    assert.ok(rsaFirst.includes('ssh-ed25519') && rsaFirst.includes('ecdsa-sha2-nistp256'));
+    assert.equal(new Set(rsaFirst).size, rsaFirst.length);
+    // A label for the signature algorithm counts as the RSA key type; an unknown name changes nothing.
+    assert.deepEqual(
+      hostKeyAlgorithmsPreferring(['rsa-sha2-512']).slice(0, 3),
+      rsaFirst.slice(0, 3),
+    );
+    assert.deepEqual(hostKeyAlgorithmsPreferring(['ssh-made-up']), hostKeyAlgorithmsPreferring([]));
+    assert.equal(hostKeyAlgorithmsPreferring([])[0], 'ssh-ed25519');
+  });
+
+  it('refuses key type names that are not names', async () => {
+    await assert.rejects(
+      SshConnection.connect(
+        targetFor(server, {
+          hostKey: {
+            mode: 'pinned',
+            fingerprints: [server.hostKeyFingerprint],
+            keyTypes: ['not a name'],
+          },
+        }),
+      ),
+      SshInputError,
+    );
   });
 });
 

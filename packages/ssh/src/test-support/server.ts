@@ -22,7 +22,7 @@ import {
   write as fsWrite,
 } from 'node:fs';
 import { createServer, type Server as NetServer, type Socket } from 'node:net';
-import { join, normalize, sep } from 'node:path';
+import { join, normalize, posix, sep } from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import {
   Server,
@@ -68,6 +68,11 @@ export interface TestServerOptions {
   users?: Readonly<Record<string, TestUser>>;
   /** Present this key as the host key (default: a fresh ed25519 key). */
   hostKey?: TestKeyPair;
+  /**
+   * More host keys, of other types: a real server has one of every type and shows the type the client prefers.
+   * `hostKey` stays the one `hostKeyFingerprint` reports.
+   */
+  extraHostKeys?: readonly TestKeyPair[];
   /** How exec requests are answered. Without it they are refused. */
   exec?: ExecHandler;
   /** Serve SFTP from this directory (remote path `/a/b` is `<root>/a/b`). */
@@ -76,6 +81,11 @@ export interface TestServerOptions {
   acceptEnv?: readonly string[];
   /** SFTP writes are never answered: a transfer that stops moving. */
   sftpStallWrites?: boolean;
+  /**
+   * Remote path prefixes the SFTP user may not touch: every request for them is answered "permission denied", as for
+   * a directory that only root can enter. Read when an SFTP session opens.
+   */
+  sftpDenied?: readonly string[];
   /** Exact algorithm lists the server offers (to test what a client accepts, e.g. a legacy key exchange). */
   algorithms?: {
     kex?: readonly string[];
@@ -149,7 +159,7 @@ export class TestSshServer {
     const users = options.users ?? {};
     const acceptEnv = new Set(options.acceptEnv ?? []);
     const ssh = new Server({
-      hostKeys: [hostKey.privateKey],
+      hostKeys: [hostKey.privateKey, ...(options.extraHostKeys ?? []).map((key) => key.privateKey)],
       // The ssh2 types name every algorithm; the lists here are plain strings chosen by the test.
       ...(options.algorithms === undefined ? {} : { algorithms: options.algorithms as never }),
     });
@@ -277,7 +287,9 @@ export class TestSshServer {
             reject();
             return;
           }
-          attachSftp(accept(), options.sftpRoot, options.sftpStallWrites === true);
+          attachSftp(accept(), options.sftpRoot, options.sftpStallWrites === true, [
+            ...(options.sftpDenied ?? []),
+          ]);
         });
       });
     });
@@ -351,11 +363,21 @@ function statusFor(error: NodeJS.ErrnoException | null): number {
   return STATUS.FAILURE;
 }
 
-function attachSftp(sftp: SFTPWrapper, root: string, stallWrites: boolean): void {
+function attachSftp(
+  sftp: SFTPWrapper,
+  root: string,
+  stallWrites: boolean,
+  denied: readonly string[],
+): void {
   const files = new Map<number, number>();
   const directories = new Map<number, { path: string; sent: boolean }>();
   let next = 1;
   const local = (remote: string): string => join(root, normalize(`${sep}${remote}`));
+  const isDenied = (remote: string): boolean => {
+    // Remote paths are POSIX paths whatever machine the test runs on (on Windows `normalize` would turn `//a` into a UNC path).
+    const clean = posix.normalize(`/${remote}`);
+    return denied.some((prefix) => clean === prefix || clean.startsWith(`${prefix}/`));
+  };
   const handleOf = (id: number): Buffer => {
     const handle = Buffer.alloc(4);
     handle.writeUInt32BE(id, 0);
@@ -380,6 +402,10 @@ function attachSftp(sftp: SFTPWrapper, root: string, stallWrites: boolean): void
     sftp.name(id, [{ filename: resolved, longname: resolved, attrs: NO_ATTRS }]);
   });
   const statPath = (id: number, path: string): void => {
+    if (isDenied(path)) {
+      sftp.status(id, STATUS.PERMISSION_DENIED);
+      return;
+    }
     fsStat(local(path), (error, stats) => {
       if (error === null) sftp.attrs(id, attrsOf(stats));
       else sftp.status(id, statusFor(error));
@@ -399,6 +425,10 @@ function attachSftp(sftp: SFTPWrapper, root: string, stallWrites: boolean): void
     });
   });
   sftp.on('OPEN', (id, filename, flags, attrs) => {
+    if (isDenied(filename)) {
+      sftp.status(id, STATUS.PERMISSION_DENIED);
+      return;
+    }
     const mode = utils.sftp.flagsToString(flags);
     fsOpen(local(filename), mode ?? 'r', attrs.mode, (error, fd) => {
       if (error !== null) {
@@ -448,21 +478,37 @@ function attachSftp(sftp: SFTPWrapper, root: string, stallWrites: boolean): void
     });
   });
   sftp.on('MKDIR', (id, path) => {
+    if (isDenied(path)) {
+      sftp.status(id, STATUS.PERMISSION_DENIED);
+      return;
+    }
     mkdir(local(path), (error) => {
       sftp.status(id, statusFor(error));
     });
   });
   sftp.on('RMDIR', (id, path) => {
+    if (isDenied(path)) {
+      sftp.status(id, STATUS.PERMISSION_DENIED);
+      return;
+    }
     rmdir(local(path), (error) => {
       sftp.status(id, statusFor(error));
     });
   });
   sftp.on('REMOVE', (id, path) => {
+    if (isDenied(path)) {
+      sftp.status(id, STATUS.PERMISSION_DENIED);
+      return;
+    }
     unlink(local(path), (error) => {
       sftp.status(id, statusFor(error));
     });
   });
   sftp.on('RENAME', (id, from, to) => {
+    if (isDenied(from) || isDenied(to)) {
+      sftp.status(id, STATUS.PERMISSION_DENIED);
+      return;
+    }
     // SFTP version 3 says it is an error when the destination exists (OpenSSH's server behaves so).
     if (existsSync(local(to))) {
       sftp.status(id, STATUS.FAILURE);
@@ -479,6 +525,10 @@ function attachSftp(sftp: SFTPWrapper, root: string, stallWrites: boolean): void
     sftp.status(id, STATUS.OK);
   });
   sftp.on('OPENDIR', (id, path) => {
+    if (isDenied(path)) {
+      sftp.status(id, STATUS.PERMISSION_DENIED);
+      return;
+    }
     opendir(local(path), (error, directory) => {
       if (error !== null) {
         sftp.status(id, statusFor(error));

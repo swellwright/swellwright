@@ -27,7 +27,7 @@
 
 set -u
 
-INSTALLER_VERSION=1.0.0
+INSTALLER_VERSION=1.0.1
 
 DEFAULT_NODE_PORT=62050
 # The node image is pinned (never :latest). Update the default with the artifact version when the supported node release changes.
@@ -665,10 +665,13 @@ make_dir() {
 restore_newest_backup() { _b=$(ls -1 "$1".bak.* 2>/dev/null | sort | tail -n 1); [ -n "$_b" ] && cp -a "$_b" "$1"; return 0; }
 
 # A fresh Ubuntu starts unattended-upgrades and holds the dpkg lock for a while: wait (up to 15 minutes), do not fail with
-# "Could not get lock". apt itself also waits (DPkg::Lock::Timeout).
+# "Could not get lock". apt itself also waits (DPkg::Lock::Timeout). Not every process called unattended-upgr* is a run:
+# the watcher of the same package (unattended-upgrade-shutdown, started by unattended-upgrades.service) runs for as long
+# as the machine is up and holds no lock, so a run is told apart by its command line and not by the name of its process.
 apt_wait() {
     _aw=0
-    while pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgr >/dev/null 2>&1 \
+    while pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 \
+        || pgrep -f '/usr/bin/unattended-upgrade( |$)' >/dev/null 2>&1 \
         || pgrep -x packagekitd >/dev/null 2>&1 || pgrep -f apt.systemd.daily >/dev/null 2>&1; do
         [ "$_aw" -eq 0 ] && echo "waiting for another apt or dpkg process (usually unattended-upgrades) to release the lock ..."
         if [ "$_aw" -ge "${APT_WAIT_MAX:-900}" ]; then echo "the dpkg lock was not released in $_aw s, going on"; return 0; fi

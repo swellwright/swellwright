@@ -16,6 +16,9 @@ import { CodedHttpException } from '../http.js';
 // What Swellwright says to a server when it moves an artifact. Every command is one fixed shape with quoted
 // arguments, so the tests of the API can stand in for a server that answers exactly these (ssh-test-support.ts).
 
+/** `/var/lib/swellwright`: the directory the system destination lives in (steps live there too). */
+const ARTIFACT_SYSTEM_PARENT = ARTIFACT_SYSTEM_DIR.slice(0, ARTIFACT_SYSTEM_DIR.lastIndexOf('/'));
+
 // eslint-disable-next-line no-control-regex
 const CONTROL = /[\u0000-\u001f\u007f]/u;
 
@@ -107,6 +110,14 @@ export const chmodCommand = (mode: number, path: string): string =>
   `chmod ${mode.toString(8).padStart(4, '0')} -- ${shellQuote(path)}`;
 export const removeFileCommand = (path: string): string => `rm -f -- ${shellQuote(path)}`;
 export const removeDirCommand = (path: string): string => `rmdir -- ${shellQuote(path)}`;
+/**
+ * What is at a path, asked as root: `missing`, `other` (not a file) or the `sha256sum` line. The system directory
+ * can be closed to the login (a root-only parent made by something else), and then SFTP cannot even look.
+ */
+export const inspectAsRootCommand = (path: string): string => {
+  const quoted = shellQuote(path);
+  return `if [ ! -e ${quoted} ]; then echo missing; elif [ -f ${quoted} ]; then sha256sum -- ${quoted}; else echo other; fi`;
+};
 
 /**
  * Puts a staged file in the system directory as root: the directory is made root-owned and readable by all, the file
@@ -121,9 +132,14 @@ export function installCommand(options: {
   readonly mode: number;
 }): string {
   const mode = options.mode.toString(8).padStart(4, '0');
+  // Every directory of the chain is named, so that each one is root-owned, 0755 and readable by all: the step layer
+  // creates `/var/lib/swellwright` as 0700 when it runs as root, and a copy nobody else can reach is not "readable by
+  // everybody" (the verify of a login that is not root could not look at it).
+  const chain = [ARTIFACT_SYSTEM_PARENT, ARTIFACT_SYSTEM_DIR, options.dir];
+  const unique = [...new Set(chain)];
   return [
     'umask 022',
-    `install -d -m 0755 -o root -g root -- ${shellQuote(options.dir)}`,
+    `install -d -m 0755 -o root -g root -- ${unique.map((directory) => shellQuote(directory)).join(' ')}`,
     `install -m ${mode} -o root -g root -- ${shellQuote(options.staged)} ${shellQuote(options.temporary)}`,
     `mv -f -- ${shellQuote(options.temporary)} ${shellQuote(options.final)}`,
   ].join(' && ');
@@ -194,7 +210,26 @@ export async function inspectRemote(
   sftp: SftpClient,
   path: string,
   timeoutMs: number,
+  root?: { readonly sudo: { password?: string } },
 ): Promise<RemoteFile> {
+  if (root !== undefined) {
+    // As root, in one command: a login that is not root may not be able to look at the directory at all.
+    const asked = await connection.exec(inspectAsRootCommand(path), { ...root, timeoutMs });
+    const line = asked.stdout.trim();
+    if (asked.code === 0 && line === 'missing') {
+      return { state: 'missing' };
+    }
+    if (asked.code === 0 && line === 'other') {
+      return { state: 'other' };
+    }
+    const found = /^([0-9a-f]{64})\s/u.exec(line)?.[1];
+    if (asked.code === 0 && found !== undefined) {
+      return { state: 'file', sha256: found };
+    }
+    throw failure(
+      `The server could not hash the file (${complaint(asked.stderr) || `exit status ${String(asked.code)}`}).`,
+    );
+  }
   const info = await sftp.stat(path);
   if (info === null) {
     return { state: 'missing' };

@@ -3,6 +3,7 @@ import type { ErrorCode, SSH_FAILURE_CODES } from '@swellwright/contracts';
 import {
   fetchHostKey,
   HostKeyMismatchError,
+  hostKeyAlgorithmsPreferring,
   resolveTargetAddress,
   type ServerHostKey,
   SshAuthError,
@@ -155,11 +156,24 @@ export class SshService implements OnApplicationShutdown {
     }
   }
 
-  /** Reads the host key the server shows, with no credential involved. */
-  async scanHostKey(address: string, port: number): Promise<ServerHostKey> {
+  /**
+   * Reads the host key the server shows, with no credential involved. A server has keys of several types and shows
+   * the one the client prefers: `keyTypes` (the types of the keys pinned for it) make the pinned types the preferred
+   * ones, so that a key the server gained later is not taken for a changed one.
+   */
+  async scanHostKey(
+    address: string,
+    port: number,
+    keyTypes: readonly string[],
+  ): Promise<ServerHostKey> {
     const host = await this.resolve(address);
     try {
-      return await fetchHostKey(host, port, { timeoutMs: this.config.ssh.connectTimeoutMs });
+      return await fetchHostKey(host, port, {
+        timeoutMs: this.config.ssh.connectTimeoutMs,
+        ...(keyTypes.length === 0
+          ? {}
+          : { algorithms: { serverHostKey: hostKeyAlgorithmsPreferring(keyTypes) } }),
+      });
     } catch (error) {
       const problem = sshProblem(error);
       throw problem ? sshException(problem) : error;
@@ -172,7 +186,12 @@ export class SshService implements OnApplicationShutdown {
    * layer come out as `CodedHttpException`; the caller decides which of them are results.
    */
   async withAccess<T>(
-    server: { readonly address: string; readonly port: number },
+    server: {
+      readonly address: string;
+      readonly port: number;
+      /** The key types of the pinned keys (see `scanHostKey`). */
+      readonly hostKeyTypes: readonly string[];
+    },
     fingerprints: readonly string[],
     access: SshAccessRef,
     operation: (session: SshSession) => Promise<T>,
@@ -202,7 +221,7 @@ export class SshService implements OnApplicationShutdown {
         access.method === 'key'
           ? { kind: 'key', privateKey: secret }
           : { kind: 'password', password: secret },
-      hostKey: { mode: 'pinned', fingerprints },
+      hostKey: { mode: 'pinned', fingerprints, keyTypes: server.hostKeyTypes },
       connectTimeoutMs: this.config.ssh.connectTimeoutMs,
     };
     try {

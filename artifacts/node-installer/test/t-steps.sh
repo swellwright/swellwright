@@ -14,6 +14,33 @@ t_base_step() {
     assert_out "BASE_UPGRADE=no"
 }
 
+# Stock Ubuntu runs the watcher of unattended-upgrades all the time (its process name is cut to "unattended-upgr", as the
+# name of a run is); it holds no lock. Waiting for it made every apt call of the installer wait 15 minutes (found on a
+# fresh Ubuntu 24.04 server).
+t_base_step_does_not_wait_for_the_unattended_upgrades_watcher() {
+    printf 'unattended-upgr\t/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal\n' >"$STATE/processes"
+    run_inst base APT_WAIT_MAX=3 APT_WAIT_STEP=1
+    assert_rc 0
+    assert_not_contains "$R/var/log/swellwright-node-installer.log" "waiting for another apt"
+    assert_called "apt-get -o DPkg::Lock::Timeout=600 update"
+}
+
+t_base_step_waits_for_a_running_unattended_upgrade() {
+    printf 'unattended-upgr\t/usr/bin/python3 /usr/bin/unattended-upgrade\n' >"$STATE/processes"
+    run_inst base APT_WAIT_MAX=2 APT_WAIT_STEP=1
+    assert_rc 0
+    assert_contains "$R/var/log/swellwright-node-installer.log" "waiting for another apt or dpkg process"
+    assert_contains "$R/var/log/swellwright-node-installer.log" "the dpkg lock was not released in 2 s, going on"
+    assert_called "apt-get -o DPkg::Lock::Timeout=600 update"
+}
+
+t_base_step_waits_for_the_daily_apt_job() {
+    printf 'apt.systemd.dai\t/bin/sh /usr/lib/apt/apt.systemd.daily lock_is_held install\n' >"$STATE/processes"
+    run_inst base APT_WAIT_MAX=2 APT_WAIT_STEP=1
+    assert_rc 0
+    assert_contains "$R/var/log/swellwright-node-installer.log" "waiting for another apt or dpkg process"
+}
+
 t_base_step_stops_on_apt_failure() {
     fail_on "apt-get -o DPkg::Lock::Timeout=600 update"
     run_inst base

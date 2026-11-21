@@ -50,6 +50,35 @@ function stepBaseDir(connection: SshConnection, baseDir: string | undefined): st
   return baseDir ?? defaultStepBaseDir(connection.username);
 }
 
+/**
+ * The directory word for a command that runs through sudo. `~` is expanded by the remote shell from `$HOME`, and
+ * sudo hands the command root's `HOME` (Debian and Ubuntu reset it): a step that lives below the login user's home
+ * would be looked for in `/root`, found missing and left running or left behind. So the home of the login user is
+ * asked first, as the login user, and the command gets the absolute path.
+ */
+async function sudoBaseWord(
+  connection: SshConnection,
+  base: string,
+  sudo: SudoOptions | undefined,
+): Promise<string> {
+  if (sudo === undefined || !base.startsWith('~/')) return remoteDirWord(base);
+  const result = await connection.exec('printf %s "$HOME"', { timeoutMs: CONTROL_EXEC_TIMEOUT_MS });
+  const home = result.stdout;
+  if (
+    result.code !== 0 ||
+    !home.startsWith('/') ||
+    home.length > 512 ||
+    // eslint-disable-next-line no-control-regex -- a control character in a path is refused on purpose
+    /[\u0000-\u001f\u007f]/u.test(home)
+  ) {
+    throw new SshStepError(
+      'ssh_step_failed',
+      'The home directory of the login user could not be determined.',
+    );
+  }
+  return remoteDirWord(`${home === '/' ? '' : home.replace(/\/+$/u, '')}${base.slice(1)}`);
+}
+
 function frame(name: string, data: Buffer | undefined): string {
   if (data === undefined) return `FRAME ${name} -\n`;
   const lines = data.toString('base64').match(/.{1,76}/gu) ?? [];
@@ -377,7 +406,8 @@ export async function cancelStep(
   if (!Number.isFinite(graceMs) || graceMs < 0)
     throw new SshInputError('graceMs must be a non-negative number.');
   const ticks = Math.ceil(graceMs / 200);
-  const command = `sh -c ${shellQuote(CANCEL_SCRIPT)} swellwright-cancel ${remoteDirWord(base)} ${shellQuote(id)} ${String(ticks)}`;
+  const baseWord = await sudoBaseWord(connection, base, options.sudo);
+  const command = `sh -c ${shellQuote(CANCEL_SCRIPT)} swellwright-cancel ${baseWord} ${shellQuote(id)} ${String(ticks)}`;
   const result = await connection.exec(command, {
     timeoutMs: graceMs + 30_000,
     ...(options.sudo === undefined ? {} : { sudo: options.sudo }),
@@ -414,7 +444,8 @@ export async function removeStep(
 ): Promise<boolean> {
   assertStepId(id);
   const base = stepBaseDir(connection, options.baseDir);
-  const command = `sh -c ${shellQuote(REMOVE_SCRIPT)} swellwright-remove ${remoteDirWord(base)} ${shellQuote(id)} ${options.force === true ? '1' : '0'}`;
+  const baseWord = await sudoBaseWord(connection, base, options.sudo);
+  const command = `sh -c ${shellQuote(REMOVE_SCRIPT)} swellwright-remove ${baseWord} ${shellQuote(id)} ${options.force === true ? '1' : '0'}`;
   const result = await connection.exec(command, {
     timeoutMs: CONTROL_EXEC_TIMEOUT_MS,
     ...(options.sudo === undefined ? {} : { sudo: options.sudo }),
