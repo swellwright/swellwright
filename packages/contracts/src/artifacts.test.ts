@@ -175,8 +175,11 @@ describe('artifact routes', () => {
     ]) {
       assert.equal(byId(id).permission, 'servers:read', id);
     }
-    for (const id of ['pushServerArtifact', 'verifyServerArtifact', 'removeServerArtifact']) {
-      assert.equal(byId(id).permission, 'servers:write', id);
+    assert.equal(byId('verifyServerArtifact').permission, 'servers:write');
+    // What is pushed is meant to be run: putting it there and taking it away need the exec permission and a code.
+    for (const id of ['pushServerArtifact', 'removeServerArtifact']) {
+      assert.equal(byId(id).permission, 'servers:exec', id);
+      assert.equal(byId(id).stepUp, true, id);
     }
   });
 

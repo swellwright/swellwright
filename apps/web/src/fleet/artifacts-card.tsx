@@ -47,6 +47,7 @@ import {
   removeServerArtifact,
   verifyServerArtifact,
 } from '../api.js';
+import { useStepUp } from '../auth/step-up.js';
 import { notifyArtifactFailure } from '../operations/artifact-errors.js';
 import { QueryErrorCard } from '../security/query-error.js';
 import { useTimeFirst } from '../security/time-first.js';
@@ -107,16 +108,19 @@ function PushForm({
   const chosen = choices.find((choice) => choice.name === name);
   const file = chosen?.versions.find((candidate) => candidate.version === version)?.file;
 
+  const step = useStepUp();
   const push = useMutation({
     mutationFn: () => {
       if (name === null) {
         throw new Error('No artifact chosen.');
       }
-      return pushServerArtifact(server.id, {
-        name,
-        ...(version === null ? {} : { version }),
-        destination,
-      });
+      return step.run(() =>
+        pushServerArtifact(server.id, {
+          name,
+          ...(version === null ? {} : { version }),
+          destination,
+        }),
+      );
     },
     onSuccess: (pushed) => {
       const text = {
@@ -291,18 +295,22 @@ function PushDialog({
 /**
  * The artifacts Swellwright pushed to a server: what, where, whether the copy still is what the catalogue says, and
  * the actions on it. Reading needs `servers:read` and never connects to the server; pushing, checking and removing
- * need `servers:write`.
+ * need `servers:write`, except pushing and removing: they need `servers:exec` and a fresh code, because what is
+ * pushed is meant to be run.
  */
 export function ArtifactsCard({
   server,
   canWrite,
+  canExec,
   onChanged,
 }: {
   server: ServerView;
   canWrite: boolean;
+  canExec: boolean;
   onChanged: () => void;
 }) {
   const { t } = useTranslation(['artifacts', 'common']);
+  const step = useStepUp();
   const formatTime = useTimeFirst();
   const queryClient = useQueryClient();
   const [pushing, setPushing] = useState(false);
@@ -351,7 +359,8 @@ export function ArtifactsCard({
   });
 
   const remove = useMutation({
-    mutationFn: (copy: ServerArtifact) => removeServerArtifact(server.id, copy.name, copy.version),
+    mutationFn: (copy: ServerArtifact) =>
+      step.run(() => removeServerArtifact(server.id, copy.name, copy.version)),
     onSuccess: (_result, copy) => {
       notifySuccess(
         t('server.title'),
@@ -412,7 +421,7 @@ export function ArtifactsCard({
               >
                 {copies.length > 0 ? t('server.count', { count: copies.length }) : t('server.none')}
               </Badge>
-              {canWrite ? (
+              {canExec ? (
                 <Button
                   color="teal"
                   leftSection={<IconUpload size={16} />}
@@ -480,27 +489,29 @@ export function ArtifactsCard({
                           {t('server.verify')}
                         </Button>
                       </Tooltip>
-                      <Tooltip label={t('server.remove')} withArrow>
-                        <ActionIcon
-                          aria-label={t('server.removeNamed', {
-                            name: copy.name,
-                            version: copy.version,
-                          })}
-                          color="red"
-                          loading={
-                            remove.isPending &&
-                            remove.variables.name === copy.name &&
-                            remove.variables.version === copy.version
-                          }
-                          onClick={() => {
-                            askRemove(copy);
-                          }}
-                          size="lg"
-                          variant="soft"
-                        >
-                          <IconTrash size={18} />
-                        </ActionIcon>
-                      </Tooltip>
+                      {canExec ? (
+                        <Tooltip label={t('server.remove')} withArrow>
+                          <ActionIcon
+                            aria-label={t('server.removeNamed', {
+                              name: copy.name,
+                              version: copy.version,
+                            })}
+                            color="red"
+                            loading={
+                              remove.isPending &&
+                              remove.variables.name === copy.name &&
+                              remove.variables.version === copy.version
+                            }
+                            onClick={() => {
+                              askRemove(copy);
+                            }}
+                            size="lg"
+                            variant="soft"
+                          >
+                            <IconTrash size={18} />
+                          </ActionIcon>
+                        </Tooltip>
+                      ) : null}
                     </Group>
                   ) : null}
                 </Group>

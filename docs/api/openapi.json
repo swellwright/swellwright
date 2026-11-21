@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.22.0",
+    "version": "0.23.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -4820,7 +4820,7 @@
             }
           }
         },
-        "description": "Reads the file of the catalogue and hashes it (a file that is not what its manifest says is never sent), uploads it over SFTP to `<dir>/<name>/<version>/<file>` under a temporary name, hashes what arrived on the server and renames it into place only when it matches, sets the mode (a script 0755, a data file 0644, never writable by others) and hashes it once more in its place. A failure leaves no partial file. `destination: user` (the default) is `~/.swellwright/artifacts` of the login, private to it; `destination: system` is `/var/lib/swellwright/artifacts`, root-owned, written through sudo. When the same file is already there nothing is uploaded and the answer is 200 `unchanged`; a new or replaced copy answers 201 `pushed`. One push per server runs at a time. Access entries are tried by priority until one logs in. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `artifact_broken`, `artifact_busy` (another push or removal is running on this server), `artifact_destination_conflict` (this version is on the server at the other destination: remove it first), `sudo_unavailable` (destination `system` needs root or a working sudo), `no_access_entry`, 502 `artifact_hash_mismatch` (the copy on the server does not hash to the catalogue's value: nothing is left there; `details` has `expected`, `actual`, `stage`), `ssh_connect_failed`, `ssh_auth_failed`, `ssh_key_invalid`, `ssh_failed`, 504 `ssh_timeout`.",
+        "description": "Reads the file of the catalogue and hashes it (a file that is not what its manifest says is never sent), uploads it over SFTP to `<dir>/<name>/<version>/<file>` under a temporary name, hashes what arrived on the server and renames it into place only when it matches, sets the mode (a script 0755, a data file 0644, never writable by others) and hashes it once more in its place. A failure leaves no partial file. `destination: user` (the default) is `~/.swellwright/artifacts` of the login, private to it; `destination: system` is `/var/lib/swellwright/artifacts`, root-owned, written through sudo. When the same file is already there nothing is uploaded and the answer is 200 `unchanged`; a new or replaced copy answers 201 `pushed`. One push per server runs at a time. Access entries are tried by priority until one logs in. Needs `servers:exec` and a fresh second factor: what is pushed is meant to be run on the server. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `artifact_broken`, `artifact_busy` (another push or removal is running on this server), `artifact_destination_conflict` (this version is on the server at the other destination: remove it first), `sudo_unavailable` (destination `system` needs root or a working sudo), `no_access_entry`, 502 `artifact_hash_mismatch` (the copy on the server does not hash to the catalogue's value: nothing is left there; `details` has `expected`, `actual`, `stage`), `ssh_connect_failed`, `ssh_auth_failed`, `ssh_key_invalid`, `ssh_failed`, 504 `ssh_timeout`.",
         "parameters": [
           {
             "name": "id",
@@ -4847,12 +4847,10 @@
         "security": [
           {
             "session": []
-          },
-          {
-            "bearer": []
           }
         ],
-        "x-sw-permission": "servers:write"
+        "x-sw-permission": "servers:exec",
+        "x-sw-step-up": true
       }
     },
     "/servers/{id}/artifacts/{name}/verify": {
@@ -4953,7 +4951,7 @@
             }
           }
         },
-        "description": "Deletes the copy on the server (and the directories left empty) and forgets it. Nothing is removed that Swellwright did not put there: the path comes from the record of the push and is checked against the layout before anything is deleted. A copy that is already gone is not an error. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `artifact_busy`, `sudo_unavailable`.",
+        "description": "Deletes the copy on the server (and the directories left empty) and forgets it. Needs `servers:exec` and a fresh second factor. Nothing is removed that Swellwright did not put there: the path comes from the record of the push and is checked against the layout before anything is deleted. A copy that is already gone is not an error. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `artifact_busy`, `sudo_unavailable`.",
         "parameters": [
           {
             "name": "id",
@@ -4991,12 +4989,10 @@
         "security": [
           {
             "session": []
-          },
-          {
-            "bearer": []
           }
         ],
-        "x-sw-permission": "servers:write"
+        "x-sw-permission": "servers:exec",
+        "x-sw-step-up": true
       }
     }
   },
