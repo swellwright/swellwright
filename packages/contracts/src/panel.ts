@@ -581,6 +581,19 @@ export const PanelConfigProfileAnswerSchema = z
   .object({ configProfile: PanelConfigProfileViewSchema, ...listMeta })
   .meta({ id: 'PanelConfigProfileAnswer' });
 
+export type PanelNodeList = z.infer<typeof PanelNodeListSchema>;
+export type PanelHostList = z.infer<typeof PanelHostListSchema>;
+export type PanelConfigProfileList = z.infer<typeof PanelConfigProfileListSchema>;
+export type PanelInternalSquadList = z.infer<typeof PanelInternalSquadListSchema>;
+export type PanelExternalSquadList = z.infer<typeof PanelExternalSquadListSchema>;
+export type PanelSubscriptionTemplateList = z.infer<typeof PanelSubscriptionTemplateListSchema>;
+export type PanelSnippetList = z.infer<typeof PanelSnippetListSchema>;
+export type PanelNodePluginList = z.infer<typeof PanelNodePluginListSchema>;
+export type PanelInfraAnswer = z.infer<typeof PanelInfraAnswerSchema>;
+export type PanelApiTokenList = z.infer<typeof PanelApiTokenListSchema>;
+export type PanelSubscriptionSettingsAnswer = z.infer<typeof PanelSubscriptionSettingsAnswerSchema>;
+export type PanelConfigProfileAnswer = z.infer<typeof PanelConfigProfileAnswerSchema>;
+
 export const PanelReadQuerySchema = z.object({
   refresh: z
     .enum(['true', 'false'])

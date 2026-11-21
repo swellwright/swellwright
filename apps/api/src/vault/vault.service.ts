@@ -108,6 +108,11 @@ export class VaultService implements OnApplicationShutdown {
     this.kek = null;
   }
 
+  /** Throws the sealed answer (423) when the key is not in memory; for a caller that must not start before it is. */
+  requireOpen(): void {
+    this.openKey();
+  }
+
   /** The key, or the answer a caller gets when there is none: no vault yet (409) or a sealed one (423). */
   private openKey(): Buffer {
     if (!this.kek) {
@@ -272,10 +277,25 @@ export class VaultService implements OnApplicationShutdown {
     return this.serial.run(() => this.createNow(actor, request, meta));
   }
 
+  /**
+   * Creates a secret and lets the caller do more in the same transaction: the connection to a panel that was just
+   * tried with this token is saved together with it, so there is never a token without its connection or the other
+   * way round (ADR 0040). If `inside` throws, the secret is not created.
+   */
+  createWithin(
+    actor: Actor,
+    request: CreateSecretRequest,
+    meta: RequestMeta,
+    inside: (tx: Prisma.TransactionClient, secret: SecretView) => Promise<void>,
+  ): Promise<SecretView> {
+    return this.serial.run(() => this.createNow(actor, request, meta, inside));
+  }
+
   private async createNow(
     actor: Actor,
     request: CreateSecretRequest,
     meta: RequestMeta,
+    inside?: (tx: Prisma.TransactionClient, secret: SecretView) => Promise<void>,
   ): Promise<SecretView> {
     const kek = this.openKey();
     const id = randomUUID();
@@ -305,6 +325,9 @@ export class VaultService implements OnApplicationShutdown {
           },
           tx,
         );
+        if (inside) {
+          await inside(tx, toSecretView(created));
+        }
         return created;
       });
       return toSecretView(row);
@@ -404,9 +427,19 @@ export class VaultService implements OnApplicationShutdown {
    * database refuses it too (a restricting foreign key), this check says which servers use it (ADR 0034).
    */
   private async refuseWhileInUse(
-    tx: Pick<Prisma.TransactionClient, 'serverAccess'>,
+    tx: Pick<Prisma.TransactionClient, 'serverAccess' | 'panelConnection'>,
     id: string,
   ): Promise<void> {
+    const panels = await tx.panelConnection.findMany({
+      where: { tokenSecretId: id },
+      select: { baseUrl: true },
+    });
+    const panel = panels[0];
+    if (panel) {
+      throw new ConflictException(
+        `This secret is the token of the connection to the panel at ${panel.baseUrl}. Disconnect the panel first.`,
+      );
+    }
     const using = await tx.serverAccess.findMany({
       where: { OR: [{ secretId: id }, { sudoSecretId: id }] },
       select: { server: { select: { name: true } } },
@@ -446,9 +479,10 @@ export class VaultService implements OnApplicationShutdown {
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2003') {
-        // A server started to use it between the check and the delete; the foreign key is the last word.
+        // A server or a panel connection started to use it between the check and the delete; the foreign key is the
+        // last word.
         throw new ConflictException(
-          'This secret is used by a server. Remove it from the access entries first.',
+          'This secret is in use by a server or by the connection to the panel. Remove it from there first.',
         );
       }
       throw error;
@@ -508,6 +542,37 @@ export class VaultService implements OnApplicationShutdown {
         throw new InternalServerErrorException('The secret could not be decrypted.');
       }
     });
+  }
+
+  /**
+   * The API token of a panel for the connection to it (ADR 0040). Not a reveal: no person asked, and the connection
+   * records its own checks (`panel.connected`, `panel.tested`). The secret must be of kind `panel_token`.
+   */
+  readForPanel(id: string): Promise<string> {
+    return this.serial.run(async () => {
+      const kek = this.openKey();
+      return this.readPanelToken(kek, id);
+    });
+  }
+
+  private async readPanelToken(kek: Buffer, id: string): Promise<string> {
+    const row = await this.db.secret.findUnique({ where: { id } });
+    if (!row) {
+      throw new NotFoundException('The secret that holds the token of the panel no longer exists.');
+    }
+    if (row.type !== 'panel_token') {
+      throw new ConflictException(
+        `The secret "${row.name}" is not of the kind "panel_token" that a panel connection needs.`,
+      );
+    }
+    try {
+      return decryptSecret(kek, { id, version: row.version, type: row.type }, row);
+    } catch {
+      this.logger.error(
+        `secret ${id} did not decrypt: the stored blobs do not match their context`,
+      );
+      throw new InternalServerErrorException('The secret could not be decrypted.');
+    }
   }
 
   /** The only way a value leaves. Recorded first: no record, no value. */

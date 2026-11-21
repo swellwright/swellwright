@@ -57,6 +57,9 @@ importers:
       '@swellwright/plugin-api':
         specifier: workspace:*
         version: link:../../packages/plugin-api
+      '@swellwright/remnawave':
+        specifier: workspace:*
+        version: link:../../packages/remnawave
       '@swellwright/ssh':
         specifier: workspace:*
         version: link:../../packages/ssh

@@ -24,6 +24,7 @@
     "@swellwright/contracts": "workspace:*",
     "@swellwright/db": "workspace:*",
     "@swellwright/plugin-api": "workspace:*",
+    "@swellwright/remnawave": "workspace:*",
     "@swellwright/ssh": "workspace:*",
     "iovalkey": "0.4.0",
     "reflect-metadata": "0.2.2",

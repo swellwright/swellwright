@@ -76,7 +76,7 @@ function bearerOf(header: string | undefined): string | undefined {
 }
 
 /** Whether the caller may do it: a session by the role, a token by what it carries and the role still allows. */
-function can(auth: AuthContext, permission: Permission): boolean {
+export function can(auth: AuthContext, permission: Permission): boolean {
   return auth.via === 'token'
     ? (auth.grants ?? []).includes(permission)
     : hasPermission(auth.user.role, permission);
