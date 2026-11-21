@@ -32,6 +32,15 @@ export const ERROR_CODES = [
   'artifact_destination_conflict',
   'artifact_hash_mismatch',
   'sudo_unavailable',
+  // The Remnawave panel (ADR 0040). `panel_contract_changed` names the endpoint and the field in its details.
+  'panel_not_connected',
+  'panel_unauthorized',
+  'panel_forbidden',
+  'panel_unreachable',
+  'panel_timeout',
+  'panel_contract_changed',
+  'panel_unsupported_version',
+  'panel_rate_limited',
   'internal_error',
 ] as const;
 

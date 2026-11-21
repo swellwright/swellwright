@@ -75,6 +75,49 @@ import {
 } from './commands.js';
 import { ApiErrorSchema, ErrorCodeSchema } from './errors.js';
 import {
+  ConnectPanelRequestSchema,
+  ConnectPanelWithTokenRequestSchema,
+  PanelApiTokenListSchema,
+  PanelApiTokenViewSchema,
+  PanelBillingNodeViewSchema,
+  PanelCapabilitiesSchema,
+  PanelCapabilityStateSchema,
+  PanelConfigProfileAnswerSchema,
+  PanelConfigProfileListSchema,
+  PanelConfigProfileSummarySchema,
+  PanelConfigProfileViewSchema,
+  PanelConnectionStateSchema,
+  PanelConnectionViewSchema,
+  PanelExternalSquadListSchema,
+  PanelExternalSquadViewSchema,
+  PanelHostListSchema,
+  PanelHostViewSchema,
+  PanelInboundViewSchema,
+  PanelInfraAnswerSchema,
+  PanelInfraProviderViewSchema,
+  PanelInfraViewSchema,
+  PanelInternalSquadListSchema,
+  PanelInternalSquadViewSchema,
+  PanelLastErrorSchema,
+  PanelNodeListSchema,
+  PanelNodePluginListSchema,
+  PanelNodePluginViewSchema,
+  PanelNodeStateSchema,
+  PanelNodeViewSchema,
+  PanelOverviewSchema,
+  PanelResourceSchema,
+  PanelSnippetListSchema,
+  PanelSnippetViewSchema,
+  PanelSubscriptionSettingsAnswerSchema,
+  PanelSubscriptionSettingsViewSchema,
+  PanelSubscriptionTemplateListSchema,
+  PanelSubscriptionTemplateViewSchema,
+  PanelTestResultSchema,
+  PanelTokenInfoSchema,
+  PanelVersionSupportSchema,
+  PanelWarningSchema,
+} from './panel.js';
+import {
   EnablePluginRequestSchema,
   PluginApprovalSchema,
   PluginConfigFieldSchema,
@@ -165,7 +208,7 @@ import {
 } from './system.js';
 
 /** Version of the API description. Bump it with every contract change (oasdiff checks the rules). */
-export const OPENAPI_INFO_VERSION = '0.23.0';
+export const OPENAPI_INFO_VERSION = '0.24.0';
 
 /** Named schemas that appear under `components.schemas`. Every response schema must be listed here. */
 const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
@@ -312,6 +355,47 @@ const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
   ArtifactPushResultSchema,
   ArtifactCheckSchema,
   ArtifactVerificationSchema,
+  PanelConnectionStateSchema,
+  PanelResourceSchema,
+  PanelCapabilityStateSchema,
+  PanelCapabilitiesSchema,
+  PanelVersionSupportSchema,
+  PanelTokenInfoSchema,
+  PanelWarningSchema,
+  PanelLastErrorSchema,
+  PanelConnectionViewSchema,
+  ConnectPanelRequestSchema,
+  ConnectPanelWithTokenRequestSchema,
+  PanelTestResultSchema,
+  PanelInboundViewSchema,
+  PanelNodeStateSchema,
+  PanelNodeViewSchema,
+  PanelHostViewSchema,
+  PanelConfigProfileSummarySchema,
+  PanelConfigProfileViewSchema,
+  PanelInternalSquadViewSchema,
+  PanelExternalSquadViewSchema,
+  PanelSubscriptionTemplateViewSchema,
+  PanelSubscriptionSettingsViewSchema,
+  PanelSnippetViewSchema,
+  PanelNodePluginViewSchema,
+  PanelInfraProviderViewSchema,
+  PanelBillingNodeViewSchema,
+  PanelInfraViewSchema,
+  PanelApiTokenViewSchema,
+  PanelNodeListSchema,
+  PanelHostListSchema,
+  PanelConfigProfileListSchema,
+  PanelInternalSquadListSchema,
+  PanelExternalSquadListSchema,
+  PanelSubscriptionTemplateListSchema,
+  PanelSnippetListSchema,
+  PanelNodePluginListSchema,
+  PanelInfraAnswerSchema,
+  PanelApiTokenListSchema,
+  PanelSubscriptionSettingsAnswerSchema,
+  PanelConfigProfileAnswerSchema,
+  PanelOverviewSchema,
 ];
 
 type Json = Record<string, unknown>;
@@ -485,6 +569,11 @@ export function buildOpenApi(): Json {
         name: 'commands',
         description:
           'The script library and runs of a script or a command on several servers at once, with the output of each server (ADR 0038). Writing scripts and starting or stopping runs need `servers:exec` and a fresh authenticator code; reading the history needs `servers:read`.',
+      },
+      {
+        name: 'panel',
+        description:
+          'The connection to a Remnawave panel and read-only views of its objects (ADR 0040): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server.',
       },
     ],
     paths,
