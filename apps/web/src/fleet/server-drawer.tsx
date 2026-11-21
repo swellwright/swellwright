@@ -382,6 +382,7 @@ function ServerBody({
   const { t } = useTranslation(['servers', 'common']);
   const queryClient = useQueryClient();
   const canWrite = permissions.includes('servers:write');
+  const canExec = permissions.includes('servers:exec');
   const canReadVault = permissions.includes('vault:read');
   const initial = useMemo(() => (server ? valuesOf(server) : BLANK), [server]);
   const [values, setValues] = useState<FormValues>(initial);
@@ -506,7 +507,12 @@ function ServerBody({
               server={server}
             />
             <FactsCard canWrite={canWrite} onChanged={refreshAll} server={server} />
-            <ArtifactsCard canWrite={canWrite} onChanged={refreshAll} server={server} />
+            <ArtifactsCard
+              canExec={canExec}
+              canWrite={canWrite}
+              onChanged={refreshAll}
+              server={server}
+            />
           </>
         ) : null}
       </Stack>

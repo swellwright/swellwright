@@ -210,24 +210,34 @@ describe('access entries', () => {
 describe('the server routes', () => {
   const mine = (routes as readonly RouteDef[]).filter((route) => route.tags.includes('servers'));
 
-  it('declares a permission on every one, and none needs a step-up', () => {
+  // Putting an artifact on a server and taking it off need the exec permission and a code (ADR 0039, 0038).
+  const EXEC = ['pushServerArtifact', 'removeServerArtifact'];
+
+  it('declares a permission on every one, and only the exec ones need a step-up', () => {
     assert.equal(mine.length, 19);
     for (const route of mine) {
       assert.ok(
-        route.permission === 'servers:read' || route.permission === 'servers:write',
+        route.permission === 'servers:read' ||
+          route.permission === 'servers:write' ||
+          route.permission === 'servers:exec',
         route.operationId,
       );
-      assert.equal(route.stepUp, undefined, route.operationId);
+      assert.equal(
+        route.stepUp,
+        EXEC.includes(route.operationId) ? true : undefined,
+        route.operationId,
+      );
     }
   });
 
-  it('lets reading need only the read permission and every change the write permission', () => {
+  it('lets reading need only the read permission and every change the write permission, but the exec routes', () => {
     for (const route of mine) {
-      assert.equal(
-        route.permission,
-        route.method === 'get' ? 'servers:read' : 'servers:write',
-        route.operationId,
-      );
+      const expected = EXEC.includes(route.operationId)
+        ? 'servers:exec'
+        : route.method === 'get'
+          ? 'servers:read'
+          : 'servers:write';
+      assert.equal(route.permission, expected, route.operationId);
     }
   });
 });

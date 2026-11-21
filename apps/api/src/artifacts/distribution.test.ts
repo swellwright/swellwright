@@ -752,6 +752,21 @@ describe('artifacts on servers', { skip: !databaseUrl }, () => {
         ['ops', 'ops', 'ops'],
       );
     });
+
+    it('asks an operator for a fresh code to push or remove, and connects to nothing without it', async () => {
+      // The sign-in elevated the session; let that lapse as if the five minutes had run out.
+      await instance.isolated.database.client.session.updateMany({
+        data: { elevatedUntil: new Date(Date.now() - 1000) },
+      });
+      const before = host.server.connections;
+      for (const reply of [await push(operator, server.id), await remove(operator, server.id)]) {
+        assert.equal(reply.status, 403);
+        assert.equal(errorOf(reply).code, 'step_up_required');
+      }
+      // Checking a copy only reads: it needs no code.
+      assert.notEqual((await verify(operator, server.id)).status, 403);
+      assert.equal(host.server.connections, before, 'a refused push or removal never connects');
+    });
   });
 });
 
