@@ -1,5 +1,8 @@
 /** Дашборд на странице «Обзор»: что требует внимания и здоровье парка (apps/web/src/dashboard/*, ADR 0047). */
 export const dashboard = {
+  signInAgain: 'Сессия закончилась. Войдите снова.',
+  readForbidden: 'Ваша роль этого не позволяет.',
+
   attention: {
     title: 'Требует внимания',
     description: 'На что посмотреть в первую очередь, по тому, что этот сервер уже знает.',
@@ -16,6 +19,8 @@ export const dashboard = {
     open: 'Открыть',
     hide: 'Скрыть в этом браузере',
     hiddenCount: 'Скрыто в этом браузере: {{count}}',
+    showMore: 'Показать ещё {{count}}',
+    showLess: 'Показать меньше',
     showHidden: 'Показать снова',
     andMore: 'и ещё {{count}}',
     failedSources: 'Не удалось прочитать: {{sources}}. Остальное показано.',
@@ -37,7 +42,8 @@ export const dashboard = {
       vault: {
         secrets_expired: {
           title: 'Просроченные секреты хранилища: {{count}}',
-          detail: 'Всё, что использует просроченный секрет, получает отказ: {{names}}. Продлите или замените их.',
+          detail:
+            'Всё, что использует просроченный секрет, получает отказ: {{names}}. Продлите или замените их.',
         },
         secrets_expiring: {
           title: 'Секреты хранилища, срок которых скоро закончится: {{count}}',
@@ -77,7 +83,8 @@ export const dashboard = {
         },
         token_expiring: {
           title: 'Токен панели скоро истечёт',
-          detail: 'Дней осталось: {{daysLeft}}. Создайте новый токен в панели и подключитесь с ним до этого.',
+          detail:
+            'Дней осталось: {{daysLeft}}. Создайте новый токен в панели и подключитесь с ним до этого.',
         },
         not_connected: {
           title: 'Панель не подключена',
@@ -101,7 +108,8 @@ export const dashboard = {
       reconciliation: {
         drift: {
           title: 'Расхождения между панелью и учётом: {{total}}',
-          detail: 'В последней сверке: расходится {{drift}}, нет пары {{missing}}, лишних {{extra}}.',
+          detail:
+            'В последней сверке: расходится {{drift}}, нет пары {{missing}}, лишних {{extra}}.',
         },
         undecided: {
           title: 'Сравнений, которые не удалось решить: {{unknown}}',
@@ -125,7 +133,8 @@ export const dashboard = {
       baseline: {
         host_key_mismatch: {
           title: 'Серверы, у которых сменился ключ хоста: {{count}}',
-          detail: 'Проверка отказалась входить: {{names}}. Выясните причину, прежде чем закреплять новый ключ.',
+          detail:
+            'Проверка отказалась входить: {{names}}. Выясните причину, прежде чем закреплять новый ключ.',
         },
         failing: {
           title: 'Серверы, не проходящие эталон: {{servers}}',
@@ -151,17 +160,20 @@ export const dashboard = {
       servers: {
         not_ready: {
           title: 'Серверы, не готовые к управлению: {{count}}',
-          detail: 'Без закреплённого ключа хоста: {{noKey}}. Без записи доступа: {{noAccess}}. {{names}}.',
+          detail:
+            'Без закреплённого ключа хоста: {{noKey}}. Без записи доступа: {{noAccess}}. {{names}}.',
         },
         facts_stale: {
           title: 'Серверы с устаревшими или отсутствующими фактами: {{count}}',
-          detail: 'Старше предела в {{days}} дн.: {{stale}}. Ни разу не собирались: {{missing}}. {{names}}.',
+          detail:
+            'Старше предела в {{days}} дн.: {{stale}}. Ни разу не собирались: {{missing}}. {{names}}.',
         },
       },
       runs: {
         failed: {
           title: 'Неудачные запуски команд: {{count}}',
-          detail: 'За окно в {{hours}} ч. Откройте историю, чтобы увидеть, какие серверы не справились и почему.',
+          detail:
+            'За окно в {{hours}} ч. Откройте историю, чтобы увидеть, какие серверы не справились и почему.',
         },
       },
       audit: {
@@ -211,11 +223,6 @@ export const dashboard = {
       access: 'Доступ',
       node: 'Нода панели',
       flags: 'Пометки',
-      actions: 'Действия',
-    },
-    filter: {
-      search: 'Поиск по имени или тегу',
-      all: 'Все',
     },
     health: {
       critical: 'Критично',
@@ -246,10 +253,7 @@ export const dashboard = {
       offline: 'Не в сети',
       connecting: 'Подключается',
       disabled: 'Отключена',
-      none: 'Не сопоставлена',
     },
-    factsAge: 'Собраны {{when}}',
-    factsStale: 'Устарели',
     factsNone: 'Пока нет',
     flags: {
       no_host_key: 'Нет закреплённого ключа хоста',
@@ -271,9 +275,5 @@ export const dashboard = {
       openServer: 'Открыть сервер',
       openBaseline: 'Открыть результаты эталона',
     },
-  },
-
-  error: {
-    retry: 'Повторить',
   },
 } as const;

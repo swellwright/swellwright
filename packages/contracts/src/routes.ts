@@ -92,6 +92,7 @@ import {
   ImpactRequestSchema,
   ImpactTargetQuerySchema,
   ImpactTargetSchema,
+  ReconciliationLastSchema,
   ReconciliationReportSchema,
   SaveConventionPackRequestSchema,
   ValidateConventionPackRequestSchema,
@@ -1976,6 +1977,19 @@ export const runReconciliationRoute = defineRoute({
   responses: { 200: { description: 'The report.', schema: ReconciliationReportSchema } },
 });
 
+export const getLastReconciliationRoute = defineRoute({
+  operationId: 'getLastReconciliation',
+  method: 'get',
+  path: '/panel/checks/reconciliation/last',
+  tags: ['panel'],
+  summary: 'What the last reconciliation found',
+  description:
+    'The counts of the most recent reconciliation, from the memory of this server, for a dashboard that must not compare the panel and the inventory on every load. Null fields when nothing ran since the server started. Does not call the panel.',
+  auth: 'any',
+  permission: 'panel:read',
+  responses: { 200: { description: 'The last reconciliation.', schema: ReconciliationLastSchema } },
+});
+
 export const getImpactTargetRoute = defineRoute({
   operationId: 'getImpactTarget',
   method: 'get',
@@ -2515,6 +2529,7 @@ export const routes = [
   listConventionPackVersionsRoute,
   validateConventionPackRoute,
   runReconciliationRoute,
+  getLastReconciliationRoute,
   getImpactTargetRoute,
   calculatePanelImpactRoute,
   listPanelSnapshotsRoute,

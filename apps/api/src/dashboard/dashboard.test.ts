@@ -13,6 +13,7 @@ import {
   type AttentionKind,
   type AttentionSource,
   ConventionRunSchema,
+  ReconciliationLastSchema,
   CreatedTokenSchema,
   type FleetHealth,
   FleetHealthSchema,
@@ -87,6 +88,13 @@ describe('the dashboard of an empty system', { skip: !databaseUrl }, () => {
       assert.ok(item.link !== null);
       assert.equal(item.since, null);
     }
+  });
+
+  it('has no reconciliation to report before one ran', async () => {
+    const last = ReconciliationLastSchema.parse(
+      (await owner.get('/panel/checks/reconciliation/last')).body,
+    );
+    assert.deepEqual(last, { ranAt: null, counts: null, inventoryCompared: null });
   });
 
   it('has no servers to show and answers an empty page', async () => {
@@ -444,6 +452,17 @@ describe('the dashboard of a system with everything wrong', { skip: !databaseUrl
     }
   });
 
+  it('keeps the counts of the last reconciliation and says nothing before one ran', async () => {
+    const last = ReconciliationLastSchema.parse(
+      (await h.observer.get('/panel/checks/reconciliation/last')).body,
+    );
+    assert.ok(last.ranAt !== null);
+    assert.equal(last.inventoryCompared, true);
+    assert.ok(
+      (last.counts?.drift ?? 0) + (last.counts?.missing ?? 0) + (last.counts?.extra ?? 0) > 0,
+    );
+  });
+
   it('leaves out the audit for roles that may not read it, and nothing else', async () => {
     const owner = await feedOf(h.owner);
     const auditor = await feedOf(h.auditor);
@@ -534,6 +553,7 @@ describe('the dashboard of a system with everything wrong', { skip: !databaseUrl
     const node = row('fleet-node').panelNode;
     assert.ok(node, 'the node of the panel');
     assert.ok(['online', 'offline', 'connecting', 'disabled'].includes(node.state));
+    assert.equal(node.name, 'Node 1', 'matched by the address it shares');
     assert.equal(row('fleet-ok').panelNode, null);
     assert.deepEqual(fleet.totals, {
       servers: 7,
@@ -650,8 +670,8 @@ describe(
           (item) => item.kind === 'audit.verify_overdue',
         );
         assert.equal(overdue?.params['neverVerified'], false);
-        assert.equal(overdue?.params['days'], 62);
-        assert.equal(overdue?.severity, 'info');
+        assert.equal(overdue.params['days'], 62);
+        assert.equal(overdue.severity, 'info');
       } finally {
         await stop(instance);
       }

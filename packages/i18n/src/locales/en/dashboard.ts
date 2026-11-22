@@ -1,5 +1,8 @@
 /** The dashboard on the Overview page: the attention feed and the health of the fleet (apps/web/src/dashboard/*, ADR 0047). */
 export const dashboard = {
+  signInAgain: 'Your session has ended. Sign in again.',
+  readForbidden: 'Your role does not allow this.',
+
   attention: {
     title: 'Needs attention',
     description: 'What to look at first, from what this server already knows.',
@@ -16,6 +19,8 @@ export const dashboard = {
     open: 'Open',
     hide: 'Hide for this browser',
     hiddenCount: 'Hidden in this browser: {{count}}',
+    showMore: 'Show {{count}} more',
+    showLess: 'Show fewer',
     showHidden: 'Show them again',
     andMore: 'and {{count}} more',
     failedSources: 'Could not read: {{sources}}. The rest is shown.',
@@ -38,7 +43,8 @@ export const dashboard = {
       vault: {
         secrets_expired: {
           title: 'Expired vault secrets: {{count}}',
-          detail: 'Anything that uses an expired secret is refused: {{names}}. Renew or replace them.',
+          detail:
+            'Anything that uses an expired secret is refused: {{names}}. Renew or replace them.',
         },
         secrets_expiring: {
           title: 'Vault secrets that expire soon: {{count}}',
@@ -65,7 +71,8 @@ export const dashboard = {
         },
         unreachable: {
           title: 'The panel does not answer',
-          detail: 'The last check could not reach it: network, certificate, timeout or a server error.',
+          detail:
+            'The last check could not reach it: network, certificate, timeout or a server error.',
         },
         unsupported: {
           title: 'The panel version is not supported',
@@ -77,7 +84,8 @@ export const dashboard = {
         },
         token_expiring: {
           title: 'The panel token expires soon',
-          detail: 'Days left: {{daysLeft}}. Create a new token in the panel and connect with it before then.',
+          detail:
+            'Days left: {{daysLeft}}. Create a new token in the panel and connect with it before then.',
         },
         not_connected: {
           title: 'No panel is connected',
@@ -101,7 +109,8 @@ export const dashboard = {
       reconciliation: {
         drift: {
           title: 'Differences between the panel and the inventory: {{total}}',
-          detail: 'In the last reconciliation, drifting: {{drift}}, missing: {{missing}}, extra: {{extra}}.',
+          detail:
+            'In the last reconciliation, drifting: {{drift}}, missing: {{missing}}, extra: {{extra}}.',
         },
         undecided: {
           title: 'Comparisons that could not be decided: {{unknown}}',
@@ -125,7 +134,8 @@ export const dashboard = {
       baseline: {
         host_key_mismatch: {
           title: 'Servers whose host key changed: {{count}}',
-          detail: 'The check refused to log in: {{names}}. Find out why before you pin the new key.',
+          detail:
+            'The check refused to log in: {{names}}. Find out why before you pin the new key.',
         },
         failing: {
           title: 'Servers that fail their baseline: {{servers}}',
@@ -151,17 +161,20 @@ export const dashboard = {
       servers: {
         not_ready: {
           title: 'Servers not ready to be managed: {{count}}',
-          detail: 'Without a pinned host key: {{noKey}}. Without an access entry: {{noAccess}}. {{names}}.',
+          detail:
+            'Without a pinned host key: {{noKey}}. Without an access entry: {{noAccess}}. {{names}}.',
         },
         facts_stale: {
           title: 'Servers with old or missing facts: {{count}}',
-          detail: 'Past the {{days}}-day limit: {{stale}}. Never collected: {{missing}}. {{names}}.',
+          detail:
+            'Past the {{days}}-day limit: {{stale}}. Never collected: {{missing}}. {{names}}.',
         },
       },
       runs: {
         failed: {
           title: 'Failed runs of commands: {{count}}',
-          detail: 'Within a {{hours}}-hour window. Open the history to see which servers failed and why.',
+          detail:
+            'Within a {{hours}}-hour window. Open the history to see which servers failed and why.',
         },
       },
       audit: {
@@ -193,7 +206,8 @@ export const dashboard = {
 
   fleet: {
     title: 'Fleet health',
-    description: 'One row per server, from what this server has stored. Nothing here connects to a server.',
+    description:
+      'One row per server, from what this server has stored. Nothing here connects to a server.',
     refresh: 'Refresh the fleet',
     openServers: 'Open the servers',
     loadFailed: 'Could not read the health of the fleet',
@@ -210,11 +224,6 @@ export const dashboard = {
       access: 'Access',
       node: 'Panel node',
       flags: 'Flags',
-      actions: 'Actions',
-    },
-    filter: {
-      search: 'Search by name or tag',
-      all: 'All',
     },
     health: {
       critical: 'Critical',
@@ -245,10 +254,7 @@ export const dashboard = {
       offline: 'Offline',
       connecting: 'Connecting',
       disabled: 'Disabled',
-      none: 'Not matched',
     },
-    factsAge: 'Collected {{when}}',
-    factsStale: 'Stale',
     factsNone: 'None yet',
     flags: {
       no_host_key: 'No pinned host key',
@@ -270,9 +276,5 @@ export const dashboard = {
       openServer: 'Open the server',
       openBaseline: 'Open the baseline results',
     },
-  },
-
-  error: {
-    retry: 'Try again',
   },
 } as const;

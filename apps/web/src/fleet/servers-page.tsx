@@ -6,8 +6,8 @@
 import { IconPlus, IconRefresh } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'motion/react';
-import { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router';
+import { useEffect, useMemo, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { HiServer } from 'react-icons/hi';
 
@@ -39,7 +39,23 @@ export function ServersPage({ permissions }: { permissions: readonly Permission[
   // Running scripts and commands on the selected servers needs its own permission (and a fresh code at the moment).
   const canExec = permissions.includes('servers:exec');
   const navigate = useNavigate();
-  const [target, setTarget] = useState<DrawerTarget>(undefined);
+  // A link from the dashboard (`?server=<id>`) opens the drawer of that server, once, and leaves no trace in the address.
+  const [params, setParams] = useSearchParams();
+  const [target, setTarget] = useState<DrawerTarget>(() => {
+    const id = params.get('server');
+    return id === null ? undefined : { kind: 'edit', id };
+  });
+  useEffect(() => {
+    if (params.has('server')) {
+      setParams(
+        (previous) => {
+          previous.delete('server');
+          return previous;
+        },
+        { replace: true },
+      );
+    }
+  }, [params, setParams]);
   const [selected, setSelected] = useState<string[]>([]);
   const [visibleIds, setVisibleIds] = useState<string[]>([]);
   const [running, setRunning] = useState(false);

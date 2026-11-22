@@ -18,8 +18,6 @@ export const overview = {
     critical: 'Critical',
     warning: 'With warnings',
     unknown: 'Not known yet',
-    none: 'No server',
-    seeTable: 'See the table below',
   },
 
   /** The Checks section: the last reconciliation of the panel with the inventory. */

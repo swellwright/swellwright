@@ -9,6 +9,7 @@ import type {
   ImpactTarget,
   ImpactTargetQuery,
   PanelResource,
+  ReconciliationLast,
   ReconciliationReport,
 } from '@swellwright/contracts';
 import {
@@ -94,6 +95,23 @@ export class ChecksService {
     return last === null
       ? { ranAt: null, pack: null, summary: null }
       : { ranAt: last.ranAt, pack: last.pack, summary: last.summary };
+  }
+
+  async lastReconciliation(): Promise<ReconciliationLast> {
+    const row = await this.panel.row();
+    const last = this.memory.lastReconciliation(row?.id ?? null);
+    return last === null
+      ? { ranAt: null, counts: null, inventoryCompared: null }
+      : {
+          ranAt: last.ranAt,
+          counts: {
+            drift: last.drift,
+            missing: last.missing,
+            extra: last.extra,
+            unknown: last.unknown,
+          },
+          inventoryCompared: last.inventoryCompared,
+        };
   }
 
   // ---- the convention linter --------------------------------------------------------------------------------------
@@ -186,6 +204,13 @@ export class ChecksService {
     // What the dashboard may say later without asking again: the counts, and which node answers for which server.
     const nodeOf = new Map(model.nodes.map((node) => [node.uuid, node]));
     const matched = new Map<string, MatchedNode>();
+    // Several nodes can answer to one server (a shared host name): the surest match is shown, the first among equals.
+    const strength = new Map<string, number>();
+    const STRENGTH: Record<string, number> = {
+      'reconciliation.reasons.matched_by_address': 3,
+      'reconciliation.reasons.matched_by_dns': 2,
+      'reconciliation.reasons.matched_by_hostname': 1,
+    };
     for (const row of result.rows) {
       const server = row.counterpart;
       const node = row.subject.uuid === null ? undefined : nodeOf.get(row.subject.uuid);
@@ -196,7 +221,11 @@ export class ChecksService {
         server.uuid !== null &&
         node !== undefined
       ) {
-        matched.set(server.uuid, { name: node.name, state: node.state });
+        const sure = STRENGTH[row.reasonKey] ?? 0;
+        if (sure > (strength.get(server.uuid) ?? -1)) {
+          strength.set(server.uuid, sure);
+          matched.set(server.uuid, { name: node.name, state: node.state });
+        }
       }
     }
     this.memory.rememberReconciliation({

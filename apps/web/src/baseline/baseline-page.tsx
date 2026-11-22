@@ -6,7 +6,8 @@ import { ActionIcon, Badge, Box, Group, SimpleGrid, Stack, Text, Tooltip } from 
 import { IconChecklist, IconListCheck, IconPlayerPlay, IconRefresh } from '@tabler/icons-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'motion/react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router';
 import { useTranslation } from 'react-i18next';
 import { PiEmpty } from 'react-icons/pi';
 import {
@@ -75,7 +76,20 @@ export function BaselinePage({ permissions }: { permissions: readonly Permission
   const canExec = permissions.includes('servers:exec');
   const canWrite = permissions.includes('servers:write');
 
-  const [opened, setOpened] = useState<string | undefined>(undefined);
+  // A link from the dashboard (`?server=<id>`) opens the results of that server, once, and leaves no trace in the address.
+  const [params, setParams] = useSearchParams();
+  const [opened, setOpened] = useState<string | undefined>(() => params.get('server') ?? undefined);
+  useEffect(() => {
+    if (params.has('server')) {
+      setParams(
+        (previous) => {
+          previous.delete('server');
+          return previous;
+        },
+        { replace: true },
+      );
+    }
+  }, [params, setParams]);
   const [managing, setManaging] = useState(false);
   const [running, setRunning] = useState(false);
   const [openings, setOpenings] = useState(0);

@@ -6436,6 +6436,47 @@
         "x-sw-permission": "panel:read"
       }
     },
+    "/panel/checks/reconciliation/last": {
+      "get": {
+        "operationId": "getLastReconciliation",
+        "tags": [
+          "panel"
+        ],
+        "summary": "What the last reconciliation found",
+        "responses": {
+          "200": {
+            "description": "The last reconciliation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationLast"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The counts of the most recent reconciliation, from the memory of this server, for a dashboard that must not compare the panel and the inventory on every load. Null fields when nothing ran since the server started. Does not call the panel.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
     "/panel/impact/target": {
       "get": {
         "operationId": "getImpactTarget",
@@ -18820,6 +18861,77 @@
           "byCheck"
         ],
         "additionalProperties": false
+      },
+      "ReconciliationLast": {
+        "type": "object",
+        "properties": {
+          "ranAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no reconciliation was made since the server started (or since the pack or the connection changed)."
+          },
+          "counts": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "drift": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "missing": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "extra": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "unknown": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "drift",
+                  "missing",
+                  "extra",
+                  "unknown"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "inventoryCompared": {
+            "description": "False when the run was made by someone who may not read the servers: its counts leave the inventory out.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ranAt",
+          "counts",
+          "inventoryCompared"
+        ],
+        "additionalProperties": false,
+        "description": "What the last reconciliation found, from the memory of this server. Does not run anything and does not ask the panel."
       },
       "ReconciliationReport": {
         "type": "object",

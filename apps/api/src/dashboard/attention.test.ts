@@ -139,7 +139,7 @@ describe('the attention feed: the vault', () => {
     const sealed = build({ vault: { state: 'sealed', expiring: [] } });
     assert.deepEqual(kinds(sealed), ['vault.sealed']);
     assert.equal(sealed[0]?.severity, 'warning');
-    assert.equal(sealed[0]?.link, '/dashboard/security/vault');
+    assert.equal(sealed[0].link, '/dashboard/security/vault');
   });
 
   it('counts a secret as expired at the moment of its expiry and not a moment before', () => {
@@ -271,13 +271,13 @@ describe('the attention feed: conventions and reconciliation', () => {
       conventions: { panelConnected: true, last: { ranAt: ago(HOUR), errors: 2, warnings: 5 } },
     });
     assert.equal(errors[0]?.kind, 'conventions.errors');
-    assert.equal(errors[0]?.severity, 'warning');
-    assert.deepEqual(errors[0]?.params, { errors: 2, warnings: 5 });
+    assert.equal(errors[0].severity, 'warning');
+    assert.deepEqual(errors[0].params, { errors: 2, warnings: 5 });
     const warnings = build({
       conventions: { panelConnected: true, last: { ranAt: ago(HOUR), errors: 0, warnings: 5 } },
     });
     assert.equal(warnings[0]?.kind, 'conventions.warnings');
-    assert.equal(warnings[0]?.severity, 'info');
+    assert.equal(warnings[0].severity, 'info');
   });
 
   it('adds up the three kinds of difference and keeps the undecided apart', () => {
@@ -382,7 +382,7 @@ describe('the attention feed: snapshots', () => {
     });
     assert.deepEqual(kinds(items), ['snapshots.changed']);
     assert.equal(items[0]?.params['changes'], 3);
-    assert.equal(items[0]?.since, ago(HOUR).toISOString());
+    assert.equal(items[0].since, ago(HOUR).toISOString());
   });
 });
 
@@ -568,8 +568,8 @@ describe('the attention feed: runs, audit, plugins and updates', () => {
   it('reports failed runs with the window it looked at', () => {
     const items = build({ runs: { failed: 2, latestAt: ago(HOUR) } });
     assert.deepEqual(items[0]?.params, { count: 2, hours: 24 });
-    assert.equal(items[0]?.since, ago(HOUR).toISOString());
-    assert.equal(items[0]?.link, '/dashboard/operations/runs');
+    assert.equal(items[0].since, ago(HOUR).toISOString());
+    assert.equal(items[0].link, '/dashboard/operations/runs');
   });
 
   it('treats a failed verification of the chain as critical, until a later one succeeds', () => {
@@ -621,7 +621,7 @@ describe('the attention feed: runs, audit, plugins and updates', () => {
       },
     });
     assert.deepEqual(items[0]?.params, { count: 2, names: 'a-plugin, b-plugin', more: 0 });
-    assert.equal(items[0]?.since, ago(DAY).toISOString());
+    assert.equal(items[0].since, ago(DAY).toISOString());
     assert.deepEqual(build({ plugins: { switchedOff: [] } }), []);
   });
 
@@ -644,7 +644,7 @@ describe('the attention feed: runs, audit, plugins and updates', () => {
     }
     const items = build({ updates: { current: '1.0.0', latest: '1.1.0', checkedAt: ago(HOUR) } });
     assert.deepEqual(items[0]?.params, { latest: '1.1.0', current: '1.0.0' });
-    assert.equal(items[0]?.link, null);
+    assert.equal(items[0].link, null);
     assert.deepEqual(build({ updates: { current: '1.0.0', latest: null, checkedAt: null } }), []);
   });
 });
@@ -746,9 +746,9 @@ describe('the attention feed: ranking, ids and what an item may carry', () => {
     const b = build({ runs: { failed: 3, latestAt: ago(HOUR) } });
     assert.equal(a[0]?.id, 'runs.failed');
     assert.equal(b[0]?.id, 'runs.failed');
-    assert.notEqual(a[0]?.fingerprint, b[0]?.fingerprint);
+    assert.notEqual(a[0].fingerprint, b[0].fingerprint);
     assert.equal(
-      a[0]?.fingerprint,
+      a[0].fingerprint,
       build({ runs: { failed: 2, latestAt: ago(2 * HOUR) } })[0]?.fingerprint,
       'a later date alone is not a different condition',
     );
@@ -792,7 +792,7 @@ describe('the attention feed: ranking, ids and what an item may carry', () => {
     const text = JSON.stringify(everythingWrong());
     assert.ok(!/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/u.test(text), 'an IP address');
     assert.ok(!/https?:\/\//u.test(text), 'a URL');
-    assert.ok(!/@/u.test(text), 'an e-mail address');
+    assert.ok(!text.includes('@'), 'an e-mail address');
     assert.ok(
       !/token=|password|passphrase/iu.test(text.replace(/panel token/giu, '')),
       'a credential word',
