@@ -278,7 +278,9 @@ export function checkParameterValues(
   for (const parameter of parameters) {
     const { name } = parameter;
     const raw = Object.hasOwn(given, name) ? given[name] : undefined;
-    const value = raw === undefined || raw === null || raw === '' ? parameter.default : raw;
+    // A secret has no default: a secret is chosen by a person, never filled in for them.
+    const fallback = parameter.type === 'secret' ? undefined : parameter.default;
+    const value = raw === undefined || raw === null || raw === '' ? fallback : raw;
     if (value === undefined) {
       if (parameter.required) {
         issues.push({ name, message: 'A value is required.' });
@@ -589,9 +591,13 @@ export type CommandRunSummary = z.infer<typeof CommandRunSummarySchema>;
 
 export const RunSecretViewSchema = z
   .object({
-    name: z.string().describe('The name the script knows it by: the file is named by `<NAME>_FILE`.'),
+    name: z
+      .string()
+      .describe('The name the script knows it by: the file is named by `<NAME>_FILE`.'),
     secretId: z.uuid().nullable().describe('Null after the secret was deleted.'),
-    secretName: z.string().describe('What the secret was called in the vault when the run was made.'),
+    secretName: z
+      .string()
+      .describe('What the secret was called in the vault when the run was made.'),
   })
   .meta({
     id: 'RunSecretView',

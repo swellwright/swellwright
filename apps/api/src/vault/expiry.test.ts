@@ -397,7 +397,11 @@ describe('an expired secret is refused by everything that uses it', { skip: !dat
       assert.equal(refused.errorCode, 'secret_expired');
       assert.match(refused.errorMessage ?? '', /"run login"/u);
       assert.equal(refused.stdout.storedBytes, 0);
-      assert.equal(host.launches.created, 1, 'nothing was started on the server of the refused one');
+      assert.equal(
+        host.launches.created,
+        1,
+        'nothing was started on the server of the refused one',
+      );
       heard.push(JSON.stringify(done));
     });
 
@@ -466,7 +470,10 @@ describe('an expired secret is refused by everything that uses it', { skip: !dat
     it('is written once per secret in ten minutes, however often it is refused, and says who asked', async () => {
       const vault = h.instance.app.get(VaultService);
       const secret = await make('throttled', 'ssh_password', VALUES.throttle, at(T0 - DAY));
-      const consumer = { kind: 'server_access', id: '0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6c' } as const;
+      const consumer = {
+        kind: 'server_access',
+        id: '0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6c',
+      } as const;
       const refuse = () =>
         assert.rejects(vault.readForServer(secret.id, 'ssh_password', consumer), /expired/u);
 

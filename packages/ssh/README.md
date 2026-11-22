@@ -53,6 +53,8 @@ connection.close();
 
 A step survives a dropped connection. Connect again and call `waitForStep(connection, id, { fromOffsets: { stdout, stderr } })` with the offsets of the last chunk you processed; the output continues exactly where it stopped.
 
+A step can be handed secrets (ADR 0042): `startDetachedStep(connection, { ..., secrets: { NODE_KEY: value } })` writes each value to `<step dir>/secrets/NODE_KEY` (the directory 0700, the file 0600) from the standard input of the launch, sets `NODE_KEY_FILE` for the script, and removes the directory the moment the script ends. `cancelStep`, `getStepStatus` (for a step that ended or was lost) and `removeStep` remove it as well, so a wrapper that was killed alone leaves nothing behind. The value is never in a command line, the SSH environment, `script.sh` or the `env` file. Names are `[A-Z][A-Z0-9_]{0,63}`, a value has no NUL and at most 64 KiB, at most 16 per step.
+
 `SshPool` shares connections:
 
 ```ts

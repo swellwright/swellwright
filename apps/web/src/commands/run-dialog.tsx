@@ -2,6 +2,7 @@
 // primary button) and its way of confirming a dangerous action (`confirmAction`: a red soft confirm and a subtle cancel).
 // Running a script on servers has no counterpart in the panel; the inputs are the panel's.
 import {
+  ActionIcon,
   Badge,
   Button,
   Group,
@@ -15,15 +16,20 @@ import {
   Stack,
   Switch,
   Text,
+  TextInput,
+  Tooltip,
 } from '@mantine/core';
 import {
   IconAlertTriangle,
   IconInfoCircle,
+  IconLock,
   IconPlayerPlay,
+  IconPlus,
   IconTerminal2,
+  IconTrash,
 } from '@tabler/icons-react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
@@ -33,16 +39,20 @@ import {
   DEFAULT_RUN_TIMEOUT_SECONDS,
   DANGER_LEVELS,
   type DangerLevel,
+  isRunSecretNameAllowed,
+  isRunSecretType,
   MAX_INLINE_COMMAND_BYTES,
+  MAX_RUN_SECRETS,
   MAX_RUN_SERVERS,
   MAX_RUN_TIMEOUT_SECONDS,
+  parameterSecretName,
   type ScriptSummary,
   type ServerSummary,
   utf8Length,
 } from '@swellwright/contracts';
 import { Callout, ModalFooter, OverlayHeader, SectionCard } from '@swellwright/ui';
 
-import { createCommandRun, listScripts } from '../api.js';
+import { createCommandRun, listScripts, listSecrets } from '../api.js';
 import { useStepUp } from '../auth/step-up.js';
 import { notifyFailure } from '../security/notify-failure.js';
 import { confirmAction, notifySuccess } from '../shell/feedback.js';
@@ -79,7 +89,16 @@ export interface RunDialogProps {
   initialScriptId?: string | undefined;
   /** Show the choice of servers (it is the selection of the table, so the table's dialog does not). */
   chooseServers: boolean;
+  /** The role holds `vault:reveal`: only then can a secret be handed to a run (ADR 0042). */
+  canReveal: boolean;
   onStarted: (run: CommandRunView) => void;
+}
+
+/** One secret of the run as the form holds it, before it is checked. */
+interface SecretRow {
+  readonly key: number;
+  readonly name: string;
+  readonly secretId: string | null;
 }
 
 export function RunDialog({
@@ -89,9 +108,10 @@ export function RunDialog({
   initialServerIds,
   initialScriptId,
   chooseServers,
+  canReveal,
   onStarted,
 }: RunDialogProps) {
-  const { t } = useTranslation(['commands', 'common', 'errors']);
+  const { t } = useTranslation(['commands', 'common', 'errors', 'vault']);
   const isMobile = useIsMobile();
   const queryClient = useQueryClient();
   const step = useStepUp();
@@ -109,6 +129,20 @@ export function RunDialog({
   const [inlineLevel, setInlineLevel] = useState<DangerLevel>('change');
   const [timeout, setTimeout_] = useState<number | string>(DEFAULT_RUN_TIMEOUT_SECONDS);
   const [showErrors, setShowErrors] = useState(false);
+  const [secretRows, setSecretRows] = useState<readonly SecretRow[]>([]);
+  const rowKeys = useRef(0);
+
+  // The secrets of the vault a run may be given (names only; a value never reaches this form).
+  const vault = useQuery({
+    queryKey: ['vault', 'secrets'],
+    queryFn: listSecrets,
+    enabled: opened && canReveal,
+    retry: false,
+  });
+  const secretChoices = useMemo(
+    () => (vault.data?.secrets ?? []).filter((secret) => isRunSecretType(secret.type)),
+    [vault.data],
+  );
 
   const scripts = useQuery({
     queryKey: ['scripts'],
@@ -165,6 +199,32 @@ export function RunDialog({
   if (mode === 'script' && parameterIssues.length > 0) {
     problems.push(t('commands:run.errors.parameters'));
   }
+  // The names a script's secret parameters take, so that a secret added here cannot clash with one.
+  const parameterSecretNames =
+    mode === 'script' && script
+      ? script.parameters.flatMap((parameter) =>
+          parameter.type === 'secret' ? [parameterSecretName(parameter.name)] : [],
+        )
+      : [];
+  const secretErrors = secretRows.map((row) => {
+    if (!isRunSecretNameAllowed(row.name)) {
+      return t('commands:run.secrets.errors.name');
+    }
+    if (
+      parameterSecretNames.includes(row.name) ||
+      secretRows.some((other) => other.key !== row.key && other.name === row.name)
+    ) {
+      return t('commands:run.secrets.errors.duplicate');
+    }
+    return row.secretId === null ? t('commands:run.secrets.errors.choose') : undefined;
+  });
+  if (secretErrors.some((error) => error !== undefined)) {
+    problems.push(t('commands:run.secrets.errors.summary'));
+  }
+  const needsSecretParameter = mode === 'script' && parameterSecretNames.length > 0;
+  if (needsSecretParameter && !canReveal) {
+    problems.push(t('commands:run.secrets.parameterForbidden'));
+  }
   if (mode === 'inline' && command.trim() === '') {
     problems.push(t('commands:run.errors.noCommand'));
   }
@@ -184,6 +244,13 @@ export function RunDialog({
       serverIds,
       timeoutSeconds: timeoutNumber,
       ...(level === 'read' ? {} : { confirmedLevel: level }),
+      ...(secretRows.length === 0
+        ? {}
+        : {
+            secrets: secretRows.flatMap((row) =>
+              row.secretId === null ? [] : [{ name: row.name, secretId: row.secretId }],
+            ),
+          }),
     };
     return mode === 'script' && script
       ? { mode: 'script', ...common, scriptId: script.id, parameters: valuesToSend(input) }
@@ -402,6 +469,8 @@ export function RunDialog({
                       setTyped({ scriptId: script.id, values: { ...input, [name]: value } });
                     }}
                     parameters={script.parameters}
+                    canPickSecret={canReveal}
+                    secrets={secretChoices}
                   />
                 ) : null}
                 {script?.parameters.length === 0 ? (
@@ -469,6 +538,126 @@ export function RunDialog({
             </SectionCard.Section>
           </SectionCard.Root>
         )}
+
+        <SectionCard.Root>
+          <SectionCard.Section>
+            <Stack gap="sm">
+              <Group gap="xs" wrap="nowrap">
+                <IconLock size={18} />
+                <Text fw={500} size="sm">
+                  {t('commands:run.secrets.title')}
+                </Text>
+              </Group>
+              <Text c="dimmed" size="xs">
+                {t('commands:run.secrets.description')}
+              </Text>
+              {canReveal ? (
+                <Callout color="blue" icon={<IconInfoCircle size={20} />}>
+                  {t('commands:run.secrets.notice')}
+                </Callout>
+              ) : (
+                <Callout color="orange" icon={<IconAlertTriangle size={20} />}>
+                  {t('commands:run.secrets.forbidden')}
+                </Callout>
+              )}
+              {secretRows.map((row, index) => (
+                <Group align="flex-start" gap="xs" key={row.key} wrap="nowrap">
+                  <TextInput
+                    description={t('commands:run.secrets.nameDescription')}
+                    ff="monospace"
+                    label={t('commands:run.secrets.name')}
+                    maxLength={64}
+                    onChange={(event) => {
+                      const name = event.currentTarget.value.toUpperCase();
+                      setSecretRows(
+                        secretRows.map((other) =>
+                          other.key === row.key ? { ...other, name } : other,
+                        ),
+                      );
+                    }}
+                    style={{ flex: '1 1 40%' }}
+                    value={row.name}
+                    {...(showErrors && secretErrors[index] !== undefined && row.name !== ''
+                      ? { error: secretErrors[index] }
+                      : {})}
+                  />
+                  <Select
+                    data={secretChoices.map((secret) => ({
+                      value: secret.id,
+                      label: secret.expired
+                        ? `${secret.name}${t('vault:expiry.expiredSuffix')}`
+                        : secret.name,
+                    }))}
+                    label={t('commands:run.secrets.secret')}
+                    leftSection={<IconLock size={16} />}
+                    nothingFoundMessage={
+                      secretChoices.length === 0
+                        ? t('commands:run.secrets.noSecrets')
+                        : t('commands:run.secrets.nothing')
+                    }
+                    onChange={(value) => {
+                      setSecretRows(
+                        secretRows.map((other) =>
+                          other.key === row.key ? { ...other, secretId: value } : other,
+                        ),
+                      );
+                    }}
+                    placeholder={t('commands:run.secrets.placeholder')}
+                    searchable
+                    style={{ flex: '1 1 60%' }}
+                    value={row.secretId}
+                    {...(showErrors && row.secretId === null
+                      ? { error: t('commands:run.secrets.errors.choose') }
+                      : {})}
+                  />
+                  <Tooltip label={t('commands:run.secrets.remove')}>
+                    <ActionIcon
+                      aria-label={t('commands:run.secrets.remove')}
+                      color="red"
+                      mt={24}
+                      onClick={() => {
+                        setSecretRows(secretRows.filter((other) => other.key !== row.key));
+                      }}
+                      size="lg"
+                      variant="soft"
+                    >
+                      <IconTrash size={18} />
+                    </ActionIcon>
+                  </Tooltip>
+                </Group>
+              ))}
+              <Group>
+                <Tooltip
+                  disabled={canReveal && secretRows.length < MAX_RUN_SECRETS}
+                  label={
+                    canReveal
+                      ? t('commands:run.secrets.full', { count: MAX_RUN_SECRETS })
+                      : t('commands:run.secrets.forbidden')
+                  }
+                  withArrow
+                >
+                  <span>
+                    <Button
+                      color="teal"
+                      disabled={!canReveal || secretRows.length >= MAX_RUN_SECRETS}
+                      leftSection={<IconPlus size={16} />}
+                      onClick={() => {
+                        rowKeys.current += 1;
+                        setSecretRows([
+                          ...secretRows,
+                          { key: rowKeys.current, name: '', secretId: null },
+                        ]);
+                      }}
+                      variant="soft"
+                    >
+                      {t('commands:run.secrets.add')}
+                    </Button>
+                  </span>
+                </Tooltip>
+              </Group>
+            </Stack>
+          </SectionCard.Section>
+        </SectionCard.Root>
 
         <SectionCard.Root>
           <SectionCard.Section>

@@ -35,6 +35,7 @@ import {
   SUDO_SECRET_TYPE,
 } from '@swellwright/contracts';
 import {
+  Callout,
   ErrorMessageBlock,
   ModalFooter,
   OverlayHeader,
@@ -49,6 +50,7 @@ import {
   updateServerAccess,
   verifyServerAccess,
 } from '../api.js';
+import { SecretExpiryBadge } from '../security/secret-expiry.js';
 import { useTimeFirst } from '../security/time-first.js';
 import { notifyFailure } from '../security/notify-failure.js';
 import { useLastDefined } from '../security/use-last-defined.js';
@@ -91,12 +93,13 @@ function AccessForm({
   });
   const all = secrets.data?.secrets ?? [];
   const loginKind = SECRET_TYPE_FOR_METHOD[method];
-  const loginOptions = all
-    .filter((secret) => secret.type === loginKind)
-    .map((secret) => ({ value: secret.id, label: secret.name }));
-  const sudoOptions = all
-    .filter((secret) => secret.type === SUDO_SECRET_TYPE)
-    .map((secret) => ({ value: secret.id, label: secret.name }));
+  const optionOf = (secret: (typeof all)[number]) => ({
+    value: secret.id,
+    // An entry may still name an expired secret (renewing it fixes the entry), but the list says which they are.
+    label: secret.expired ? `${secret.name}${t('vault:expiry.expiredSuffix')}` : secret.name,
+  });
+  const loginOptions = all.filter((secret) => secret.type === loginKind).map(optionOf);
+  const sudoOptions = all.filter((secret) => secret.type === SUDO_SECRET_TYPE).map(optionOf);
 
   const usernameOk = AccessUsernameSchema.safeParse(username).success;
   const secretOk = secretId !== null && loginOptions.some((option) => option.value === secretId);
@@ -585,16 +588,37 @@ export function AccessCard({
                   </Group>
                 ) : null}
               </Group>
+              {[entry.secret, entry.sudoSecret]
+                .filter((secret): secret is NonNullable<typeof secret> => secret?.expired === true)
+                .map((secret) => (
+                  <Callout color="red" key={secret.id}>
+                    {t('access.secretExpired', { name: secret.name })}
+                  </Callout>
+                ))}
               <DataList orientation="vertical" withDivider>
                 <DataList.Item>
                   <DataList.ItemLabel>
                     {t(entry.method === 'key' ? 'access.secretKey' : 'access.secretPassword')}
                   </DataList.ItemLabel>
-                  <DataList.ItemValue>{entry.secret.name}</DataList.ItemValue>
+                  <DataList.ItemValue>
+                    <Group gap="xs" wrap="wrap">
+                      <Text size="sm">{entry.secret.name}</Text>
+                      <SecretExpiryBadge secret={entry.secret} />
+                    </Group>
+                  </DataList.ItemValue>
                 </DataList.Item>
                 <DataList.Item>
                   <DataList.ItemLabel>{t('access.sudoSecret')}</DataList.ItemLabel>
-                  <DataList.ItemValue>{entry.sudoSecret?.name ?? '–'}</DataList.ItemValue>
+                  <DataList.ItemValue>
+                    {entry.sudoSecret === null ? (
+                      '–'
+                    ) : (
+                      <Group gap="xs" wrap="wrap">
+                        <Text size="sm">{entry.sudoSecret.name}</Text>
+                        <SecretExpiryBadge secret={entry.sudoSecret} />
+                      </Group>
+                    )}
+                  </DataList.ItemValue>
                 </DataList.Item>
                 <DataList.Item>
                   <DataList.ItemLabel>{t('access.priority')}</DataList.ItemLabel>

@@ -131,7 +131,10 @@ export class PluginBroker {
       const code = error instanceof CodedHttpException ? error.apiCode : undefined;
       const text = error instanceof Error ? error.message : 'The secret could not be read.';
       // A plugin sees only the text: an expired secret starts it with the stable code, so that it can tell (ADR 0042).
-      throw new PluginBrokerError(code === 'secret_expired' ? `secret_expired: ${text}` : text, code);
+      throw new PluginBrokerError(
+        code === 'secret_expired' ? `secret_expired: ${text}` : text,
+        code,
+      );
     }
     this.noteUse(context.id, field, bound);
     return value;

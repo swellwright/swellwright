@@ -6,6 +6,28 @@ import { useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { PiCheck, PiCopy } from 'react-icons/pi';
 
+/**
+ * Where the runner took the value of a secret out of the output (ADR 0042) it wrote `[secret NAME]`: that is shown in the
+ * colour of a warning, so that a person sees that something was there. The split keeps the markers at odd positions.
+ */
+const MARKER = /(\[secret [A-Z][A-Z0-9_]*\])/u;
+
+function WithMarkers({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(MARKER).map((part, index) =>
+        index % 2 === 1 ? (
+          <Text c="yellow" component="span" fw={600} fz="xs" inherit key={index}>
+            {part}
+          </Text>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 /** A stream of a script: its text, with a copy button, following the end while the script writes. */
 export function OutputView({
   text,
@@ -66,7 +88,7 @@ export function OutputView({
               –
             </Text>
           ) : (
-            text
+            <WithMarkers text={text} />
           )}
         </Code>
       </ScrollArea.Autosize>

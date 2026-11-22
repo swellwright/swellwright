@@ -34,6 +34,14 @@ export const isRunSecretType = (type: string): type is RunSecretType =>
 /** The console warns when a secret expires within this many days. */
 export const SECRET_EXPIRY_WARN_DAYS = 14;
 
+/** The `details` of a `secret_expired` error: which secret, and when it expired. Never the value. */
+export const SecretExpiredDetailsSchema = z.object({
+  secretId: z.uuid(),
+  secretName: z.string(),
+  expiresAt: z.iso.datetime(),
+});
+export type SecretExpiredDetails = z.infer<typeof SecretExpiredDetailsSchema>;
+
 export const VAULT_STATES = ['uninitialized', 'sealed', 'unsealed'] as const;
 
 export const VaultStatusSchema = z

@@ -34,6 +34,8 @@ export interface ProgramContext {
   write(stream: 'stdout' | 'stderr', data: string | Buffer): void;
   /** Resolves after the time, or at once when the step is cancelled. */
   sleep(ms: number): Promise<void>;
+  /** The bytes of a secret file of the step, or undefined when there is none (it was never delivered, or it is gone). */
+  readSecret(name: string): Buffer | undefined;
 }
 
 export type Program = (context: ProgramContext) => Promise<number> | number;
@@ -43,6 +45,8 @@ interface EmulatedStep {
   readonly sha: string;
   readonly script: string;
   readonly env: Record<string, string>;
+  /** The files of `<step dir>/secrets`: delivered with the launch, gone when the program ends by any route. */
+  readonly secrets: Map<string, Buffer>;
   readonly abort: AbortController;
   stdout: Buffer;
   stderr: Buffer;
@@ -121,6 +125,8 @@ export class StepHost {
   readonly removed: string[] = [];
   /** How many launches created a step, and how many found it there. */
   readonly launches = { created: 0, attached: 0 };
+  /** Every command line that arrived, in order: a value of a secret must never be in one. */
+  readonly commands: string[] = [];
   /** The highest number of programs that ran at the same moment. */
   maxRunning = 0;
   /** Launches that have arrived and wait for the gate. */
@@ -175,6 +181,7 @@ export class StepHost {
     options: StepHostOptions,
     reply: (text: string | Buffer, code?: number, toStderr?: boolean) => void,
   ): Promise<void> {
+    this.commands.push(command);
     let inner = command;
     let input = stdin;
     if (command.includes('swellwright-sudo')) {
@@ -216,7 +223,10 @@ export class StepHost {
     }
   }
 
-  private static frames(text: string, withSudoLine: boolean): Map<string, Buffer | undefined> {
+  private static frames(
+    text: string,
+    withSudoLine: boolean,
+  ): { frames: Map<string, Buffer | undefined>; secrets: Map<string, Buffer> } {
     const lines = text.split('\n');
     let index = withSudoLine ? 1 : 0;
     if (lines[index] !== 'SWSTEP/1') {
@@ -224,10 +234,11 @@ export class StepHost {
     }
     index += 1;
     const frames = new Map<string, Buffer | undefined>();
+    const secrets = new Map<string, Buffer>();
     while (index < lines.length) {
       const [tag, name, sha] = (lines[index] ?? '').split(' ');
       index += 1;
-      if (tag !== 'FRAME' || name === undefined) {
+      if ((tag !== 'FRAME' && tag !== 'SECRET') || name === undefined) {
         break;
       }
       if (sha === '-') {
@@ -240,9 +251,14 @@ export class StepHost {
         index += 1;
       }
       index += 1;
-      frames.set(name, Buffer.from(body.join(''), 'base64'));
+      const data = Buffer.from(body.join(''), 'base64');
+      if (tag === 'SECRET') {
+        secrets.set(name, data);
+      } else {
+        frames.set(name, data);
+      }
     }
-    return frames;
+    return { frames, secrets };
   }
 
   private async launch(
@@ -269,18 +285,19 @@ export class StepHost {
       return;
     }
     // With sudo the first line of the input is the password; the frames follow.
-    const frames = StepHost.frames(input.toString('utf8'), useSudo === '1');
+    const { frames, secrets } = StepHost.frames(input.toString('utf8'), useSudo === '1');
     const script = (frames.get('script') ?? Buffer.alloc(0)).toString('utf8');
     const envText = (frames.get('env') ?? Buffer.alloc(0)).toString('utf8');
     const env: Record<string, string> = {};
     for (const [name, value] of StepHost.exports(envText)) {
-      env[name] = value;
+      env[name] = value.replaceAll('$SWELLWRIGHT_STEP_DIR', key);
     }
     const step: EmulatedStep = {
       key,
       sha,
       script,
       env,
+      secrets,
       abort: new AbortController(),
       stdout: Buffer.alloc(0),
       stderr: Buffer.alloc(0),
@@ -310,6 +327,10 @@ export class StepHost {
           const end = text.indexOf("'", index + 1);
           value += text.slice(index + 1, end);
           index = end + 1;
+        } else if (text[index] === '"') {
+          const end = text.indexOf('"', index + 1);
+          value += text.slice(index + 1, end);
+          index = end + 1;
         } else if (text[index] === '\\') {
           value += text[index + 1] ?? '';
           index += 2;
@@ -337,6 +358,7 @@ export class StepHost {
           script: step.script,
           stepId: id,
           signal: step.abort.signal,
+          readSecret: (name) => step.secrets.get(name),
           write: (stream, data) => {
             const bytes = typeof data === 'string' ? Buffer.from(data, 'utf8') : data;
             if (stream === 'stdout') {
@@ -363,6 +385,8 @@ export class StepHost {
       }
     } finally {
       this.running -= 1;
+      // The wrapper removes the secrets the moment the script ends, whatever the way (exit, kill, timeout, cancel).
+      step.secrets.clear();
     }
     if (step.exit === undefined) {
       step.exit = step.abort.signal.aborted && code === 0 ? 143 : code;
@@ -439,6 +463,7 @@ export class StepHost {
       reply('SWRESULT running\n');
       return;
     }
+    step.secrets.clear();
     this.steps.delete(key);
     this.removed.push(id);
     reply('SWRESULT removed\n');
@@ -450,6 +475,7 @@ export class StepHost {
       if (key.endsWith(`/${id}`)) {
         // The emulated program is told to stop: a program that nobody can reach any more would keep the test process alive.
         this.steps.get(key)?.abort.abort();
+        this.steps.get(key)?.secrets.clear();
         this.steps.delete(key);
       }
     }

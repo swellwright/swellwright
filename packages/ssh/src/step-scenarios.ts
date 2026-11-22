@@ -540,7 +540,9 @@ export function defineStepScenarios(
       /** How many processes of the server have the distinct value in their command line (the bracket keeps grep out). */
       const inArguments = async (): Promise<number> =>
         Number(
-          (await conn.exec(`ps -eo args | grep -c -e '[s]3cret-distinct-value'; true`)).stdout.trim(),
+          (
+            await conn.exec(`ps -eo args | grep -c -e '[s]3cret-distinct-value'; true`)
+          ).stdout.trim(),
         );
 
       it('writes each secret to a private file the script reads through NAME_FILE, and nowhere else', async () => {
@@ -568,7 +570,10 @@ export function defineStepScenarios(
         assert.equal(await inArguments(), 0, 'a value is in the arguments of a process');
         const env = await conn.exec(`cat ${shellQuote(`${baseDir}/${id}/env`)}`);
         assert.ok(!env.stdout.includes(DISTINCT));
-        assert.match(env.stdout, /export MYSECRET_FILE="\$SWELLWRIGHT_STEP_DIR\/secrets\/MYSECRET"/u);
+        assert.match(
+          env.stdout,
+          /export MYSECRET_FILE="\$SWELLWRIGHT_STEP_DIR\/secrets\/MYSECRET"/u,
+        );
         const written = await conn.exec(`cat ${shellQuote(`${baseDir}/${id}/script.sh`)}`);
         assert.equal(written.stdout, script);
 
@@ -699,7 +704,9 @@ export function defineStepScenarios(
           SshInputError,
         );
         await assert.rejects(start({ CLASH: 'v' }, { CLASH_FILE: '/elsewhere' }), SshInputError);
-        const listing = await conn.exec(`ls ${shellQuote(baseDir)} 2>/dev/null | grep -c secrets-bad; true`);
+        const listing = await conn.exec(
+          `ls ${shellQuote(baseDir)} 2>/dev/null | grep -c secrets-bad; true`,
+        );
         assert.equal(listing.stdout.trim(), '0', 'no step was created for any of them');
       });
     });

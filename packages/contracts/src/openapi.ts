@@ -66,10 +66,13 @@ import {
   EnumParameterSchema,
   IntegerParameterSchema,
   ParameterValuesSchema,
+  RunSecretRequestSchema,
+  RunSecretViewSchema,
   ScriptListSchema,
   ScriptParameterSchema,
   ScriptSummarySchema,
   ScriptViewSchema,
+  SecretParameterSchema,
   StringParameterSchema,
   UpdateScriptRequestSchema,
 } from './commands.js';
@@ -208,7 +211,7 @@ import {
 } from './system.js';
 
 /** Version of the API description. Bump it with every contract change (oasdiff checks the rules). */
-export const OPENAPI_INFO_VERSION = '0.24.0';
+export const OPENAPI_INFO_VERSION = '0.25.0';
 
 /** Named schemas that appear under `components.schemas`. Every response schema must be listed here. */
 const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
@@ -320,8 +323,11 @@ const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
   IntegerParameterSchema,
   EnumParameterSchema,
   BooleanParameterSchema,
+  SecretParameterSchema,
   ScriptParameterSchema,
   ParameterValuesSchema,
+  RunSecretRequestSchema,
+  RunSecretViewSchema,
   ScriptSummarySchema,
   ScriptViewSchema,
   ScriptListSchema,
