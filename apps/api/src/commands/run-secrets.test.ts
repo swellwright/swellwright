@@ -470,8 +470,13 @@ describe('a vault secret handed to a run', { skip: !databaseUrl }, () => {
         h.owner,
         withSecrets([server], '# fake:split\n', [{ name: 'SPLIT', secretId: splitId }]),
       );
-      // Half of the value has been written, and the poll has seen it: nothing of it may be stored yet.
-      await sleep(400);
+      // Half of the value has been written, and a poll has seen it (the text before it is stored): nothing of the value
+      // may be stored yet, however many polls follow. Waiting for the stored text, not for a time, keeps this exact on a
+      // slow machine.
+      await h.waitFor(made.id, 'the text before the value', (r) =>
+        targetOf(r).stdout.tail.startsWith('start'),
+      );
+      await sleep(200);
       const midway = await h.getRun(made.id);
       assert.ok(
         !targetOf(midway).stdout.tail.includes(SPLIT.slice(0, 20)),
@@ -496,7 +501,9 @@ describe('a vault secret handed to a run', { skip: !databaseUrl }, () => {
         h.owner,
         withSecrets([server], '# fake:split\n', [{ name: 'SPLIT', secretId: splitId }]),
       );
-      await sleep(400);
+      await h.waitFor(made.id, 'the text before the value', (r) =>
+        targetOf(r).stdout.tail.startsWith('start'),
+      );
       await h.restart();
       Logger.overrideLogger(logger);
       // After a restart the vault is sealed: the run waits, the script is not touched.

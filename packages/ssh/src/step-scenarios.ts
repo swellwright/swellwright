@@ -661,7 +661,7 @@ export function defineStepScenarios(
         const lostId = nextId('secrets-lost');
         await startDetachedStep(conn, {
           id: lostId,
-          script: 'sleep 60\n',
+          script: 'sleep 58\n',
           baseDir,
           secrets: { MYSECRET: DISTINCT },
         });
@@ -676,14 +676,22 @@ export function defineStepScenarios(
         const removeId = nextId('secrets-remove');
         await startDetachedStep(conn, {
           id: removeId,
-          script: 'sleep 60\n',
+          script: 'sleep 57\n',
           baseDir,
           secrets: { MYSECRET: DISTINCT },
         });
         await sleep(400);
-        assert.equal(await removeStep(conn, removeId, { baseDir, force: true }), true);
-        assert.equal(await secretsGone(removeId), true, 'after remove');
-        assert.deepEqual(await holders(removeId), []);
+        // Removing a step does not stop its script, and the directory (with the pid file) is gone afterwards: keep the
+        // process group to end it ourselves, or a sleeper outlives this test.
+        const pid = (await conn.exec(`cat ${dir(removeId)}/pid`)).stdout.trim();
+        assert.match(pid, /^[0-9]+$/u);
+        try {
+          assert.equal(await removeStep(conn, removeId, { baseDir, force: true }), true);
+          assert.equal(await secretsGone(removeId), true, 'after remove');
+          assert.deepEqual(await holders(removeId), []);
+        } finally {
+          await conn.exec(`kill -s KILL -- -${pid} 2>/dev/null; true`);
+        }
       });
 
       it('refuses what cannot be delivered, before anything is sent', async () => {
@@ -851,7 +859,7 @@ export function defineStepScenarios(
         const id = nextId('secrets-root-lost');
         await startDetachedStep(conn, {
           id,
-          script: 'sleep 60\n',
+          script: 'sleep 56\n',
           baseDir,
           sudo: env.sudo.options,
           secrets: { MYSECRET: 's3cret-for-lost-root-steps' },
