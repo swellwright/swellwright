@@ -25,14 +25,19 @@ const READ_METHODS = [
   'hosts',
   'infra',
   'internalSquads',
+  'nodePlugin',
   'nodePlugins',
+  'nodePluginsWithConfigs',
   'nodes',
   'snippets',
   'subscriptionSettings',
+  'subscriptionTemplate',
   'subscriptionTemplates',
+  'subscriptionTemplatesWithBodies',
   'userCounts',
   'version',
   'apiTokens',
+  'withDetails',
 ];
 
 describe('the client is read-only', () => {

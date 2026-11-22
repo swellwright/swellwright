@@ -1,7 +1,7 @@
-import type { PanelInboundView } from '@swellwright/contracts';
+import type { PanelInboundView, PanelNodeView } from '@swellwright/contracts';
 import { z } from 'zod';
 
-import { refs, subjects } from '../model.js';
+import { type ProfileInput, refs, subjects } from '../model.js';
 import { isWildcardListen, listenOf, rawInboundOf, snippetNames, transportOf } from '../xray.js';
 import { clip, defineRule, patternParam } from './framework.js';
 
@@ -56,49 +56,122 @@ export const profileInboundTagUnique = defineRule({
   },
 });
 
+interface Clash {
+  /** `tcp:443`: the transport and the port. */
+  readonly key: string;
+  readonly inbounds: readonly PanelInboundView[];
+}
+
+/** The groups of inbounds among `inbounds` that listen on one port of one transport on overlapping addresses. */
+function clashesAmong(profile: ProfileInput, inbounds: readonly PanelInboundView[]): Clash[] {
+  const groups = new Map<string, { inbound: PanelInboundView; listen: string }[]>();
+  for (const inbound of inbounds) {
+    if (inbound.port === null) {
+      continue;
+    }
+    const key = `${transportOf(inbound)}:${String(inbound.port)}`;
+    groups.set(key, [
+      ...(groups.get(key) ?? []),
+      { inbound, listen: listenOf(rawInboundOf(profile, inbound)) },
+    ]);
+  }
+  const out: Clash[] = [];
+  for (const [key, entries] of groups) {
+    // Two inbounds on one port clash when their listen addresses overlap: a specific address and the same one, or any
+    // address with anything.
+    const clashing = entries.filter((entry, i) =>
+      entries.some(
+        (other, j) =>
+          i !== j &&
+          (isWildcardListen(entry.listen) ||
+            isWildcardListen(other.listen) ||
+            entry.listen === other.listen),
+      ),
+    );
+    if (clashing.length >= 2) {
+      out.push({ key, inbounds: clashing.map((entry) => entry.inbound) });
+    }
+  }
+  return out;
+}
+
+/** Names for a message: the first few, and how many more. */
+const namesOf = (names: readonly string[]): string =>
+  clip(
+    names.length <= 3
+      ? names.join(', ')
+      : `${names.slice(0, 3).join(', ')} and ${String(names.length - 3)} more`,
+  );
+
 export const profileInboundPortClash = defineRule({
   id: 'profile.inbound-port-clash',
   kind: 'configProfile',
   defaultSeverity: 'error',
   needs: ['configProfiles'],
-  codes: ['clash'],
+  codes: ['clash', 'possible_clash'],
   params: z.strictObject({}),
-  run({ model, emit }) {
+  run({ model, index, emit }) {
+    // Xray runs the inbounds a node has ACTIVE, and nothing else of the profile (a profile holds one inbound for each
+    // node in the common layout: twelve inbounds on port 443 and twelve nodes with one each do not clash). So the
+    // inbounds are compared node by node, over the active ones. Where no node has an inbound of the profile active
+    // (nobody uses it, or the nodes could not be read), the clash is only possible, and is a warning.
     for (const profile of model.profiles) {
-      const groups = new Map<string, { inbound: PanelInboundView; listen: string }[]>();
-      for (const inbound of profile.inbounds) {
-        if (inbound.port === null) {
-          continue;
+      const byUuid = new Map(profile.inbounds.map((inbound) => [inbound.uuid, inbound]));
+      const serving = index
+        .nodesOfProfile(profile.uuid)
+        .map((node) => ({
+          node,
+          active: node.configProfile.inbounds.flatMap((entry) => {
+            const known = byUuid.get(entry.uuid);
+            return known === undefined ? [] : [known];
+          }),
+        }))
+        .filter((entry) => entry.active.length > 0);
+
+      if (serving.length === 0) {
+        for (const clash of clashesAmong(profile, profile.inbounds)) {
+          emit({
+            code: 'possible_clash',
+            severity: 'warning',
+            subject: subjects.profile(profile),
+            key: clash.key,
+            related: clash.inbounds.slice(0, 10).map((inbound) => refs.inbound(inbound)),
+            params: {
+              port: clash.inbounds[0]?.port ?? null,
+              tags: clip(clash.inbounds.map((inbound) => inbound.tag).join(', ')),
+            },
+            fields: ['/config/inbounds'],
+          });
         }
-        const key = `${transportOf(inbound)}:${String(inbound.port)}`;
-        groups.set(key, [
-          ...(groups.get(key) ?? []),
-          { inbound, listen: listenOf(rawInboundOf(profile, inbound)) },
-        ]);
+        continue;
       }
-      for (const [key, entries] of groups) {
-        // Two inbounds on one port clash when their listen addresses overlap: a specific address and the same one, or
-        // any address with anything.
-        const clashing = entries.filter((entry, i) =>
-          entries.some(
-            (other, j) =>
-              i !== j &&
-              (isWildcardListen(entry.listen) ||
-                isWildcardListen(other.listen) ||
-                entry.listen === other.listen),
-          ),
-        );
-        if (clashing.length < 2) {
-          continue;
+
+      // The same clash on several nodes is one finding that names them all.
+      const found = new Map<string, { clash: Clash; nodes: PanelNodeView[] }>();
+      for (const { node, active } of serving) {
+        for (const clash of clashesAmong(profile, active)) {
+          const id = `${clash.key}:${clash.inbounds
+            .map((inbound) => inbound.tag)
+            .sort()
+            .join(',')}`;
+          const entry = found.get(id) ?? { clash, nodes: [] };
+          entry.nodes.push(node);
+          found.set(id, entry);
         }
+      }
+      for (const [id, { clash, nodes }] of found) {
         emit({
           code: 'clash',
           subject: subjects.profile(profile),
-          key,
-          related: clashing.slice(0, 10).map((entry) => refs.inbound(entry.inbound)),
+          key: id,
+          related: [
+            ...clash.inbounds.slice(0, 10).map((inbound) => refs.inbound(inbound)),
+            ...nodes.slice(0, 5).map((node) => refs.node(node)),
+          ],
           params: {
-            port: clashing[0]?.inbound.port ?? null,
-            tags: clip(clashing.map((entry) => entry.inbound.tag).join(', ')),
+            port: clash.inbounds[0]?.port ?? null,
+            tags: clip(clash.inbounds.map((inbound) => inbound.tag).join(', ')),
+            nodes: namesOf(nodes.map((node) => node.name)),
           },
           fields: ['/config/inbounds'],
         });

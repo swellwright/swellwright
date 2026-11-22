@@ -73,3 +73,9 @@ Panel > Snapshots (`/dashboard/panel/snapshots`, `panel:read`): the header card 
 
 ## Not built here
 Restore of an object (phase 7), YAML export and Git (P18), a snapshot before a change and its link to a change (phase 4), weekly snapshots beyond the retention above (the design table says "daily for 90 days, weekly for 2 years": the count and the 14 daily days replace it until there is a reason for more), partial snapshots of one object, an encrypted blob, several panels in the list (the model allows them), and a diff of the computed configuration.
+
+## Note of 2026-11-22: template bodies are in the snapshot now
+
+A snapshot is made from `readPanelState`, which used the list of subscription templates; the real panel's list has no bodies (ADR 0041, note of the same day), so the snapshots of the first slice held ten templates **without** their bodies and could not see an edited body: the object hash did not move, the diff said "identical". `readPanelState` now reads each template with its detail (and each node plugin with its configuration), so the hash of a template covers its body and a changed port in a template shows in the diff as `templateJson.inbounds[tag=...].port`, before and after, masked where a secret is (the masker runs on every body: a template for a local proxy carries its login and password, and the tests feed it hostile bodies). `bodyLoaded` and `configLoaded` say how a view was read and are not part of the hash or of a snapshot's content.
+
+Two consequences to know. A snapshot **made before this change** holds no template bodies, so a diff of it against a new one shows the ten bodies as changed from nothing: that is the correction, not an edit of the panel. And a template body that cannot be parsed (not YAML at all) is stored in no form, because it cannot be masked; the hash of such a template does not move when its body does. The panel does not offer a way to save one, so this is a limit and not a case.

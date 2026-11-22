@@ -33,7 +33,7 @@ import { CONFIG } from '../tokens.js';
 import { type Actor, VaultService } from '../vault/vault.service.js';
 import { PanelClients } from './clients.js';
 import { type ConnectionRow, tokenInfo, viewOf, warningsOf } from './connection-view.js';
-import { PanelCache } from './panel-cache.js';
+import { cacheKeyOf, PanelCache } from './panel-cache.js';
 import { panelException } from './panel-errors.js';
 import { PanelService } from './panel.service.js';
 
@@ -248,7 +248,10 @@ export class PanelReaderService {
     actor: Actor,
     refresh: boolean,
   ): Promise<Read<PanelSubscriptionTemplateView[]>> {
-    return this.load('subscriptionTemplates', actor, (c) => c.subscriptionTemplates(), { refresh });
+    // With the bodies: the list of the panel has none, and a template without its body says nothing (ADR 0041, note of 2026-11-22).
+    return this.load('subscriptionTemplates', actor, (c) => c.subscriptionTemplatesWithBodies(), {
+      refresh,
+    });
   }
 
   subscriptionSettings(
@@ -263,7 +266,7 @@ export class PanelReaderService {
   }
 
   nodePlugins(actor: Actor, refresh: boolean): Promise<Read<PanelNodePluginView[]>> {
-    return this.load('nodePlugins', actor, (c) => c.nodePlugins(), { refresh });
+    return this.load('nodePlugins', actor, (c) => c.nodePluginsWithConfigs(), { refresh });
   }
 
   infra(actor: Actor, refresh: boolean): Promise<Read<PanelInfraView>> {
@@ -278,7 +281,7 @@ export class PanelReaderService {
 
   /**
    * Everything the checks look at, for one charge against the limit of forced reads: the nodes, hosts, config profiles
-   * (each with its masked configuration), squads, templates, snippets and node plugins. A kind that the token may not
+   * (each with its masked configuration), squads, templates (each with its body), snippets and node plugins (each with its configuration). A kind that the token may not
    * read (403) or that the panel sends in a shape this release does not know is listed as unavailable, and the rules
    * that need it are skipped; any other failure (the panel is down, refuses the token, asks to slow down) is the
    * failure of the whole read, as everywhere else.
@@ -345,7 +348,12 @@ export class PanelReaderService {
       ),
       take(
         'subscriptionTemplates',
-        this.load('subscriptionTemplates', actor, (c) => c.subscriptionTemplates(), options),
+        this.load(
+          'subscriptionTemplates',
+          actor,
+          (c) => c.subscriptionTemplatesWithBodies(),
+          options,
+        ),
         [],
       ),
       take(
@@ -355,7 +363,7 @@ export class PanelReaderService {
       ),
       take(
         'nodePlugins',
-        this.load('nodePlugins', actor, (c) => c.nodePlugins(), options),
+        this.load('nodePlugins', actor, (c) => c.nodePluginsWithConfigs(), options),
         [],
       ),
     ]);
@@ -443,9 +451,15 @@ export class PanelReaderService {
       this.load('configProfiles', actor, (c) => c.configProfiles(), options),
       this.load('internalSquads', actor, (c) => c.internalSquads(), options),
       this.load('externalSquads', actor, (c) => c.externalSquads(), options),
-      this.load('subscriptionTemplates', actor, (c) => c.subscriptionTemplates(), options),
+      // Only counted here: the list is enough, and the bodies would cost a request each.
+      this.load(
+        cacheKeyOf('subscriptionTemplates', false),
+        actor,
+        (c) => c.subscriptionTemplates(),
+        options,
+      ),
       this.load('snippets', actor, (c) => c.snippets(), options),
-      this.load('nodePlugins', actor, (c) => c.nodePlugins(), options),
+      this.load(cacheKeyOf('nodePlugins', false), actor, (c) => c.nodePlugins(), options),
     ]);
     // What a missing scope or a changed shape of one resource costs is that resource; anything else is the panel.
     for (const outcome of settled) {

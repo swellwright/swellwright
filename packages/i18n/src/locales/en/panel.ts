@@ -492,6 +492,8 @@ export const panel = {
       body: 'Template body',
       bodyHint:
         'A template for a local proxy often carries its login and password: those are masked here, and comments in a YAML template are dropped.',
+      bodyNotLoaded:
+        'The body of this template was not read: the panel leaves the bodies out of its list of templates. Refresh to read it.',
     },
   },
 
@@ -514,6 +516,8 @@ export const panel = {
       noNodes: 'This plugin is not active on any node.',
       config: 'Plugin configuration',
       configHint: 'The configuration the panel sends to the nodes that run this plugin.',
+      configNotLoaded:
+        'The configuration of this plugin was not read: the panel may leave it out of its list of plugins. Refresh to read it.',
     },
   },
 

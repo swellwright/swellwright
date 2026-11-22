@@ -15,6 +15,7 @@ import { TbCode, TbEye, TbFolder } from 'react-icons/tb';
 
 import type { PanelSubscriptionTemplateView } from '@swellwright/contracts';
 import {
+  Callout,
   CopyableDataListItem,
   EmptyPageLayout,
   EntityCard,
@@ -129,14 +130,19 @@ function TemplateBody({ template }: { template: PanelSubscriptionTemplateView })
         </SectionCard.Section>
       </SectionCard.Root>
 
-      <ConfigViewerCard
-        description={t('panel:templates.drawer.bodyHint')}
-        height="560px"
-        icon={TbCode}
-        language={body.language}
-        title={t('panel:templates.drawer.body')}
-        value={body.text}
-      />
+      {template.bodyLoaded ? (
+        <ConfigViewerCard
+          description={t('panel:templates.drawer.bodyHint')}
+          height="560px"
+          icon={TbCode}
+          language={body.language}
+          title={t('panel:templates.drawer.body')}
+          value={body.text}
+        />
+      ) : (
+        // The list of the panel has no bodies; an empty viewer would read as "this template is empty".
+        <Callout color="orange">{t('panel:templates.drawer.bodyNotLoaded')}</Callout>
+      )}
     </Stack>
   );
 }

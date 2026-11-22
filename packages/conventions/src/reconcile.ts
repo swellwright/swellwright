@@ -12,6 +12,7 @@ import {
 } from '@swellwright/contracts';
 
 import type { DnsAnswer } from './dns.js';
+import { canonicalJson } from './json.js';
 import { message } from './messages.js';
 import {
   addressKind,
@@ -619,15 +620,64 @@ function hostPortRow(host: PanelHostView, subject: Subject, index: ModelIndex, r
   }
 }
 
+/** The strings of a list as a sorted list: the order of a list of ids or tags says nothing. */
+const sortedText = (values: readonly string[]): string[] => [...values].sort();
+
+/**
+ * What makes a host a different entry for a client: everything that decides which server, with which settings and
+ * under which conditions a client gets. The remark, the position in the list and the uuid are not in it (they name and
+ * order the entry), and neither is the state `disabled` (a disabled host is in no subscription; such hosts are left
+ * out before). Two hosts with one such key are the same entry twice. Hosts that differ in any of these fields are not
+ * duplicates: the common layout of one host for each subscription template (a "global" and a "selective" entry of one
+ * node, same address, port, SNI and inbound, different `xrayJsonTemplateUuid`) is on purpose.
+ */
+export function hostSelectionKey(host: PanelHostView): string {
+  return canonicalJson({
+    address: normalizeAddress(host.address),
+    port: host.port,
+    sni: (host.sni ?? '').trim().toLowerCase(),
+    host: host.host,
+    path: host.path,
+    alpn: host.alpn,
+    fingerprint: host.fingerprint,
+    securityLayer: host.securityLayer,
+    overrideSniFromAddress: host.overrideSniFromAddress,
+    keepSniBlank: host.keepSniBlank,
+    pinnedPeerCertSha256: host.pinnedPeerCertSha256,
+    verifyPeerCertByName: host.verifyPeerCertByName,
+    inbound: host.inbound,
+    nodeUuids: sortedText(host.nodeUuids),
+    xrayJsonTemplateUuid: host.xrayJsonTemplateUuid,
+    vlessRouteId: host.vlessRouteId,
+    shuffleHost: host.shuffleHost,
+    mihomoX25519: host.mihomoX25519,
+    mihomoIpVersion: host.mihomoIpVersion,
+    xhttpExtraParams: host.xhttpExtraParams,
+    muxParams: host.muxParams,
+    sockoptParams: host.sockoptParams,
+    finalMask: host.finalMask,
+    mapper: host.mapper,
+    internalSquads: {
+      mode: host.internalSquads.mode,
+      squadUuids: sortedText(host.internalSquads.squadUuids),
+    },
+    excludeFromSubscriptionTypes: sortedText(host.excludeFromSubscriptionTypes),
+    includeInSrrRules: sortedText(host.includeInSrrRules),
+    // Tags select hosts for a template (`tagRegex`, `sameTagAsRecipient`); the description and the visibility are what
+    // a client or a person sees of the entry.
+    tags: sortedText(host.tags),
+    serverDescription: host.serverDescription,
+    isHidden: host.isHidden,
+  });
+}
+
 function hostDuplicates(hosts: readonly PanelHostView[], rows: Rows): void {
   const groups = new Map<string, PanelHostView[]>();
   for (const host of hosts) {
-    const key = [
-      normalizeAddress(host.address),
-      host.port,
-      (host.sni ?? '').toLowerCase(),
-      host.inbound.configProfileInboundUuid ?? '',
-    ].join('|');
+    if (host.isDisabled) {
+      continue;
+    }
+    const key = hostSelectionKey(host);
     groups.set(key, [...(groups.get(key) ?? []), host]);
   }
   for (const group of groups.values()) {

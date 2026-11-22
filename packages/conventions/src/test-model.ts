@@ -258,6 +258,7 @@ export function template(
     templateType: type,
     templateJson: type === 'XRAY_JSON' ? { outbounds: [] } : null,
     templateYaml: type === 'XRAY_JSON' ? null : 'proxies: []\n',
+    bodyLoaded: true,
     hash: HASH,
     ...extra,
   };
@@ -270,7 +271,15 @@ export const snippet = (name: string): PanelSnippetView => ({
 });
 
 export function nodePlugin(n: number, name: string): PanelNodePluginView {
-  return { uuid: uid(0x6000 + n), name, viewPosition: n, tags: [], pluginConfig: null, hash: HASH };
+  return {
+    uuid: uid(0x6000 + n),
+    name,
+    viewPosition: n,
+    tags: [],
+    pluginConfig: null,
+    configLoaded: true,
+    hash: HASH,
+  };
 }
 
 export function summaryOf(p: ProfileInput): PanelConfigProfileSummary {
@@ -357,4 +366,122 @@ export function must<T>(value: T | null | undefined): T {
     throw new Error('A value is missing.');
   }
   return value;
+}
+
+/** A fleet laid out the way a real Remnawave 3.4.11 fleet is (anonymised; every name and address is made up). */
+export interface RealLayout extends PanelModel {
+  readonly mainProfile: ProfileInput;
+  /** The inbound of each of the twelve nodes of the main profile, in the order of the nodes. */
+  readonly mainInbounds: readonly PanelInboundView[];
+  readonly selective: PanelSubscriptionTemplateView;
+  readonly defaults: readonly PanelSubscriptionTemplateView[];
+}
+
+/**
+ * What the real panel showed, without any of its data: one profile with twelve inbounds on port 443 (one inbound for each
+ * node, a tag for each), two profiles with one inbound each, fourteen nodes that each have exactly ONE inbound active,
+ * thirty-five hosts of which fourteen pairs share address, port, SNI and inbound and differ in the remark, the position,
+ * the uuid and the subscription template (a "global" and a "selective" host of one node), seven single hosts, ten
+ * subscription templates (a "Default" and one more for each of five types), one internal and one external squad.
+ */
+export function realLayout(): RealLayout {
+  const mainUuid = uid(0x10);
+  const mainInbounds = Array.from({ length: 12 }, (_unused, i) =>
+    inbound(0x300 + i, mainUuid, `NODE_${String(i + 1).padStart(2, '0')}`, 443),
+  );
+  const hopUuid = uid(0x11);
+  const exitUuid = uid(0x12);
+  const hopInbound = inbound(0x320, hopUuid, 'HOP_ENTRY', 443);
+  const exitInbound = inbound(0x321, exitUuid, 'HOP_EXIT', 443);
+  // Every inbound accepts the domain of every node: the hosts name the domain of their node as the SNI.
+  const names = Array.from({ length: 14 }, (_unused, i) => `n${String(i + 1)}.example.com`);
+  const mainProfile = profileWithConfig(0x10, 'Main', mainInbounds, {}, names);
+  const hopProfile = profileWithConfig(0x11, 'Hop entry', [hopInbound], {}, names);
+  const exitProfile = profileWithConfig(0x12, 'Hop exit', [exitInbound], {}, names);
+
+  const bindings = [
+    ...mainInbounds.map((inb) => ({ profile: mainUuid, inbound: inb })),
+    { profile: hopUuid, inbound: hopInbound },
+    { profile: exitUuid, inbound: exitInbound },
+  ];
+  const nodes = bindings.map(({ profile: profileRef, inbound: inb }, i) =>
+    node(
+      i + 1,
+      `Node ${String(i + 1)}`,
+      { uuid: profileRef, inbounds: [inb] },
+      {
+        address: `n${String(i + 1)}.example.com`,
+        ips: [{ ip: `192.0.2.${String(10 + i)}`, status: 'INBOUND' }],
+      },
+    ),
+  );
+
+  // Ten templates: a "Default" for each of five types, and one more for each type (the second XRAY_JSON one is what the
+  // "selective" hosts use; the other four are chosen by the external squad).
+  const types = ['XRAY_JSON', 'MIHOMO', 'STASH', 'CLASH', 'SINGBOX'];
+  const defaults = types.map((type, i) => template(i + 1, 'Default', type));
+  const customs = types.map((type, i) => template(i + 11, `Custom ${type}`, type));
+  const selective = at(customs, 0);
+  const templates = [...defaults, ...customs];
+
+  const hosts: PanelHostView[] = [];
+  bindings.forEach(({ profile: profileRef, inbound: inb }, i) => {
+    const common = {
+      address: `192.0.2.${String(10 + i)}`,
+      sni: `n${String(i + 1)}.example.com`,
+      nodeUuids: [at(nodes, i).uuid],
+    };
+    const to = { profile: profileRef, inbound: inb.uuid };
+    hosts.push(
+      host(2 * i + 1, `Global ${String(i + 1)}`, to, { ...common, xrayJsonTemplateUuid: null }),
+      host(2 * i + 2, `Selective ${String(i + 1)}`, to, {
+        ...common,
+        xrayJsonTemplateUuid: selective.uuid,
+      }),
+    );
+  });
+  for (let k = 0; k < 7; k += 1) {
+    const { profile: profileRef, inbound: inb } = at(bindings, k);
+    hosts.push(
+      host(
+        100 + k,
+        `Test ${String(k + 1)}`,
+        { profile: profileRef, inbound: inb.uuid },
+        {
+          address: `192.0.2.${String(10 + k)}`,
+          sni: `n${String(k + 1)}.example.com`,
+          fingerprint: 'safari',
+          nodeUuids: [at(nodes, k).uuid],
+          tags: ['TEST'],
+        },
+      ),
+    );
+  }
+
+  const allInbounds = [...mainInbounds, hopInbound, exitInbound];
+  const model = emptyModel({
+    panelVersion: '3.4.11',
+    nodes,
+    hosts,
+    profiles: [mainProfile, hopProfile, exitProfile].map((p) => ({
+      ...p,
+      nodes: nodes
+        .filter((n) => n.configProfile.uuid === p.uuid)
+        .map((n) => ({ uuid: n.uuid, name: n.name, countryCode: n.countryCode })),
+      nodeCount: nodes.filter((n) => n.configProfile.uuid === p.uuid).length,
+    })),
+    internalSquads: [internalSquad(1, 'Everyone', allInbounds)],
+    externalSquads: [
+      externalSquad(
+        1,
+        'Clients',
+        customs.slice(1).map((t) => ({ templateUuid: t.uuid, templateType: t.templateType })),
+      ),
+    ],
+    templates,
+    snippets: [],
+    nodePlugins: [],
+    now: new Date('2026-06-01T00:00:00Z'),
+  });
+  return { ...model, mainProfile, mainInbounds, selective, defaults };
 }

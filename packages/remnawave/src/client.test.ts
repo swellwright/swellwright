@@ -93,6 +93,7 @@ describe('the panel client against a fake panel', () => {
       assert.equal((await client.internalSquads()).length, 2);
       assert.equal((await client.externalSquads()).length, 1);
       assert.equal((await client.subscriptionTemplates()).length, 3);
+      assert.equal((await client.subscriptionTemplatesWithBodies()).length, 3);
       assert.equal((await client.subscriptionSettings()).isShowCustomRemarks, true);
       assert.equal((await client.snippets()).length, 2);
       assert.equal((await client.nodePlugins()).length, 1);
@@ -551,9 +552,12 @@ describe('the panel client against a fake panel', () => {
       await client.internalSquads(),
       await client.externalSquads(),
       await client.subscriptionTemplates(),
+      // The bodies come through the detail request: this is where a template's login and password would be read.
+      await client.subscriptionTemplatesWithBodies(),
       await client.subscriptionSettings(),
       await client.snippets(),
       await client.nodePlugins(),
+      await client.nodePluginsWithConfigs(),
       await client.infra(),
     ]);
     const secrets = Object.values(FAKE_SECRETS).flat();
@@ -566,6 +570,9 @@ describe('the panel client against a fake panel', () => {
       'node-1.example.com',
       'VLESS_REALITY_MAIN',
       'xtls-rprx-vision',
+      // From the bodies of the templates and the configuration of the plugin, which only the detail requests carry.
+      'fake-proxy',
+      'hooks.example.com',
     ]) {
       assert.ok(everything.includes(visible), visible);
     }

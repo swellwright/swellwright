@@ -82,11 +82,15 @@ export const hostSniExplicit = defineRule({
       ) {
         continue;
       }
-      // The first server name of the inbound is what the clients would use now; say so.
       const entry =
         host.inbound.configProfileInboundUuid === null
           ? undefined
           : index.inbounds.get(host.inbound.configProfileInboundUuid);
+      // A host that takes the security of its inbound, and an inbound without any (plain), has no SNI to leave out.
+      if (host.securityLayer === 'DEFAULT' && entry?.inbound.security?.toLowerCase() === 'none') {
+        continue;
+      }
+      // The first server name of the inbound is what the clients would use now; say so.
       const names =
         entry === undefined ? [] : realityServerNames(rawInboundOf(entry.profile, entry.inbound));
       emit({
