@@ -120,7 +120,7 @@ export const checksEngine = {
       'inbound-port-clash': {
         title: 'Inbound ports do not clash',
         description:
-          'No two inbounds of a profile listen on the same port of the same transport on overlapping addresses.',
+          'No two inbounds that are active together on one node listen on the same port of the same transport on overlapping addresses. Xray runs only the inbounds a node has active, so inbounds of a profile that no node activates together (one inbound for each node, all on port 443) do not clash. Where no node has an inbound of the profile active, all of them are compared and a clash is only a warning.',
       },
       'snippet-exists': {
         title: 'Snippets used by a profile exist',
@@ -296,7 +296,10 @@ export const checksEngine = {
           'The tag "{{tag}}" is also used in the profile "{{other}}"; tags must be unique across the panel.',
       },
       'inbound-port-clash': {
-        clash: 'The inbounds {{tags}} listen on the same port {{port}}.',
+        clash:
+          'The inbounds {{tags}} listen on the same port {{port}} and are active together on {{nodes}}.',
+        possible_clash:
+          'The inbounds {{tags}} listen on the same port {{port}}. No node has them active, so this matters only if they become active on one node.',
       },
       'snippet-exists': {
         missing: 'The configuration uses the snippet "{{snippet}}", which does not exist.',
@@ -373,7 +376,8 @@ export const checksEngine = {
         },
         duplicate: {
           title: 'Duplicate hosts',
-          description: 'No two hosts have the same address, port, SNI and inbound.',
+          description:
+            'No two enabled hosts give a client the same entry: the same address, port, SNI, host header, path, ALPN, fingerprint, security layer, inbound, nodes, subscription template, route id, overrides, squad filter, tags and description. The remark, the position and the uuid are not part of that, so a "global" and a "selective" host of one node (one host for each subscription template) are not duplicates.',
         },
       },
       node: {
@@ -439,7 +443,8 @@ export const checksEngine = {
       assigned_node_not_serving:
         'The host is assigned to the node "{{node}}", which does not serve its inbound.',
       assigned_node_missing: 'The host is assigned to a node that does not exist.',
-      duplicate_host: 'Hosts with the same address, port, SNI and inbound: {{count}}.',
+      duplicate_host:
+        'Hosts that give a client the same entry (everything but the remark and the position is equal): {{count}}.',
       resolves: '{{address}} resolves to {{ips}}.',
       resolves_high_ttl:
         '{{address}} resolves to {{ips}}; its time to live is {{ttl}} s, longer than {{max}} s, so a change takes that long to reach clients.',
