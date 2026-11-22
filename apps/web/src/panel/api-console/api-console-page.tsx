@@ -158,7 +158,7 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
   const { t } = useTranslation(['apiConsole', 'common', 'panel']);
   const step = useStepUp();
   const clipboard = useClipboard();
-  const narrow = useMediaQuery('(max-width: 64em)');
+  const narrow = useMediaQuery('(max-width: 63.99em)');
   const requestRef = useRef<HTMLDivElement>(null);
   const canSend = permissions.includes('panel:console');
 
