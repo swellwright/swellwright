@@ -7,7 +7,7 @@
 # Run it with --init: detached steps leave orphans that something has to reap, as init does on a real server.
 # Ubuntu 24.04 like the servers the tool is built for: dash as /bin/sh, util-linux (setsid), coreutils, sudo.
 # The base image is pinned by digest; Dependabot proposes new ones.
-FROM ubuntu:24.04@sha256:9c7f200c07e3d4a03e7249d2c16bf66a51120fb876aa2242cf31451412543289
+FROM ubuntu:25.10@sha256:7cc5e35f6567ee8c66d2abb4aab0fd866669e6207c237c3a8f0947a5c7f17092
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openssh-server sudo procps \
