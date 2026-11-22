@@ -6,6 +6,7 @@ import { baseline } from './baseline.js';
 import { checks } from './checks.js';
 import { commands } from './commands.js';
 import { common } from './common.js';
+import { dashboard } from './dashboard.js';
 import { errors } from './errors.js';
 import { nav } from './nav.js';
 import { overview } from './overview.js';
@@ -42,5 +43,6 @@ export const en = {
   checks,
   snapshots,
   baseline,
+  dashboard,
   apiConsole,
 } as const;

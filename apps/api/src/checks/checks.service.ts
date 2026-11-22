@@ -9,6 +9,7 @@ import type {
   ImpactTarget,
   ImpactTargetQuery,
   PanelResource,
+  ReconciliationLast,
   ReconciliationReport,
 } from '@swellwright/contracts';
 import {
@@ -35,7 +36,7 @@ import { PanelService } from '../panel/panel.service.js';
 import { CONFIG, DNS_QUERY } from '../tokens.js';
 import type { Actor } from '../vault/vault.service.js';
 import { InventoryReader } from './inventory.js';
-import { ChecksMemory } from './memory.js';
+import { ChecksMemory, type MatchedNode } from './memory.js';
 import { ConventionPackService } from './pack.service.js';
 import { toModel } from './panel-model.js';
 
@@ -94,6 +95,23 @@ export class ChecksService {
     return last === null
       ? { ranAt: null, pack: null, summary: null }
       : { ranAt: last.ranAt, pack: last.pack, summary: last.summary };
+  }
+
+  async lastReconciliation(): Promise<ReconciliationLast> {
+    const row = await this.panel.row();
+    const last = this.memory.lastReconciliation(row?.id ?? null);
+    return last === null
+      ? { ranAt: null, counts: null, inventoryCompared: null }
+      : {
+          ranAt: last.ranAt,
+          counts: {
+            drift: last.drift,
+            missing: last.missing,
+            extra: last.extra,
+            unknown: last.unknown,
+          },
+          inventoryCompared: last.inventoryCompared,
+        };
   }
 
   // ---- the convention linter --------------------------------------------------------------------------------------
@@ -182,9 +200,47 @@ export class ChecksService {
       inventory,
     });
     const { reconciliation: settings } = pack;
+    const ranAt = new Date().toISOString();
+    // What the dashboard may say later without asking again: the counts, and which node answers for which server.
+    const nodeOf = new Map(model.nodes.map((node) => [node.uuid, node]));
+    const matched = new Map<string, MatchedNode>();
+    // Several nodes can answer to one server (a shared host name): the surest match is shown, the first among equals.
+    const strength = new Map<string, number>();
+    const STRENGTH: Record<string, number> = {
+      'reconciliation.reasons.matched_by_address': 3,
+      'reconciliation.reasons.matched_by_dns': 2,
+      'reconciliation.reasons.matched_by_hostname': 1,
+    };
+    for (const row of result.rows) {
+      const server = row.counterpart;
+      const node = row.subject.uuid === null ? undefined : nodeOf.get(row.subject.uuid);
+      if (
+        row.check === 'node.server' &&
+        row.status === 'ok' &&
+        server?.kind === 'server' &&
+        server.uuid !== null &&
+        node !== undefined
+      ) {
+        const sure = STRENGTH[row.reasonKey] ?? 0;
+        if (sure > (strength.get(server.uuid) ?? -1)) {
+          strength.set(server.uuid, sure);
+          matched.set(server.uuid, { name: node.name, state: node.state });
+        }
+      }
+    }
+    this.memory.rememberReconciliation({
+      connectionId: read.connectionId,
+      ranAt,
+      drift: result.summary.drift,
+      missing: result.summary.missing,
+      extra: result.summary.extra,
+      unknown: result.summary.unknown,
+      inventoryCompared: inventory !== null,
+      nodes: matched,
+    });
     return {
       pack: pack.ref,
-      ranAt: new Date().toISOString(),
+      ranAt,
       fetchedAt: read.fetchedAt,
       summary: result.summary,
       rows: result.rows,

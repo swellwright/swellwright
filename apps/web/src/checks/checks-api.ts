@@ -19,6 +19,8 @@ import {
   type ImpactRequest,
   type ImpactTarget,
   ImpactTargetSchema,
+  type ReconciliationLast,
+  ReconciliationLastSchema,
   type ReconciliationReport,
   ReconciliationReportSchema,
   type SaveConventionPackRequest,
@@ -39,6 +41,10 @@ export const runConventionChecks = (refresh = false): Promise<ConventionRun> =>
 /** What the last run found: from the memory of the server, nothing is run and the panel is not asked. */
 export const getLastConventionRun = (): Promise<ConventionLastRun> =>
   send('GET', '/panel/checks/convention/last', undefined, ConventionLastRunSchema);
+
+/** What the last reconciliation found: from the memory of the server, nothing is compared and the panel is not asked. */
+export const getLastReconciliation = (): Promise<ReconciliationLast> =>
+  send('GET', '/panel/checks/reconciliation/last', undefined, ReconciliationLastSchema);
 
 export const getConventionPack = (version?: number): Promise<ConventionPackView> =>
   send(

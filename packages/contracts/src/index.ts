@@ -4,6 +4,7 @@ export * from './auth.js';
 export * from './baselines.js';
 export * from './checks.js';
 export * from './commands.js';
+export * from './dashboard.js';
 export * from './errors.js';
 export * from './openapi.js';
 export * from './panel-console.js';

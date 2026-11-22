@@ -15,33 +15,46 @@ export interface EmptyPageLayoutProps {
   description?: ReactNode;
   /** Anything under the texts: a call-to-action button or a hint. */
   children?: ReactNode;
+  /** Only the centred content, for the inside of a card that has a title of its own (the dashboard's feed). */
+  embedded?: boolean;
 }
 
 /** The empty state of a page or a list: a card with a large gray soft icon and a bold line of text. */
-export function EmptyPageLayout({ icon, mih, title, description, children }: EmptyPageLayoutProps) {
+export function EmptyPageLayout({
+  icon,
+  mih,
+  title,
+  description,
+  children,
+  embedded = false,
+}: EmptyPageLayoutProps) {
+  const content = (
+    <Center py="xl" {...(mih === undefined ? {} : { mih })}>
+      <Stack align="center" gap="lg">
+        <ThemeIcon aria-hidden color="gray" radius="xl" size={64} variant="soft">
+          {icon}
+        </ThemeIcon>
+
+        <Stack align="center" gap="xs">
+          <Text fw={600} size="lg" ta="center">
+            {title}
+          </Text>
+          {description ? (
+            <Text c="dimmed" maw={400} size="sm" ta="center">
+              {description}
+            </Text>
+          ) : null}
+        </Stack>
+        {children}
+      </Stack>
+    </Center>
+  );
+  if (embedded) {
+    return content;
+  }
   return (
     <SectionCard.Root p="xl" {...(mih === undefined ? {} : { mih })}>
-      <SectionCard.Section>
-        <Center py="xl" {...(mih === undefined ? {} : { mih })}>
-          <Stack align="center" gap="lg">
-            <ThemeIcon aria-hidden color="gray" radius="xl" size={64} variant="soft">
-              {icon}
-            </ThemeIcon>
-
-            <Stack align="center" gap="xs">
-              <Text fw={600} size="lg" ta="center">
-                {title}
-              </Text>
-              {description ? (
-                <Text c="dimmed" maw={400} size="sm" ta="center">
-                  {description}
-                </Text>
-              ) : null}
-            </Stack>
-            {children}
-          </Stack>
-        </Center>
-      </SectionCard.Section>
+      <SectionCard.Section>{content}</SectionCard.Section>
     </SectionCard.Root>
   );
 }

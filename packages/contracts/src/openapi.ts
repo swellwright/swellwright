@@ -61,6 +61,7 @@ import {
   PackScopeSchema,
   ReconciliationCheckInfoSchema,
   ReconciliationCheckSchema,
+  ReconciliationLastSchema,
   ReconciliationReportSchema,
   ReconciliationRowSchema,
   ReconciliationSettingsSchema,
@@ -299,6 +300,19 @@ import {
   VaultRotatedSchema,
   VaultStatusSchema,
 } from './vault.js';
+import {
+  AttentionFeedSchema,
+  AttentionItemSchema,
+  AttentionKindSchema,
+  AttentionLinkSchema,
+  AttentionSeveritySchema,
+  AttentionSourceSchema,
+  AttentionSourceStateSchema,
+  FleetFlagSchema,
+  FleetHealthRowSchema,
+  FleetHealthSchema,
+  FleetHealthStateSchema,
+} from './dashboard.js';
 import { SessionListSchema, SessionSummarySchema, SessionsRevokedSchema } from './sessions.js';
 import {
   CreatedTokenSchema,
@@ -316,7 +330,7 @@ import {
 } from './system.js';
 
 /** Version of the API description. Bump it with every contract change (oasdiff checks the rules). */
-export const OPENAPI_INFO_VERSION = '0.30.0';
+export const OPENAPI_INFO_VERSION = '0.31.0';
 
 /** Named schemas that appear under `components.schemas`. Every response schema must be listed here. */
 const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
@@ -536,6 +550,7 @@ const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
   ReconciliationStatusSchema,
   ReconciliationRowSchema,
   ReconciliationSummarySchema,
+  ReconciliationLastSchema,
   ReconciliationReportSchema,
   ImpactKindSchema,
   JsonPatchOperationSchema,
@@ -602,6 +617,17 @@ const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
   PanelConsoleOperationDetailSchema,
   PanelConsoleCatalogueSchema,
   PanelConsoleRequestSchema,
+  AttentionSeveritySchema,
+  AttentionSourceSchema,
+  AttentionKindSchema,
+  AttentionLinkSchema,
+  AttentionItemSchema,
+  AttentionSourceStateSchema,
+  AttentionFeedSchema,
+  FleetHealthStateSchema,
+  FleetFlagSchema,
+  FleetHealthRowSchema,
+  FleetHealthSchema,
   PanelConsoleResultSchema,
   PanelConsoleIssuesSchema,
 ];
@@ -782,6 +808,11 @@ export function buildOpenApi(): Json {
         name: 'baselines',
         description:
           'Baseline checks of servers over SSH (ADR 0045): documents that say what a healthy server looks like, the closed catalogue of read-only observations they use, runs that compare a server with its baseline, the drift between two runs and the state of the fleet. Starting a run needs `servers:exec` and a fresh authenticator code; editing a baseline needs `servers:write` and one; reading needs `servers:read`. A run changes nothing on a server.',
+      },
+      {
+        name: 'dashboard',
+        description:
+          'The dashboard (ADR 0047): what needs attention and the health of the fleet, built only from the records and the memory of this server. Nothing here calls the panel or a server.',
       },
       {
         name: 'panel',

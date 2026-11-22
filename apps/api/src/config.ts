@@ -257,6 +257,22 @@ const EnvSchema = z.object({
   SW_CHECKS_POLL_MS: z.coerce.number().int().min(20).max(10_000).default(500),
   /** How many runs one user may start per minute (a fleet run counts once). */
   SW_BASELINE_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(10),
+  /** The dashboard (ADR 0047): how soon a secret or a token counts as expiring, in days. */
+  SW_DASHBOARD_EXPIRY_WARNING_DAYS: z.coerce.number().int().min(1).max(365).default(14),
+  /** A server whose last finished baseline check is older than this many days is "not checked lately". 0: never. */
+  SW_DASHBOARD_BASELINE_STALE_DAYS: z.coerce.number().int().min(0).max(365).default(7),
+  /** Facts older than this many days are stale. 0: never. */
+  SW_DASHBOARD_FACTS_STALE_DAYS: z.coerce.number().int().min(0).max(365).default(14),
+  /** Without the background job for snapshots, a snapshot older than this many days is stale. 0: never. */
+  SW_DASHBOARD_SNAPSHOT_STALE_DAYS: z.coerce.number().int().min(0).max(365).default(7),
+  /** The audit chain not verified for this many days is worth a reminder. 0: never. */
+  SW_DASHBOARD_AUDIT_VERIFY_DAYS: z.coerce.number().int().min(0).max(3650).default(30),
+  /** Failed runs of commands in the last this many hours are listed. */
+  SW_DASHBOARD_RUNS_WINDOW_HOURS: z.coerce.number().int().min(1).max(720).default(24),
+  /** How long the answer of the attention feed is reused, in seconds. 0: not at all. */
+  SW_DASHBOARD_CACHE_SECONDS: z.coerce.number().int().min(0).max(60).default(5),
+  /** How many dashboard reads one user may make per minute (the console reads every minute). */
+  SW_DASHBOARD_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(120),
 });
 
 export interface AppConfig {
@@ -392,6 +408,17 @@ export interface AppConfig {
     readonly intervalMs: number;
     readonly timeoutMs: number;
     readonly pollMs: number;
+    readonly rateLimitPerMinute: number;
+  };
+  /** The dashboard (ADR 0047): thresholds of the attention feed and the health of the fleet. 0 days switches a check off. */
+  readonly dashboard: {
+    readonly expiryWarningDays: number;
+    readonly baselineStaleDays: number;
+    readonly factsStaleDays: number;
+    readonly snapshotStaleDays: number;
+    readonly auditVerifyDays: number;
+    readonly runsWindowHours: number;
+    readonly cacheMs: number;
     readonly rateLimitPerMinute: number;
   };
 }
@@ -639,6 +666,16 @@ export function loadConfig(
       timeoutMs: e.SW_CHECKS_TIMEOUT_SECONDS * 1000,
       pollMs: e.SW_CHECKS_POLL_MS,
       rateLimitPerMinute: e.SW_BASELINE_RATE_LIMIT_PER_MINUTE,
+    },
+    dashboard: {
+      expiryWarningDays: e.SW_DASHBOARD_EXPIRY_WARNING_DAYS,
+      baselineStaleDays: e.SW_DASHBOARD_BASELINE_STALE_DAYS,
+      factsStaleDays: e.SW_DASHBOARD_FACTS_STALE_DAYS,
+      snapshotStaleDays: e.SW_DASHBOARD_SNAPSHOT_STALE_DAYS,
+      auditVerifyDays: e.SW_DASHBOARD_AUDIT_VERIFY_DAYS,
+      runsWindowHours: e.SW_DASHBOARD_RUNS_WINDOW_HOURS,
+      cacheMs: e.SW_DASHBOARD_CACHE_SECONDS * 1000,
+      rateLimitPerMinute: e.SW_DASHBOARD_RATE_LIMIT_PER_MINUTE,
     },
   };
 }

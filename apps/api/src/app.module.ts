@@ -30,6 +30,8 @@ import { CommandRunsService } from './commands/command-runs.service.js';
 import { CommandsController } from './commands/commands.controller.js';
 import { ScriptsService } from './commands/scripts.service.js';
 import { type AppConfig } from './config.js';
+import { DashboardController } from './dashboard/dashboard.controller.js';
+import { DashboardService } from './dashboard/dashboard.service.js';
 import {
   CHECKS_CLOCK,
   CLOCK,
@@ -151,6 +153,7 @@ export class AppModule implements OnApplicationShutdown {
         PanelSnapshotsController,
         BaselineController,
         PanelConsoleController,
+        DashboardController,
       ],
       providers: [
         { provide: CONFIG, useValue: config },
@@ -206,6 +209,7 @@ export class AppModule implements OnApplicationShutdown {
         CheckRunner,
         CheckRunsService,
         CheckScheduler,
+        DashboardService,
         PluginRuntime,
         PluginBroker,
         PluginsService,

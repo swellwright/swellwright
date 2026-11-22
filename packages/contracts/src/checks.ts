@@ -693,6 +693,36 @@ export const ReconciliationReportSchema = z
   });
 export type ReconciliationReport = z.infer<typeof ReconciliationReportSchema>;
 
+export const ReconciliationLastSchema = z
+  .object({
+    ranAt: z.iso
+      .datetime()
+      .nullable()
+      .describe(
+        'Null when no reconciliation was made since the server started (or since the pack or the connection changed).',
+      ),
+    counts: z
+      .object({
+        drift: z.number().int().nonnegative(),
+        missing: z.number().int().nonnegative(),
+        extra: z.number().int().nonnegative(),
+        unknown: z.number().int().nonnegative(),
+      })
+      .nullable(),
+    inventoryCompared: z
+      .boolean()
+      .nullable()
+      .describe(
+        'False when the run was made by someone who may not read the servers: its counts leave the inventory out.',
+      ),
+  })
+  .meta({
+    id: 'ReconciliationLast',
+    description:
+      'What the last reconciliation found, from the memory of this server. Does not run anything and does not ask the panel.',
+  });
+export type ReconciliationLast = z.infer<typeof ReconciliationLastSchema>;
+
 // ---------------------------------------------------------------------------------------------------------------
 // The impact calculator.
 

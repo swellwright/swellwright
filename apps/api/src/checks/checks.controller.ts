@@ -15,10 +15,12 @@ import {
   ImpactTargetQuerySchema,
   type ImpactTarget,
   getLastConventionRunRoute,
+  getLastReconciliationRoute,
   type ImpactReport,
   type ImpactRequest,
   listConventionPackVersionsRoute,
   putConventionPackRoute,
+  type ReconciliationLast,
   type ReconciliationReport,
   resetConventionPackRoute,
   runConventionChecksRoute,
@@ -64,6 +66,11 @@ export class ChecksController {
   @ContractRoute(getLastConventionRunRoute)
   last(): Promise<ConventionLastRun> {
     return this.checks.last();
+  }
+
+  @ContractRoute(getLastReconciliationRoute)
+  lastReconciliation(): Promise<ReconciliationLast> {
+    return this.checks.lastReconciliation();
   }
 
   @ContractRoute(getConventionPackRoute)
