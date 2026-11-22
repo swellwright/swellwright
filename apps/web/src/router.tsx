@@ -76,6 +76,9 @@ const NodePluginsPage = lazy(() =>
 const SnippetsPage = lazy(() =>
   import('./panel/snippets-page.js').then((m) => ({ default: m.SnippetsPage })),
 );
+const ChecksPage = lazy(() =>
+  import('./checks/checks-page.js').then((m) => ({ default: m.ChecksPage })),
+);
 
 /** A page for people whose role allows it; everyone else sees why they cannot. */
 function Guarded({
@@ -286,6 +289,12 @@ function NodePluginsRoute() {
   return <PanelRoute page={<NodePluginsPage />} title={t('nodePlugins')} />;
 }
 
+function ChecksRoute() {
+  const { t } = useTranslation('nav');
+  const { session } = useConsole();
+  return <PanelRoute page={<ChecksPage permissions={session.permissions} />} title={t('checks')} />;
+}
+
 function SnippetsRoute() {
   const { t } = useTranslation('nav');
   return <PanelRoute page={<SnippetsPage />} title={t('snippets')} />;
@@ -325,6 +334,7 @@ export const routes: RouteObject[] = [
           { path: relative(D.PANEL.TEMPLATES), element: <TemplatesRoute /> },
           { path: relative(D.PANEL.SNIPPETS), element: <SnippetsRoute /> },
           { path: relative(D.PANEL.NODE_PLUGINS), element: <NodePluginsRoute /> },
+          { path: relative(D.PANEL.CHECKS), element: <ChecksRoute /> },
           { path: relative(D.SECURITY.ROOT), element: <AreaIndex area="security" /> },
           { path: relative(D.SECURITY.VAULT), element: <VaultRoute /> },
           { path: relative(D.SECURITY.USERS), element: <UsersRoute /> },

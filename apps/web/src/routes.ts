@@ -44,6 +44,7 @@ export const ROUTES = {
       SUBSCRIPTION_SETTINGS: '/dashboard/panel/subscription-settings',
       INFRA_BILLING: '/dashboard/panel/infra-billing',
       API_CONSOLE: '/dashboard/panel/api-console',
+      CHECKS: '/dashboard/panel/checks',
     },
     SECURITY: {
       ROOT: '/dashboard/security',

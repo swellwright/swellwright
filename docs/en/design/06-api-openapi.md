@@ -40,6 +40,7 @@ OpenAPI 3.1 is a first-class artifact: documentation, SDKs, the CLI, MCP and con
 | panel-console | `GET /panels/{id}/console/operations`, `POST /panels/{id}/console/plan`, `POST /panels/{id}/console/execute` (approval) |
 | snapshots | `/panels/{id}/snapshots`, `/diff?from=&to=`, `POST /snapshots/{id}/restore` (object) |
 | conventions | CRUD, `POST /conventions/check` (drift), `POST /conventions/fix` (plan) |
+| panel-checks | Built in Phase 3 (ADR 0044), `panel:read` unless noted: `GET /panel/checks/rules`, `GET /panel/checks/convention` (`?refresh=true`), `GET /panel/checks/convention/last`, `GET /panel/checks/reconciliation`, `GET /panel/checks/convention-pack` (`?version=`), `PUT` and `DELETE` of the pack (`panel:write`, step-up), `GET .../convention-pack/versions`, `POST .../convention-pack/validate`, `GET /panel/impact/target`, `POST /panel/impact` (dry run); nothing here writes to the panel |
 | chains | CRUD for hop chains, `POST /chains/{id}/verify`, `GET /chains/{id}/topology` |
 | dns | `/dns/providers`, `/dns/zones`, `/dns/records`, `POST /dns/plan`, `/dns/apply`, `/dns/propagation`, `/dns/changes` |
 | certs | `/certsync/entries`, `POST /certsync/sync`, `/certs/status`, ACME: `/acme/orders` (optional) |

@@ -36,6 +36,7 @@ import {
 } from '@swellwright/ui';
 
 import { useDateTime, useNumber } from '../format.js';
+import { PreviewImpactButton } from '../checks/preview-impact.js';
 import { usePanelNames } from './host-lookups.js';
 import { CopyMenuItem, TaggedGrid } from './entity-grid.js';
 import { PanelBoundary } from './panel-data.js';
@@ -107,12 +108,17 @@ function SquadCard({
 }
 
 function SquadBody({ squad }: { squad: PanelInternalSquadView }) {
-  const { t } = useTranslation(['panel', 'common']);
+  const { t } = useTranslation(['panel', 'common', 'checks']);
   const formatTime = useDateTime();
   const number = useNumber();
   const names = usePanelNames();
   return (
     <Stack gap="md">
+      <PreviewImpactButton
+        kind="internalSquad"
+        label={t('checks:ui.impact.previewImpact')}
+        uuid={squad.uuid}
+      />
       <SectionCard.Root>
         <SectionCard.Section>
           <OverlayHeader

@@ -238,6 +238,17 @@ function applyChange(
   return { proposed, ignored: ignored.slice(0, 20) };
 }
 
+/** The object as a change is written against it: what an editor starts from. Secrets are masked in it already. */
+export function editableForm(
+  model: PanelModel,
+  kind: ImpactKind,
+  uuid: string,
+): { target: CheckObjectRef; editable: Record<string, unknown>; masked: boolean } {
+  const { editable, ref } = editableOf(kind, model, uuid);
+  const form = structuredClone(editable.current);
+  return { target: ref, editable: form, masked: /\[masked(?::[0-9a-f]{8})?\]/u.test(canonicalJson(form)) };
+}
+
 // ---- typed proposals --------------------------------------------------------------------------------------------
 
 const Name = z.string().min(1).max(300);

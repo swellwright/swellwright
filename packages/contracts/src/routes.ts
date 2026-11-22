@@ -66,6 +66,8 @@ import {
   IMPACT_KINDS,
   ImpactReportSchema,
   ImpactRequestSchema,
+  ImpactTargetQuerySchema,
+  ImpactTargetSchema,
   ReconciliationReportSchema,
   SaveConventionPackRequestSchema,
   ValidateConventionPackRequestSchema,
@@ -1932,6 +1934,19 @@ export const runReconciliationRoute = defineRoute({
   responses: { 200: { description: 'The report.', schema: ReconciliationReportSchema } },
 });
 
+export const getImpactTargetRoute = defineRoute({
+  operationId: 'getImpactTarget',
+  method: 'get',
+  path: '/panel/impact/target',
+  tags: ['panel'],
+  summary: 'The editable form of an object, for a dry run',
+  description: `The object as a change to it is written against: for a config profile \`{ name, tags, config }\`, for an internal squad \`{ name, tags, inbounds }\`, for a host its fields without \`uuid\` and \`hash\`, for a node \`{ name, address, port, isDisabled, tags, note, configProfile }\`, for a subscription template \`{ name, tags, templateJson, templateYaml }\`. Every secret in it is masked. 404 when the panel has no such object. ${CHECK_PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: ImpactTargetQuerySchema },
+  responses: { 200: { description: 'The editable form.', schema: ImpactTargetSchema } },
+});
+
 export const calculatePanelImpactRoute = defineRoute({
   operationId: 'calculatePanelImpact',
   method: 'post',
@@ -2083,6 +2098,7 @@ export const routes = [
   listConventionPackVersionsRoute,
   validateConventionPackRoute,
   runReconciliationRoute,
+  getImpactTargetRoute,
   calculatePanelImpactRoute,
 ] as const;
 

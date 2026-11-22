@@ -23,6 +23,7 @@ import {
 
 import { useCountries } from '../fleet/countries.js';
 import { useBytes, useDateTime, useNumber } from '../format.js';
+import { PreviewImpactButton } from '../checks/preview-impact.js';
 import { PanelDrawer } from './panel-drawer.js';
 import { formatDuration, orDash } from './panel-format.js';
 
@@ -54,7 +55,7 @@ function NodeBody({
   /** The name of the node's config profile when the profiles could be read. */
   profileName: string | undefined;
 }) {
-  const { t } = useTranslation(['panel', 'common']);
+  const { t } = useTranslation(['panel', 'common', 'checks']);
   const formatTime = useDateTime();
   const formatBytes = useBytes();
   const formatNumber = useNumber();
@@ -65,6 +66,11 @@ function NodeBody({
 
   return (
     <Stack gap="md">
+      <PreviewImpactButton
+        kind="node"
+        label={t('checks:ui.impact.previewImpact')}
+        uuid={node.uuid}
+      />
       <SectionCard.Root>
         <SectionCard.Section>
           <Group gap="xs" justify="space-between" wrap="nowrap">

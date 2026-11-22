@@ -38,6 +38,7 @@ OpenAPI 3.1 — первоклассный артефакт: документа�
 | panel-console | `GET /panels/{id}/console/operations`, `POST /panels/{id}/console/plan`, `POST /panels/{id}/console/execute` (согласование) |
 | snapshots | `/panels/{id}/snapshots`, `/diff?from=&to=`, `POST /snapshots/{id}/restore` (объект) |
 | conventions | CRUD, `POST /conventions/check` (дрейф), `POST /conventions/fix` (план) |
+| panel-checks | Сделано в фазе 3 (ADR 0044), `panel:read`, если не сказано иное: `GET /panel/checks/rules`, `GET /panel/checks/convention` (`?refresh=true`), `GET /panel/checks/convention/last`, `GET /panel/checks/reconciliation`, `GET /panel/checks/convention-pack` (`?version=`), `PUT` и `DELETE` набора (`panel:write`, повышенная аутентификация), `GET .../convention-pack/versions`, `POST .../convention-pack/validate`, `GET /panel/impact/target`, `POST /panel/impact` (пробный прогон); ничто здесь не пишет в панель |
 | chains | CRUD цепочек хопов, `POST /chains/{id}/verify`, `GET /chains/{id}/topology` |
 | dns | `/dns/providers`, `/dns/zones`, `/dns/records`, `POST /dns/plan`, `/dns/apply`, `/dns/propagation`, `/dns/changes` |
 | certs | `/certsync/entries`, `POST /certsync/sync`, `/certs/status`, ACME: `/acme/orders` (опц.) |

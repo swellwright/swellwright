@@ -13,6 +13,7 @@ import {
 import {
   calculateImpact,
   describeImpactRules,
+  editableForm,
   IMPACT_RULES,
   IMPACT_RULES_VERSION,
   ImpactError,
@@ -983,6 +984,48 @@ describe('a change that cannot be applied', () => {
       remark: 'x',
     });
     assert.equal(report.target.uuid, at(fleet.hosts, 0).uuid);
+  });
+});
+
+describe('the editable form an editor starts from', () => {
+  const { model, fleet } = fleetWithSolo();
+
+  it('has the fields of the form and not the identity, hash or counters', () => {
+    const form = editableForm(model, 'configProfile', fleet.profileOne.uuid);
+    assert.equal(form.target.kind, 'configProfile');
+    assert.equal(form.target.uuid, fleet.profileOne.uuid);
+    assert.deepEqual(Object.keys(form.editable).sort(), ['config', 'name', 'tags']);
+  });
+
+  it('starts every kind from something the same kind accepts as a change', () => {
+    const asked = [
+      ['configProfile', fleet.profileOne.uuid],
+      ['internalSquad', at(fleet.internalSquads, 0).uuid],
+      ['host', at(fleet.hosts, 0).uuid],
+      ['node', at(fleet.nodes, 0).uuid],
+    ] as const;
+    for (const [kind, uuid] of asked) {
+      const form = editableForm(model, kind, uuid);
+      // Giving it back unchanged is the empty change: it must be accepted and change nothing.
+      const report = calculate(model, kind, uuid, form.editable);
+      assert.equal(report.changed, false, kind);
+      assert.deepEqual(report.restarts, [], kind);
+    }
+  });
+
+  it('says whether it holds a masked secret, and does not copy the model', () => {
+    const form = editableForm(model, 'configProfile', fleet.profileOne.uuid);
+    assert.equal(typeof form.masked, 'boolean');
+    const before = JSON.stringify(model);
+    (form.editable as { name: string }).name = 'changed by the caller';
+    assert.equal(JSON.stringify(model), before);
+  });
+
+  it('refuses an object that does not exist', () => {
+    assert.throws(
+      () => editableForm(model, 'host', uid(0xfff)),
+      (e: unknown) => e instanceof ImpactError && e.code === 'not_found',
+    );
   });
 });
 

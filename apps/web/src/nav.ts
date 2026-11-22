@@ -27,6 +27,7 @@ import { HiServer } from 'react-icons/hi';
 import { PiListChecks, PiUsers } from 'react-icons/pi';
 import {
   TbBraces,
+  TbChecklist,
   TbCirclesRelation,
   TbCode,
   TbCookie,
@@ -258,6 +259,13 @@ const navigation = (t: TFunction<Namespace[]>): readonly GatedSection[] => [
         name: t('nav:nodePlugins'),
         href: ROUTES.DASHBOARD.PANEL.NODE_PLUGINS,
         icon: TbPackage,
+        permission: 'panel:read',
+      },
+      {
+        id: 'checks',
+        name: t('nav:checks'),
+        href: ROUTES.DASHBOARD.PANEL.CHECKS,
+        icon: TbChecklist,
         permission: 'panel:read',
       },
       {

@@ -13,6 +13,7 @@ import {
   CreatedTokenSchema,
   ImpactReportSchema,
   type ImpactReport,
+  ImpactTargetSchema,
   ReconciliationReportSchema,
 } from '@swellwright/contracts';
 import { DnsQueryError, type DnsQuery } from '@swellwright/conventions';
@@ -967,6 +968,51 @@ describe('the impact calculator over the API', { skip: !databaseUrl }, () => {
       'the impact answer',
     );
     assert.equal((await auditEvents(booted.instance)).length, before);
+  });
+
+  it('gives the form an editor starts from, masked, and takes it back as the empty change', async () => {
+    const f = booted.fake.fixtures;
+    const asked = [
+      ['configProfile', profileOne],
+      ['internalSquad', String(must(f.internalSquads[0])['uuid'])],
+      ['host', String(must(f.hosts[0])['uuid'])],
+      ['node', String(must(f.nodes[0])['uuid'])],
+    ] as const;
+    for (const [kind, uuid] of asked) {
+      const reply = await booted.owner.get(`/panel/impact/target?kind=${kind}&uuid=${uuid}`);
+      assert.equal(reply.status, 200, `${kind}: ${JSON.stringify(reply.body)}`);
+      const form = ImpactTargetSchema.parse(reply.body);
+      assert.equal(form.target.uuid, uuid);
+      assert.equal(form.target.kind, kind);
+      assertClean([JSON.stringify(reply.body)], forbiddenTexts(booted.tokens), `the form of a ${kind}`);
+      const back = await impact({ kind, uuid, change: form.editable });
+      assert.equal(back.changed, false, kind);
+      assert.deepEqual(back.restarts, [], kind);
+    }
+    // A profile carries the keys of its inbounds: they are masked, and the form says so.
+    const profile = ImpactTargetSchema.parse(
+      (await booted.owner.get(`/panel/impact/target?kind=configProfile&uuid=${profileOne}`)).body,
+    );
+    assert.equal(profile.masked, true);
+  });
+
+  it('answers 404 for a form of an object the panel does not have, and 400 for a question that is not one', async () => {
+    const missing = await booted.owner.get(
+      '/panel/impact/target?kind=host&uuid=00000000-0000-4000-8000-0000000fffff',
+    );
+    assert.equal(missing.status, 404);
+    for (const query of [
+      'kind=user&uuid=00000000-0000-4000-8000-0000000fffff',
+      'kind=host&uuid=not-a-uuid',
+      'kind=host',
+      '',
+    ]) {
+      assert.equal(
+        (await booted.owner.get(`/panel/impact/target?${query}`)).status,
+        400,
+        query,
+      );
+    }
   });
 
   it('does not answer for a kind the token cannot read, and says which', async () => {

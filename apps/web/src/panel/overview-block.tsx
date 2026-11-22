@@ -14,6 +14,7 @@ import {
   PiListChecksDuotone,
   PiPlugsConnectedDuotone,
   PiPulse,
+  PiShieldCheckDuotone,
   PiTagDuotone,
   PiUsersDuotone,
   PiWarningCircle,
@@ -21,7 +22,7 @@ import {
 import { TbBraces, TbPlugConnected, TbRefresh } from 'react-icons/tb';
 import { Link } from 'react-router';
 
-import type { PanelOverview } from '@swellwright/contracts';
+import type { ConventionLastRun, PanelOverview } from '@swellwright/contracts';
 import {
   MetricCard,
   MetricSection,
@@ -31,6 +32,8 @@ import {
 } from '@swellwright/ui';
 
 import { getPanelConnection, getPanelOverview } from '../api.js';
+import { getLastConventionRun } from '../checks/checks-api.js';
+import { checksKey } from '../checks/checks-data.js';
 import { useFullDate, useNumber } from '../format.js';
 import { ROUTES } from '../routes.js';
 import { useConsole } from '../shell/console-context.js';
@@ -44,8 +47,11 @@ const sub = (text: string | undefined): { subtitle?: string } =>
   text === undefined ? {} : { subtitle: text };
 
 /** The cards of the block, as a list: `MetricSection` gives each its place in the grid and its entrance. */
-function useOverviewCards(overview: PanelOverview | undefined): ReactNode[] {
-  const { t } = useTranslation('overview');
+function useOverviewCards(
+  overview: PanelOverview | undefined,
+  last: ConventionLastRun | undefined,
+): ReactNode[] {
+  const { t } = useTranslation(['overview', 'checks']);
   const number = useNumber();
   const formatDate = useFullDate();
   if (overview === undefined) {
@@ -133,6 +139,40 @@ function useOverviewCards(overview: PanelOverview | undefined): ReactNode[] {
       title={t('panel.users')}
       value={users === null ? '–' : number(users.total)}
     />,
+    <Link
+      key="checks"
+      style={{ color: 'inherit', textDecoration: 'none' }}
+      to={ROUTES.DASHBOARD.PANEL.CHECKS}
+    >
+      <MetricCard
+        icon={PiShieldCheckDuotone}
+        iconColor={
+          last?.summary == null
+            ? 'gray'
+            : last.summary.error > 0
+              ? 'red'
+              : last.summary.warning > 0
+                ? 'orange'
+                : 'teal'
+        }
+        subtitle={
+          last?.summary == null
+            ? t('checks:ui.overview.notYetHint')
+            : last.summary.error + last.summary.warning === 0
+              ? t('checks:ui.overview.clean')
+              : t('checks:ui.overview.value', {
+                  errors: last.summary.error,
+                  warnings: last.summary.warning,
+                })
+        }
+        title={t('checks:ui.overview.title')}
+        value={
+          last?.summary == null
+            ? t('checks:ui.overview.notYet')
+            : `${number(last.summary.error)} / ${number(last.summary.warning)}`
+        }
+      />
+    </Link>,
     <MetricCard
       key="token"
       icon={PiCalendarCheckDuotone}
@@ -165,7 +205,15 @@ export function PanelOverviewBlock() {
   });
   const connected = connection.data !== undefined && connection.data.state !== 'unconfigured';
   const overview = usePanelRead(panelKey('overview'), getPanelOverview, connected);
-  const cards = useOverviewCards(overview.query.data);
+  // What the last run of the checks found, if one was run: the block never runs the checks itself.
+  const last = useQuery({
+    queryKey: checksKey('last'),
+    queryFn: getLastConventionRun,
+    retry: false,
+    refetchOnWindowFocus: false,
+    enabled: connected && canRead,
+  });
+  const cards = useOverviewCards(overview.query.data, last.data);
 
   if (!canRead || connection.isPending || connection.isError) {
     // The connection is read quietly: the page has its own failures to show, and this block is not worth another.

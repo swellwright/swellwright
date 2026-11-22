@@ -32,6 +32,7 @@ import {
 } from '@swellwright/ui';
 
 import { getPanelComputedConfig, getPanelConfigProfile } from '../api.js';
+import { PreviewImpactButton } from '../checks/preview-impact.js';
 import { useCountries } from '../fleet/countries.js';
 import { useDateTime } from '../format.js';
 import { ConfigViewerCard, jsonText } from './code-viewer.js';
@@ -75,7 +76,7 @@ function InboundRow({ inbound }: { inbound: PanelConfigProfileSummary['inbounds'
 }
 
 function ProfileBody({ profile }: { profile: PanelConfigProfileSummary }) {
-  const { t } = useTranslation(['panel', 'common']);
+  const { t } = useTranslation(['panel', 'common', 'checks']);
   const formatTime = useDateTime();
   const { nameOf } = useCountries();
   const [view, setView] = useState<View>('config');
@@ -96,6 +97,11 @@ function ProfileBody({ profile }: { profile: PanelConfigProfileSummary }) {
 
   return (
     <Stack gap="md">
+      <PreviewImpactButton
+        kind="configProfile"
+        label={t('checks:ui.impact.previewImpact')}
+        uuid={profile.uuid}
+      />
       <SectionCard.Root>
         <SectionCard.Section>
           <OverlayHeader

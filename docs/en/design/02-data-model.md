@@ -46,7 +46,7 @@ The Prisma schema ([`packages/db`](../../../packages/db/README.md), ADR 0013) is
 | `Blueprint` | deployment template: profile sample, profile mode, squads, host sample, limits, provider, hardening profile, installer version, DNS policy |
 | `Baseline` | node baseline: list of checks, expected values, version |
 | `BaselineResult` | server, check, outcome, details, time |
-| `Convention` | rules for names and fields: remark template, address=IP, explicit sni, fingerprint policy, `vlessRoute` range, test-object marker (🧪) |
+| `Convention` | rules for names and fields: remark template, address=IP, explicit sni, fingerprint policy, `vlessRoute` range, test-object marker (🧪) Built in Phase 3 (ADR 0044) as `ConventionPack`: a pack is a document of rules as data (settings per rule id, a scope, what reconciliation and the impact calculator expect), every save is a new version with the text as written, its SHA-256 and a comment, one version is active, and none active means the built-in pack, which holds no installation data. |
 | `PanelConnection` | panel (URL, version, capabilities), tokens (links to secrets), expiry, state |
 | `PanelSnapshot` | object types (profiles, hosts, squads, templates, settings, plugins), JSON, hash, time, encrypted |
 | `PanelDiff` | a pair of snapshots, differences |

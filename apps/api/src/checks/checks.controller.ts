@@ -11,6 +11,9 @@ import {
   type ConventionRun,
   getConventionPackRoute,
   getConventionRulesRoute,
+  getImpactTargetRoute,
+  ImpactTargetQuerySchema,
+  type ImpactTarget,
   getLastConventionRunRoute,
   type ImpactReport,
   type ImpactRequest,
@@ -94,6 +97,11 @@ export class ChecksController {
   @ContractRoute(runReconciliationRoute)
   reconcile(@Req() req: AuthedRequest): Promise<ReconciliationReport> {
     return this.checks.reconcile(actorOf(req), requireAuth(req), wantsRefresh(req));
+  }
+
+  @ContractRoute(getImpactTargetRoute)
+  target(@Req() req: AuthedRequest): Promise<ImpactTarget> {
+    return this.checks.target(actorOf(req), ImpactTargetQuerySchema.parse(req.query));
   }
 
   @ContractRoute(calculatePanelImpactRoute)

@@ -732,6 +732,23 @@ export const ImpactRequestSchema = z
   .meta({ id: 'ImpactRequest' });
 export type ImpactRequest = z.infer<typeof ImpactRequestSchema>;
 
+export const ImpactTargetQuerySchema = z.object({ kind: ImpactKindSchema, uuid: z.uuid() });
+export type ImpactTargetQuery = z.infer<typeof ImpactTargetQuerySchema>;
+
+export const ImpactTargetSchema = z
+  .object({
+    target: CheckObjectRefSchema,
+    editable: z
+      .record(z.string(), z.unknown())
+      .describe('The editable form of the object, as `POST /panel/impact` takes a change for it, with every secret masked.'),
+    masked: z.boolean().describe('True when the form holds masked values: they stand for secrets that a dry run cannot change.'),
+  })
+  .meta({
+    id: 'ImpactTarget',
+    description: 'The object a change is for, in the form a change is written against: the starting point of an editor.',
+  });
+export type ImpactTarget = z.infer<typeof ImpactTargetSchema>;
+
 export const IMPACT_RULE_IDS = [
   'profile.config-edit',
   'profile.name-only',

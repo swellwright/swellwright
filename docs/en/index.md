@@ -49,6 +49,7 @@ Swellwright is a self-hosted service for deploying and operating Remnawave fleet
 |---|---|
 | [architecture.md](architecture.md) | components, stack, execution model, SSH layer, topologies |
 | [remnawave-integration.md](remnawave-integration.md) | panel tokens and scopes, impact rules, conventions |
+| [conventions.md](conventions.md) | writing a convention pack: the format, every rule, the pattern language, what reconciliation and the impact calculator mean |
 | [plugins.md](plugins.md) | extension points, manifest, trust levels, official plugins |
 | [security.md](security.md) | threat model, vault, access methods, terminal, audit |
 | [api.md](api.md) | OpenAPI conventions, resource groups, events |

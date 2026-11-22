@@ -16,6 +16,7 @@ export {
 export {
   calculateImpact,
   describeImpactRules,
+  editableForm,
   IMPACT_RULES,
   IMPACT_RULES_VERSION,
   ImpactError,

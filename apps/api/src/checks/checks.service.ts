@@ -6,12 +6,15 @@ import type {
   ImpactKind,
   ImpactReport,
   ImpactRequest,
+  ImpactTarget,
+  ImpactTargetQuery,
   PanelResource,
   ReconciliationReport,
 } from '@swellwright/contracts';
 import {
   calculateImpact,
   describeRules,
+  editableForm,
   DnsLookup,
   type DnsQuery,
   ImpactError,
@@ -213,6 +216,23 @@ export class ChecksService {
   }
 
   // ---- the impact calculator --------------------------------------------------------------------------------------
+
+  /** The object as a change is written against it, for the editor of the dry run. */
+  async target(actor: Actor, query: ImpactTargetQuery): Promise<ImpactTarget> {
+    const read = await this.reader.readForChecks(actor, false);
+    const missing = NEEDS[query.kind].filter((kind) => read.unavailable.includes(kind));
+    if (missing.length > 0) {
+      throw new CodedHttpException(502, 'panel_forbidden', `The token cannot read ${missing.join(' and ')}, which this needs.`, { resources: missing });
+    }
+    try {
+      return editableForm(toModel(read), query.kind, query.uuid);
+    } catch (error) {
+      if (error instanceof ImpactError) {
+        throw new CodedHttpException(404, 'not_found', error.message);
+      }
+      throw error;
+    }
+  }
 
   async impact(actor: Actor, request: ImpactRequest): Promise<ImpactReport> {
     const read = await this.reader.readForChecks(actor, false);
