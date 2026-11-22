@@ -13,7 +13,7 @@ A foreign or missing SNI is answered with an ordinary 404, not a dropped connect
 
 ## Requirements
 
-- Debian 12, Ubuntu 22.04 or 24.04, `root`, an IPv4 address on the server, internet access to the package repositories, `download.docker.com` and `nginx.org` (and the HAProxy PPA on Ubuntu). The steps are derived from an installer that has run on Ubuntu servers in production; this script itself is verified by tests with stubbed commands (every step) and by its read-only actions on a real Ubuntu 24.04 server. Debian is supported by the code and covered by stubs only.
+- Debian 12, Ubuntu 22.04 or 24.04, `root`, an IPv4 address on the server, internet access to the package repositories, `download.docker.com` and `nginx.org` (and the HAProxy PPA on Ubuntu). The steps are derived from an installer that has run on Ubuntu servers in production; this script itself is verified by tests with stubbed commands (every step) and, since 1.0.1, by every step (twice each, and `full` on the finished node) on a reset Ubuntu 24.04 server. Debian is supported by the code and covered by stubs only.
 - A domain name for the node whose A record points at the server, and the node's `SECRET_KEY` from the panel.
 - The address of the panel, as the node sees it (`PANEL_ALLOW_IP`).
 

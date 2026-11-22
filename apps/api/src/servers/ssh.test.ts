@@ -17,7 +17,12 @@ import {
   type ServerView,
   ServerViewSchema,
 } from '@swellwright/contracts';
-import { generateTestKeyPair, startStallingServer } from '@swellwright/ssh/test-support';
+import {
+  generateTestKeyPair,
+  generateTestRsaKeyPair,
+  publicKeyFingerprint,
+  startStallingServer,
+} from '@swellwright/ssh/test-support';
 
 import {
   auditEvents,
@@ -604,6 +609,74 @@ describe('servers over SSH', { skip: !databaseUrl }, () => {
         assert.equal(errorOf(reply).code, 'address_not_allowed', address);
       }
       assert.equal(host.server.connections, 0);
+    });
+  });
+
+  // A real server has a key of every type and shows the type the client prefers (ed25519). A key of another type that
+  // was pinned (it was the only one at the time of the scan, or a person pinned it) is still the server's key: it must
+  // not be taken for a changed one when the server gained a key of the preferred type (found on a real Ubuntu server).
+  describe('a server with host keys of several types', () => {
+    let host: FakeHost;
+    let server: ServerView;
+    let accessId = '';
+    const rsa = generateTestRsaKeyPair();
+    const rsaFingerprint = publicKeyFingerprint(rsa.publicKey);
+
+    before(async () => {
+      host = await startHost({ users: { root: { password: LOGIN } }, extraHostKeys: [rsa] });
+      server = await createServer(owner, 'two-key-types', host.port);
+      const pinned = await owner.post(`/servers/${server.id}/host-keys`, {
+        algorithm: 'ssh-rsa',
+        fingerprintSha256: rsaFingerprint,
+      });
+      assert.equal(pinned.status, 201, JSON.stringify(pinned.body));
+      accessId = (
+        await addAccess(server.id, { method: 'password', username: 'root', secretId: loginSecret })
+      ).id;
+    });
+
+    it('is the same server when the pinned key is of the type the client prefers less', async () => {
+      const verified = await verify(owner, server.id, accessId);
+      assert.equal(verified.status, 200, JSON.stringify(verified.body));
+      assert.equal(AccessVerificationSchema.parse(verified.body).ok, true);
+      const refreshed = await owner.post(`/servers/${server.id}/facts/refresh`);
+      assert.equal(refreshed.status, 200, JSON.stringify(refreshed.body));
+    });
+
+    it('is not a changed key for a scan: the pinned key is the one it shows', async () => {
+      const scan = HostKeyScanSchema.parse(
+        (await owner.post(`/servers/${server.id}/host-keys/scan`)).body,
+      );
+      assert.equal(scan.status, 'pinned');
+      assert.equal(scan.algorithm, 'ssh-rsa');
+      assert.equal(scan.fingerprintSha256, rsaFingerprint);
+    });
+
+    it('is still told when the key of the pinned type changed', async () => {
+      const other = await startHost({
+        users: { root: { password: LOGIN } },
+        extraHostKeys: [generateTestRsaKeyPair()],
+      });
+      const changed = await createServer(owner, 'two-key-types-changed', other.port);
+      const reply = await owner.post(`/servers/${changed.id}/host-keys`, {
+        algorithm: 'ssh-rsa',
+        fingerprintSha256: rsaFingerprint,
+      });
+      assert.equal(reply.status, 201, JSON.stringify(reply.body));
+      const entry = await addAccess(changed.id, {
+        method: 'password',
+        username: 'root',
+        secretId: loginSecret,
+      });
+      const verified = await verify(owner, changed.id, entry.id);
+      assert.equal(verified.status, 409);
+      assert.equal(errorOf(verified).code, 'host_key_mismatch');
+      assert.equal(other.server.authAttempts.length, 0, 'no credential was sent');
+      const scan = HostKeyScanSchema.parse(
+        (await owner.post(`/servers/${changed.id}/host-keys/scan`)).body,
+      );
+      assert.equal(scan.status, 'differs');
+      assert.equal(scan.algorithm, 'ssh-rsa');
     });
   });
 

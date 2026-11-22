@@ -515,7 +515,7 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
     for (const entry of entries) {
       try {
         const result = await this.ssh.withAccess(
-          { address: info.address, port: info.port },
+          { address: info.address, port: info.port, hostKeyTypes: info.hostKeyTypes },
           info.fingerprints,
           entry,
           (session) => this.work(session, row, context),
@@ -823,7 +823,7 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
     }
     try {
       await this.ssh.withAccess(
-        { address: info.address, port: info.port },
+        { address: info.address, port: info.port, hostKeyTypes: info.hostKeyTypes },
         info.fingerprints,
         entry,
         async ({ connection, sudoPassword }) => {

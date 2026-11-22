@@ -16,7 +16,20 @@ export type SshAuth =
  * preferred way to learn a fingerprint because it never sends credentials at all.
  */
 export type HostKeyPolicy =
-  { mode: 'pinned'; fingerprints: readonly string[] } | { mode: 'discover' };
+  | {
+      mode: 'pinned';
+      fingerprints: readonly string[];
+      /**
+       * The key types of the pinned keys, as `ServerHostKey.algorithm` names them (`ssh-ed25519`, `ssh-rsa`, ...;
+       * the RSA names of the signature algorithms count as `ssh-rsa`). A server usually has a key of every type and
+       * shows the type the client prefers; without this, a server that has gained a key of a more preferred type than
+       * the pinned one would be taken for another machine. With it, the client prefers the pinned types in the key
+       * exchange and the pinned key is the one it sees. It never excludes a type: a key that is not pinned is still
+       * refused by the fingerprint check, and a type the server has no key of changes nothing.
+       */
+      keyTypes?: readonly string[];
+    }
+  | { mode: 'discover' };
 
 /**
  * Exact lists of algorithm names offered to the server, most preferred first. Omitted categories keep the

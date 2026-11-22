@@ -2,7 +2,12 @@ import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { delimiter } from 'node:path';
 
-import { type ExecHandler, TestSshServer, type TestUser } from '@swellwright/ssh/test-support';
+import {
+  type ExecHandler,
+  type TestKeyPair,
+  TestSshServer,
+  type TestUser,
+} from '@swellwright/ssh/test-support';
 
 import { DEBIAN_12_NODE, UBUNTU_2404_AS_USER } from './facts/samples.js';
 
@@ -24,6 +29,8 @@ export interface FakeHostOptions {
   readonly sudo?: 'none' | 'passwordless' | { readonly password: string };
   /** What the facts script prints (default: a captured output that fits who runs it). */
   readonly facts?: string | ((asRoot: boolean) => string);
+  /** More host keys of other types: a real server has one of every type (see `TestServerOptions.extraHostKeys`). */
+  readonly extraHostKeys?: readonly TestKeyPair[];
   /** The facts script never answers. */
   readonly stallFacts?: boolean;
   /** The facts script waits for this before it answers. */
@@ -135,7 +142,11 @@ export class FakeHost {
         }
       });
     };
-    const server = await TestSshServer.start({ users: options.users, exec });
+    const server = await TestSshServer.start({
+      users: options.users,
+      exec,
+      ...(options.extraHostKeys === undefined ? {} : { extraHostKeys: options.extraHostKeys }),
+    });
     created.host = new FakeHost(server);
     return created.host;
   }

@@ -37,7 +37,7 @@ A working installer exists in private use. It is a production tool, written in R
 
 ## Consequences
 - Anyone can read, run and audit the installer by hand; Swellwright will run the same file through its SSH layer, and the manifest says what to run, with what, and what it changes (`readOnly`) before it runs.
-- The tests prove the logic of the steps, not the behaviour of apt, systemd, UFW, Docker or iptables on a real server. The private script has run in production for the steps they share; the differences above (Docker from the repository, key pinning, the SSH checks, Debian) have not, and the first real run of this artifact will be on a disposable server, one step at a time.
+- The tests prove the logic of the steps, not the behaviour of apt, systemd, UFW, Docker or iptables on a real server. The private script has run in production for the steps they share; the differences above (Docker from the repository, key pinning, the SSH checks, Debian) have not, and the first real run of this artifact will be on a disposable server, one step at a time. (That run was made on a reset Ubuntu 24.04 server and found three defects of the installer, fixed in version 1.0.1; ADR 0040.)
 - A change to the script is a change to a file that servers will run: it is reviewed like code, the version is raised, the manifest is rebuilt in the same commit.
 - Pinned values go stale on purpose: the node image tag (`DEFAULT_NODE_IMAGE_TAG`, 3.4.6), the HAProxy series, the key fingerprints. Updating them is a new artifact version.
 

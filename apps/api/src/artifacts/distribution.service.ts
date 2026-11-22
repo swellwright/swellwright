@@ -167,7 +167,7 @@ export class DistributionService {
     for (const entry of info.access) {
       try {
         return await this.ssh.withAccess(
-          { address: info.address, port: info.port },
+          { address: info.address, port: info.port, hostKeyTypes: info.hostKeyTypes },
           info.fingerprints,
           entry,
           operation,
@@ -425,7 +425,7 @@ export class DistributionService {
     const root = destination === 'system' ? await this.rootOptions(session, identity) : undefined;
     const sftp = await connection.sftp();
     try {
-      const have = await inspectRemote(connection, sftp, layout.path, this.quickMs);
+      const have = await inspectRemote(connection, sftp, layout.path, this.quickMs, root);
       if (have.state === 'file' && have.sha256 === manifest.sha256) {
         return { result: 'unchanged', layout };
       }
@@ -562,7 +562,7 @@ export class DistributionService {
     manifest: ArtifactManifest,
     root?: { readonly sudo: { password?: string } },
   ): Promise<void> {
-    const now = await inspectRemote(connection, sftp, layout.path, this.quickMs);
+    const now = await inspectRemote(connection, sftp, layout.path, this.quickMs, root);
     if (now.state === 'file' && now.sha256 === manifest.sha256) {
       return;
     }
@@ -690,12 +690,42 @@ export class DistributionService {
     places: readonly { row: ServerArtifactRow; layout: RemoteLayout }[],
   ): Promise<{ row: ServerArtifactRow; check: ArtifactCheck }[]> {
     const sftp = await session.connection.sftp();
+    // A copy in the system directory is looked at as root: the login may not be able to reach that directory at all
+    // (a root-only parent). Without a working sudo the login looks for itself, as it could before.
+    let asRoot: { readonly sudo: { password?: string } } | null | undefined;
+    const rootFor = async (
+      destination: ArtifactDestination,
+    ): Promise<{ readonly sudo: { password?: string } } | undefined> => {
+      if (destination !== 'system') {
+        return undefined;
+      }
+      if (asRoot === undefined) {
+        try {
+          asRoot = await this.rootOptions(
+            session,
+            await identify(session.connection, this.quickMs),
+          );
+        } catch (error) {
+          if (!(error instanceof CodedHttpException) || error.apiCode !== 'sudo_unavailable') {
+            throw error;
+          }
+          asRoot = null;
+        }
+      }
+      return asRoot ?? undefined;
+    };
     try {
       const out: { row: ServerArtifactRow; check: ArtifactCheck }[] = [];
       for (const { row, layout } of places) {
         // What it must hash to: the catalogue's value; the pushed value when the catalogue no longer has the version.
         const expected = this.catalogue.declaredSha256(row.name, row.version) ?? row.sha256;
-        const copy = await inspectRemote(session.connection, sftp, layout.path, this.quickMs);
+        const copy = await inspectRemote(
+          session.connection,
+          sftp,
+          layout.path,
+          this.quickMs,
+          await rootFor(row.destination),
+        );
         const actual = copy.state === 'file' ? copy.sha256 : null;
         out.push({
           row,

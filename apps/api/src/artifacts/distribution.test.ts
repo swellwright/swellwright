@@ -658,6 +658,78 @@ describe('artifacts on servers', { skip: !databaseUrl }, () => {
       }
     });
 
+    // The step layer creates /var/lib/swellwright as 0700 when it runs as root, so a login that is not root cannot even
+    // look at the system artifact directory over SFTP. Found on a real server: the push failed with "stat failed:
+    // Permission denied" before one byte was sent. Everything about a system copy is asked as root now, and the
+    // directory is opened for everybody, as the decision says.
+    it('works when only root can enter the parent directory, and opens it for everybody', async () => {
+      const host = await startHost({
+        users: { deploy: { password: LOGIN } },
+        sudo: { password: SUDO },
+      });
+      host.write('/var/lib/swellwright/steps/earlier-step/out', 'left by the step layer');
+      host.modes.set('/var/lib/swellwright', 0o700);
+      host.flags.systemDirPrivate = true;
+      const server = await provision(host, { sudoSecretId: sudoSecret });
+
+      const reply = await push(owner, server.id, { name: 'demo', destination: 'system' });
+      assert.equal(reply.status, 201, JSON.stringify(reply.body));
+      assert.equal(ArtifactPushResultSchema.parse(reply.body).result, 'pushed');
+      assert.deepEqual(host.read(SYSTEM_FILE), Buffer.from(SCRIPT));
+      assert.equal(host.modes.get('/var/lib/swellwright'), 0o755, 'the parent is opened');
+      assert.equal(host.owners.get('/var/lib/swellwright'), 'root');
+      assert.equal(
+        host.exists('/var/lib/swellwright/steps/earlier-step/out'),
+        true,
+        'nothing else',
+      );
+
+      const again = await push(owner, server.id, { name: 'demo', destination: 'system' });
+      assert.equal(again.status, 200, JSON.stringify(again.body));
+      assert.equal(ArtifactPushResultSchema.parse(again.body).result, 'unchanged');
+      assert.equal(
+        ArtifactVerificationSchema.parse((await verify(owner, server.id)).body).ok,
+        true,
+      );
+
+      // Behind our back the file is changed, and the check says so (as root: the login could not look).
+      host.write(SYSTEM_FILE, 'something else');
+      const drifted = ArtifactVerificationSchema.parse((await verify(owner, server.id)).body);
+      assert.equal(drifted.ok, false);
+      assert.equal(drifted.results[0]?.state, 'differs');
+      host.remove(SYSTEM_FILE);
+      assert.equal(
+        ArtifactVerificationSchema.parse((await verify(owner, server.id)).body).results[0]?.state,
+        'missing',
+      );
+      assert.equal(
+        (await push(owner, server.id, { name: 'demo', destination: 'system' })).status,
+        201,
+      );
+      assert.equal((await remove(owner, server.id)).status, 204);
+      assert.equal(host.exists(SYSTEM_FILE), false);
+    });
+
+    it('checks a copy as the login when sudo does not work, as it did before', async () => {
+      const host = await startHost({
+        users: { deploy: { password: LOGIN } },
+        sudo: { password: SUDO },
+      });
+      const server = await provision(host, { sudoSecretId: sudoSecret });
+      assert.equal(
+        (await push(owner, server.id, { name: 'demo', destination: 'system' })).status,
+        201,
+      );
+      // The stored sudo password stops being right: a push needs root, a check can still look.
+      await instance.isolated.database.client.serverAccess.updateMany({
+        where: { serverId: server.id },
+        data: { sudoSecretId: wrongSudoSecret },
+      });
+      const checked = ArtifactVerificationSchema.parse((await verify(owner, server.id)).body);
+      assert.equal(checked.ok, true);
+      assert.equal(checked.results[0]?.state, 'ok');
+    });
+
     it('says sudo is not available, and touches nothing, when the login cannot become root', async () => {
       const none = await startHost({ users: { deploy: { password: LOGIN } }, sudo: 'none' });
       const server = await provision(none, { sudoSecretId: sudoSecret });

@@ -224,8 +224,22 @@ EOF
 echo node1
 exit 0
 EOF
+    # A process table is "$STUB_STATE/processes", one process per line: the process name, a tab, the command line. As
+    # the real pgrep, -x compares the whole process name and -f matches the command line with an extended expression.
     mkstub pgrep <<'EOF'
+[ -f "$STUB_STATE/processes" ] || exit 1
+_mode=$1; _pattern=$2
+while IFS="$(printf '\t')" read -r _comm _args; do
+    case "$_mode" in
+        -x) [ "$_comm" = "$_pattern" ] && exit 0 ;;
+        -f) printf '%s\n' "$_args" | grep -Eq -- "$_pattern" && exit 0 ;;
+    esac
+done <"$STUB_STATE/processes"
 exit 1
+EOF
+    # fuser (psmisc): the lock files are busy while "$STUB_STATE/locked" exists. Not installed unless a test says `have fuser`.
+    mkstub fuser <<'EOF'
+[ -f "$STUB_STATE/locked" ]
 EOF
     mkstub dpkg <<'EOF'
 [ "${1:-}" = --print-architecture ] && echo amd64

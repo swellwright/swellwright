@@ -33,6 +33,20 @@ export function generateTestKeyPair(passphrase?: string): TestKeyPair {
   throw new Error('Could not generate a usable test key.');
 }
 
+/** An RSA key (the second type a real server has besides ed25519). 2048 bits keeps the generator fast. */
+export function generateTestRsaKeyPair(): TestKeyPair {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const pair = utils.generateKeyPairSync('rsa', { bits: 2048 });
+    if (
+      !(utils.parseKey(pair.private) instanceof Error) &&
+      !(utils.parseKey(pair.public) instanceof Error)
+    ) {
+      return { privateKey: pair.private, publicKey: pair.public.trim() };
+    }
+  }
+  throw new Error('Could not generate a usable RSA test key.');
+}
+
 /** `SHA256:` fingerprint of the public half of an OpenSSH key, as `ssh-keygen -l` prints it. */
 export function publicKeyFingerprint(publicKeyLine: string): string {
   const blob = Buffer.from(publicKeyLine.trim().split(/\s+/u)[1] ?? '', 'base64');
