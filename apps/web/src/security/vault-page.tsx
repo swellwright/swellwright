@@ -105,10 +105,10 @@ import { confirmAction, notifyError, notifySuccess, notifyWarning } from '../she
 import { useIsMobile } from '../shell/use-is-mobile.js';
 import { useTableLocalization } from '../tables.js';
 import { LABEL_WEIGHT } from './form-styles.js';
+import { expiryState, SecretExpiryBadge } from './secret-expiry.js';
 import { useTimeFirst } from './time-first.js';
 
 const HIDE_AFTER_SECONDS = 30;
-const SOON_MS = 30 * 24 * 3_600_000;
 
 /** The kinds of secret for a select, named in the language of the console. */
 function useTypeOptions() {
@@ -559,6 +559,7 @@ function RevealDialog({
       {data ? (
         <>
           <Stack gap="md">
+            {data.expired ? <Callout color="orange">{t('reveal.expiredNotice')}</Callout> : null}
             <CopyableCodeBlock
               copiedLabel={t('common:copied')}
               copyLabel={t('common:copy')}
@@ -1113,14 +1114,6 @@ function RotateDataKeysDialog({
   );
 }
 
-function expiryState(secret: SecretView): 'none' | 'ok' | 'soon' | 'expired' {
-  if (!secret.expiresAt) {
-    return 'none';
-  }
-  const left = Date.parse(secret.expiresAt) - Date.now();
-  return left <= 0 ? 'expired' : left < SOON_MS ? 'soon' : 'ok';
-}
-
 /** The row actions of a secret, as the panel's card tables show them: soft icon buttons in one group. */
 function SecretActions({
   secret,
@@ -1260,27 +1253,51 @@ function SecretsTable({
         ),
       },
       {
-        accessorKey: 'expiresAt',
+        id: 'expiry',
         header: t('list.expires'),
-        size: 200,
-        enableColumnFilter: false,
+        size: 270,
+        accessorFn: (secret) => expiryState(secret),
+        filterVariant: 'select',
+        mantineFilterSelectProps: {
+          data: (['expired', 'soon', 'ok', 'none'] as const).map((value) => ({
+            value,
+            label: t(`expiry.filter.${value}`),
+          })),
+        },
+        sortingFn: (a, b) => {
+          // The soonest first, and what never expires last.
+          const left = a.original.expiresAt;
+          const right = b.original.expiresAt;
+          if (left === right) {
+            return 0;
+          }
+          if (left === null) {
+            return 1;
+          }
+          if (right === null) {
+            return -1;
+          }
+          return left < right ? -1 : 1;
+        },
         Cell: ({ row }) => {
           const secret = row.original;
-          const expiry = expiryState(secret);
-          if (expiry === 'none') {
+          if (secret.expiresAt === null) {
             return (
               <Text c="dimmed" fz="sm">
                 {t('common:never')}
               </Text>
             );
           }
-          const day = secret.expiresAt ? formatDay(secret.expiresAt) : '';
-          return expiry === 'expired' ? (
-            <StatusBadge kind="err">{t('list.expired', { date: day })}</StatusBadge>
-          ) : expiry === 'soon' ? (
-            <StatusBadge kind="warn">{t('list.soon', { date: day })}</StatusBadge>
-          ) : (
+          const day = formatDay(secret.expiresAt);
+          return expiryState(secret) === 'ok' ? (
             <StatusBadge kind="ok">{day}</StatusBadge>
+          ) : (
+            <Stack gap={2}>
+              <SecretExpiryBadge secret={secret} />
+              <Text c="dimmed" fz="xs">
+                {day}
+              </Text>
+            </Stack>
           );
         },
       },
@@ -1296,7 +1313,7 @@ function SecretsTable({
     [t, typeOptions, formatDay, formatTime],
   );
 
-  const tableState = useMrtTableState('vault-secrets-v2');
+  const tableState = useMrtTableState('vault-secrets-v3');
   usePreventTableBackScroll();
   const localization = useTableLocalization(t('list.empty'));
   const table = useMantineReactTable<SecretView>({
@@ -1581,6 +1598,12 @@ export function VaultPage({ permissions }: { permissions: readonly Permission[] 
             value={status.createdAt ? formatDay(status.createdAt) : '—'}
           />
         </SimpleGrid>
+
+        {list.some((secret) => secret.expired) ? (
+          <Callout color="red">
+            {t('expiry.notice', { count: list.filter((secret) => secret.expired).length })}
+          </Callout>
+        ) : null}
 
         <SecretsTable
           canManage={canManage}

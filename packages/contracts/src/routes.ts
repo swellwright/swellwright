@@ -575,7 +575,8 @@ export const listSecretsRoute = defineRoute({
   path: '/secrets',
   tags: ['vault'],
   summary: 'List the secrets, without their values',
-  description: 'Works while the vault is sealed: names, types and dates are not secret.',
+  description:
+    'Works while the vault is sealed: names, types and dates are not secret. `expired` and `expiresInDays` are worked out by the server clock.',
   auth: 'any',
   permission: 'vault:read',
   responses: { 200: { description: 'The secrets.', schema: SecretListSchema } },
@@ -603,7 +604,7 @@ export const updateSecretRoute = defineRoute({
   tags: ['vault'],
   summary: 'Rename a secret, change its details or replace its value',
   description:
-    'A new `value` needs the vault open and moves the version forward; the old value is not kept. Renaming and the details work while sealed.',
+    'A new `value` needs the vault open and moves the version forward; the old value is not kept. Renaming and the details work while sealed. Setting a later `expiresAt` renews an expired secret; setting `null` removes the expiry.',
   auth: 'session',
   permission: 'vault:manage',
   stepUp: true,
@@ -633,7 +634,7 @@ export const revealSecretRoute = defineRoute({
   tags: ['vault'],
   summary: 'Show the value of a secret',
   description:
-    'The only way a value leaves the vault. Needs the vault open, the reveal permission and a fresh second factor, and is recorded before the value is sent.',
+    'The only way a value leaves the vault. Needs the vault open, the reveal permission and a fresh second factor, and is recorded before the value is sent. An expired secret can still be revealed (to read it and rotate it); the answer says `expired: true`.',
   auth: 'session',
   permission: 'vault:reveal',
   stepUp: true,
@@ -1191,7 +1192,7 @@ export const removeAccessRoute = defineRoute({
 });
 
 const SSH_ERRORS =
-  'Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`.';
+  'Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), `secret_expired` (a secret the access entry names has expired: nothing was sent with it; `details` has `secretId` and `secretName`; renew its expiry or replace the secret), 423 `vault_sealed`, 429 `rate_limited`.';
 
 export const scanHostKeyRoute = defineRoute({
   operationId: 'scanHostKey',
@@ -1264,7 +1265,7 @@ export const getFactsRoute = defineRoute({
 });
 
 const RUN_ERRORS =
-  'Errors: 400 `validation_failed` (the body, or a parameter value that does not fit its definition: `details` names it), 404 (no such script or server), 409 `confirmation_required` (the level of the run is not `read` and `confirmedLevel` is missing or different; `details.level` says which), 429 `rate_limited`. A server that cannot be used (no pinned host key, no access entry) is not an error of the request: its target is `skipped` with the reason, and the others run.';
+  'Errors: 400 `validation_failed` (the body, or a parameter value that does not fit its definition: `details` names it), 404 (no such script or server), 403 `forbidden` (`secrets` is given and the role lacks `vault:reveal`), 409 `confirmation_required` (the level of the run is not `read` and `confirmedLevel` is missing or different; `details.level` says which), 409 `secret_expired` (a secret in `secrets` has expired: nothing was queued; `details` names it), 423 `vault_sealed` (`secrets` is given and the vault is closed: nothing was queued), 429 `rate_limited`. A server that cannot be used (no pinned host key, no access entry) is not an error of the request: its target is `skipped` with the reason, and the others run.';
 
 export const listScriptsRoute = defineRoute({
   operationId: 'listScripts',
@@ -1342,7 +1343,7 @@ export const createCommandRunRoute = defineRoute({
   path: '/command-runs',
   tags: ['commands'],
   summary: 'Run a script or a command on several servers',
-  description: `Queues a run and returns at once; the servers are worked on in the background, at most \`SW_COMMAND_CONCURRENCY\` at a time, each as a target of its own with its own state, exit status and output: one server failing never fails another. The script runs on the server as a detached step, so it survives a dropped connection and a restart of this API. Values of parameters reach it only as environment variables. The host key must be pinned and the address policy applies. A run whose level is not \`read\` must be confirmed (\`confirmedLevel\`); the engine's approvals come in a later phase. Output can hold secrets: whoever may read servers may read it. ${RUN_ERRORS}`,
+  description: `Queues a run and returns at once; the servers are worked on in the background, at most \`SW_COMMAND_CONCURRENCY\` at a time, each as a target of its own with its own state, exit status and output: one server failing never fails another. The script runs on the server as a detached step, so it survives a dropped connection and a restart of this API. Values of parameters reach it only as environment variables. A vault secret is handed over differently: with \`secrets\` (or a \`secret\` parameter of the script) the runner writes it to a file below the step directory (mode 0600, never in a command line, the environment, the script or the stored run), points \`<NAME>_FILE\` at it and removes it when the script ends, whatever the way; where the output holds the value it shows \`[secret NAME]\` instead (best effort: a script can transform a value). That needs \`vault:reveal\` as well, because a script can print what it reads. The host key must be pinned and the address policy applies. A run whose level is not \`read\` must be confirmed (\`confirmedLevel\`); the engine's approvals come in a later phase. Output can hold secrets: whoever may read servers may read it. ${RUN_ERRORS}`,
   auth: 'session',
   permission: 'servers:exec',
   stepUp: true,

@@ -59,7 +59,14 @@ export class PluginCallError extends Error {
   constructor(
     message: string,
     readonly reason:
-      'timeout' | 'crashed' | 'busy' | 'refused' | 'failed' | 'not_running' | 'not_configured',
+      | 'timeout'
+      | 'crashed'
+      | 'busy'
+      | 'refused'
+      | 'failed'
+      | 'not_running'
+      | 'not_configured'
+      | 'secret_expired',
   ) {
     super(message);
     this.name = 'PluginCallError';

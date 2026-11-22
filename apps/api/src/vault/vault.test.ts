@@ -355,7 +355,7 @@ describe('keeping secrets', { skip: !databaseUrl }, () => {
 
   it('starts sealed in a new process, and opens there with the passphrase', async () => {
     const db = instance.isolated.database;
-    const fresh = new VaultService(db, new AuditService(db), CHEAP_KDF);
+    const fresh = new VaultService(db, new AuditService(db), CHEAP_KDF, () => Date.now());
     assert.equal((await fresh.status()).state, 'sealed');
     assert.equal((await status(owner)).state, 'unsealed', 'the running one is not affected');
     const actor = { id: '0193a0b0-0000-7000-8000-000000000001', name: 'owner' };

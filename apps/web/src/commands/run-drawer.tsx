@@ -420,6 +420,31 @@ function RunBody({
                   </DataList.ItemValue>
                 </DataList.Item>
               ))}
+              {run.secrets.length > 0 ? (
+                <DataList.Item>
+                  <DataList.ItemLabel>{t('commands:runDetail.handed')}</DataList.ItemLabel>
+                  <DataList.ItemValue>
+                    <Stack gap={6}>
+                      {run.secrets.map((secret) => (
+                        <Group gap="xs" key={secret.name} wrap="wrap">
+                          <Badge color="blue" ff="monospace" size="lg" tt="none" variant="soft">
+                            {secret.name}
+                          </Badge>
+                          <Text size="sm">
+                            {secret.secretName}
+                            {secret.secretId === null
+                              ? ` (${t('commands:runDetail.handedDeleted')})`
+                              : ''}
+                          </Text>
+                        </Group>
+                      ))}
+                      <Text c="dimmed" size="xs">
+                        {t('commands:runDetail.handedNote')}
+                      </Text>
+                    </Stack>
+                  </DataList.ItemValue>
+                </DataList.Item>
+              ) : null}
             </DataList>
           </SectionCard.Section>
         </SectionCard.Root>

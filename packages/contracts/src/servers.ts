@@ -343,7 +343,22 @@ export const ServerHostKeySchema = z
 export type ServerHostKey = z.infer<typeof ServerHostKeySchema>;
 
 export const SecretRefSchema = z
-  .object({ id: z.uuid(), name: z.string(), type: SecretTypeSchema })
+  .object({
+    id: z.uuid(),
+    name: z.string(),
+    type: SecretTypeSchema,
+    expiresAt: z.iso.datetime().nullable(),
+    expired: z
+      .boolean()
+      .describe(
+        'The secret has expired: an access entry that names it cannot be used until it is renewed or replaced.',
+      ),
+    expiresInDays: z
+      .number()
+      .int()
+      .nullable()
+      .describe('Whole days until the expiry, rounded up; 0 or less once it has passed.'),
+  })
   .meta({
     id: 'SecretRef',
     description: 'A vault secret by name. The value is never part of a server.',

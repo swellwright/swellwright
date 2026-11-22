@@ -161,6 +161,8 @@ export const servers = {
     add: 'Add access',
     full: 'A server has at most {{max}} access entries.',
     empty: 'No way to log in is set up. Add an entry that names a secret of the vault.',
+    secretExpired:
+      'The secret "{{name}}" has expired, so this entry cannot log in until its expiry is renewed or the secret is replaced in the vault.',
     addTitle: 'Add access',
     editTitle: 'Change access',
     added: 'Access to {{name}} was added.',

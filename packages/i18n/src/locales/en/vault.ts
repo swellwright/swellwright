@@ -100,12 +100,29 @@ export const vault = {
     valueChanged: 'Value changed',
     empty: 'No secrets yet.',
     expired: '{{date}} (expired)',
-    soon: '{{date}} (soon)',
     revealAria: 'Reveal the value of {{name}}',
     changeAria: 'Change {{name}}',
     deleteAria: 'Delete {{name}}',
     loadFailed: 'Your role may not see the secrets.',
     statusFailed: 'Your role may not see the vault.',
+  },
+
+  /** The expiry of a secret: a secret that has expired is refused by everything that would use it (ADR 0042). */
+  expiry: {
+    expired: 'Expired',
+    inDays_one: 'Expires in {{count}} day',
+    inDays_other: 'Expires in {{count}} days',
+    expiredSuffix: ' (expired)',
+    filter: {
+      expired: 'Expired',
+      soon: 'Expires soon',
+      ok: 'Valid',
+      none: 'No expiry',
+    },
+    notice_one:
+      '{{count}} secret has expired. Nothing can use it until its expiry is renewed or the secret is replaced.',
+    notice_other:
+      '{{count}} secrets have expired. Nothing can use them until their expiry is renewed or the secrets are replaced.',
   },
 
   /** Toasts after a change that has no screen of its own to show it. */
@@ -143,6 +160,8 @@ export const vault = {
   },
 
   reveal: {
+    expiredNotice:
+      'This secret has expired, so nothing but you can read it now. Renew its expiry or replace the value to use it again.',
     hiddenIn_one: 'Hidden in {{count}} second. This was recorded in the audit log.',
     hiddenIn_other: 'Hidden in {{count}} seconds. This was recorded in the audit log.',
     forbidden: 'Your role may not reveal secrets.',

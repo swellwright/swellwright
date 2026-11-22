@@ -225,6 +225,9 @@ model Secret {
   /// Both relations restrict: a secret in use cannot be deleted (ADR 0034).
   serverAccess     ServerAccess[] @relation("ServerAccessSecret")
   serverSudoAccess ServerAccess[] @relation("ServerAccessSudoSecret")
+  /// The command runs that were handed this secret as a file (ADR 0042). A secret that a run which is not over
+  /// has is not replaced or deleted; the history of finished runs keeps the name and lets the secret go.
+  runSecrets       CommandRunSecret[]
   /// The connections to a panel that use this secret as their token. Restricts too (ADR 0041).
   panelConnections PanelConnection[] @relation("PanelConnectionToken")
 
@@ -540,6 +543,7 @@ model CommandRun {
 
   script  Script?            @relation(fields: [scriptId], references: [id], onDelete: SetNull)
   targets CommandRunTarget[]
+  secrets CommandRunSecret[]
 
   @@index([createdAt])
   @@index([state])
@@ -576,13 +580,17 @@ model CommandRunTarget {
   lastContactAt   DateTime?          @map("last_contact_at") @db.Timestamptz(3)
   /// The last bytes of the kept output (at most 16 KiB), for the run view.
   stdoutTail      Bytes              @map("stdout_tail")
-  /// How many bytes are kept: also where the next read of the server's stdout file starts.
+  /// How many bytes are kept (after a secret of the run was scrubbed out of them): the offsets of the stored chunks.
   stdoutStored    Int                @default(0) @map("stdout_stored")
+  /// How far the server's stdout file has been read: where the next read starts. Equal to `stdoutStored` unless the
+  /// run was handed secrets, because replacing a value with its marker changes the length (ADR 0042).
+  stdoutRead      Int                @default(0) @map("stdout_read")
   /// How many bytes the server's stdout file holds, as last seen.
   stdoutSize      Int                @default(0) @map("stdout_size")
   stdoutTruncated Boolean            @default(false) @map("stdout_truncated")
   stderrTail      Bytes              @map("stderr_tail")
   stderrStored    Int                @default(0) @map("stderr_stored")
+  stderrRead      Int                @default(0) @map("stderr_read")
   stderrSize      Int                @default(0) @map("stderr_size")
   stderrTruncated Boolean            @default(false) @map("stderr_truncated")
 
@@ -594,6 +602,26 @@ model CommandRunTarget {
   @@index([serverId])
   @@index([state])
   @@map("command_run_targets")
+}
+
+/// A vault secret handed to a run as a file the runner writes for the length of the run and removes afterwards (ADR
+/// 0042). The run keeps which secret, under which name, and which version was meant: never a value.
+model CommandRunSecret {
+  runId         String  @map("run_id") @db.Uuid
+  /// The name the script knows it by: the file is `<step dir>/secrets/<name>`, `<name>_FILE` points at it.
+  name          String  @db.VarChar(64)
+  /// Null after the secret was deleted (once the run is over); the name below is what it was called.
+  secretId      String? @map("secret_id") @db.Uuid
+  secretName    String  @map("secret_name") @db.VarChar(100)
+  /// The version of the value that is to be delivered: a value replaced before the delivery is not delivered.
+  secretVersion Int     @map("secret_version")
+
+  run    CommandRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  secret Secret?    @relation(fields: [secretId], references: [id], onDelete: SetNull)
+
+  @@id([runId, name])
+  @@index([secretId])
+  @@map("command_run_secrets")
 }
 
 enum OutputStream {

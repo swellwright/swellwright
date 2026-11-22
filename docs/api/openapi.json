@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.25.0",
+    "version": "0.26.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -1226,7 +1226,7 @@
             }
           }
         },
-        "description": "Works while the vault is sealed: names, types and dates are not secret.",
+        "description": "Works while the vault is sealed: names, types and dates are not secret. `expired` and `expiresInDays` are worked out by the server clock.",
         "security": [
           {
             "session": []
@@ -1314,7 +1314,7 @@
             }
           }
         },
-        "description": "A new `value` needs the vault open and moves the version forward; the old value is not kept. Renaming and the details work while sealed.",
+        "description": "A new `value` needs the vault open and moves the version forward; the old value is not kept. Renaming and the details work while sealed. Setting a later `expiresAt` renews an expired secret; setting `null` removes the expiry.",
         "parameters": [
           {
             "name": "id",
@@ -1419,7 +1419,7 @@
             }
           }
         },
-        "description": "The only way a value leaves the vault. Needs the vault open, the reveal permission and a fresh second factor, and is recorded before the value is sent.",
+        "description": "The only way a value leaves the vault. Needs the vault open, the reveal permission and a fresh second factor, and is recorded before the value is sent. An expired secret can still be revealed (to read it and rotate it); the answer says `expired: true`.",
         "parameters": [
           {
             "name": "id",
@@ -3691,7 +3691,7 @@
             }
           }
         },
-        "description": "Logs in with that entry (the host key must be pinned and is checked before any credential is sent) and runs read-only probes: `id -un`, `id -u` and a sudo check (with the stored sudo secret on standard input when there is one, otherwise `sudo -n`). A login that does not work is a result: 200 with `ok: false` and the code and message. The time and the outcome are kept on the entry. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`.",
+        "description": "Logs in with that entry (the host key must be pinned and is checked before any credential is sent) and runs read-only probes: `id -un`, `id -u` and a sudo check (with the stored sudo secret on standard input when there is one, otherwise `sudo -n`). A login that does not work is a result: 200 with `ok: false` and the code and message. The time and the outcome are kept on the entry. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), `secret_expired` (a secret the access entry names has expired: nothing was sent with it; `details` has `secretId` and `secretName`; renew its expiry or replace the secret), 423 `vault_sealed`, 429 `rate_limited`.",
         "parameters": [
           {
             "name": "id",
@@ -3756,7 +3756,7 @@
             }
           }
         },
-        "description": "Runs a fixed, read-only script over SSH (as root, or through sudo when the login is not root and sudo works, or as the login), parses its output strictly and stores the result; a malformed part becomes a warning and the rest is kept. Access entries are tried by priority until one logs in. One refresh per server runs at a time: a second request joins it. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `no_access_entry`, 502 `ssh_connect_failed`, `ssh_auth_failed`, `ssh_key_invalid`, `ssh_failed`, `facts_unreadable`, 504 `ssh_timeout`.",
+        "description": "Runs a fixed, read-only script over SSH (as root, or through sudo when the login is not root and sudo works, or as the login), parses its output strictly and stores the result; a malformed part becomes a warning and the rest is kept. Access entries are tried by priority until one logs in. One refresh per server runs at a time: a second request joins it. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), `secret_expired` (a secret the access entry names has expired: nothing was sent with it; `details` has `secretId` and `secretName`; renew its expiry or replace the secret), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `no_access_entry`, 502 `ssh_connect_failed`, `ssh_auth_failed`, `ssh_key_invalid`, `ssh_failed`, `facts_unreadable`, 504 `ssh_timeout`.",
         "parameters": [
           {
             "name": "id",
@@ -4108,7 +4108,7 @@
             }
           }
         },
-        "description": "Queues a run and returns at once; the servers are worked on in the background, at most `SW_COMMAND_CONCURRENCY` at a time, each as a target of its own with its own state, exit status and output: one server failing never fails another. The script runs on the server as a detached step, so it survives a dropped connection and a restart of this API. Values of parameters reach it only as environment variables. The host key must be pinned and the address policy applies. A run whose level is not `read` must be confirmed (`confirmedLevel`); the engine's approvals come in a later phase. Output can hold secrets: whoever may read servers may read it. Errors: 400 `validation_failed` (the body, or a parameter value that does not fit its definition: `details` names it), 404 (no such script or server), 409 `confirmation_required` (the level of the run is not `read` and `confirmedLevel` is missing or different; `details.level` says which), 429 `rate_limited`. A server that cannot be used (no pinned host key, no access entry) is not an error of the request: its target is `skipped` with the reason, and the others run.",
+        "description": "Queues a run and returns at once; the servers are worked on in the background, at most `SW_COMMAND_CONCURRENCY` at a time, each as a target of its own with its own state, exit status and output: one server failing never fails another. The script runs on the server as a detached step, so it survives a dropped connection and a restart of this API. Values of parameters reach it only as environment variables. A vault secret is handed over differently: with `secrets` (or a `secret` parameter of the script) the runner writes it to a file below the step directory (mode 0600, never in a command line, the environment, the script or the stored run), points `<NAME>_FILE` at it and removes it when the script ends, whatever the way; where the output holds the value it shows `[secret NAME]` instead (best effort: a script can transform a value). That needs `vault:reveal` as well, because a script can print what it reads. The host key must be pinned and the address policy applies. A run whose level is not `read` must be confirmed (`confirmedLevel`); the engine's approvals come in a later phase. Output can hold secrets: whoever may read servers may read it. Errors: 400 `validation_failed` (the body, or a parameter value that does not fit its definition: `details` names it), 404 (no such script or server), 403 `forbidden` (`secrets` is given and the role lacks `vault:reveal`), 409 `confirmation_required` (the level of the run is not `read` and `confirmedLevel` is missing or different; `details.level` says which), 409 `secret_expired` (a secret in `secrets` has expired: nothing was queued; `details` names it), 423 `vault_sealed` (`secrets` is given and the vault is closed: nothing was queued), 429 `rate_limited`. A server that cannot be used (no pinned host key, no access entry) is not an error of the request: its target is `skipped` with the reason, and the others run.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4824,7 +4824,7 @@
             }
           }
         },
-        "description": "Reads the file of the catalogue and hashes it (a file that is not what its manifest says is never sent), uploads it over SFTP to `<dir>/<name>/<version>/<file>` under a temporary name, hashes what arrived on the server and renames it into place only when it matches, sets the mode (a script 0755, a data file 0644, never writable by others) and hashes it once more in its place. A failure leaves no partial file. `destination: user` (the default) is `~/.swellwright/artifacts` of the login, private to it; `destination: system` is `/var/lib/swellwright/artifacts`, root-owned, written through sudo. When the same file is already there nothing is uploaded and the answer is 200 `unchanged`; a new or replaced copy answers 201 `pushed`. One push per server runs at a time. Access entries are tried by priority until one logs in. Needs `servers:exec` and a fresh second factor: what is pushed is meant to be run on the server. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `artifact_broken`, `artifact_busy` (another push or removal is running on this server), `artifact_destination_conflict` (this version is on the server at the other destination: remove it first), `sudo_unavailable` (destination `system` needs root or a working sudo), `no_access_entry`, 502 `artifact_hash_mismatch` (the copy on the server does not hash to the catalogue's value: nothing is left there; `details` has `expected`, `actual`, `stage`), `ssh_connect_failed`, `ssh_auth_failed`, `ssh_key_invalid`, `ssh_failed`, 504 `ssh_timeout`.",
+        "description": "Reads the file of the catalogue and hashes it (a file that is not what its manifest says is never sent), uploads it over SFTP to `<dir>/<name>/<version>/<file>` under a temporary name, hashes what arrived on the server and renames it into place only when it matches, sets the mode (a script 0755, a data file 0644, never writable by others) and hashes it once more in its place. A failure leaves no partial file. `destination: user` (the default) is `~/.swellwright/artifacts` of the login, private to it; `destination: system` is `/var/lib/swellwright/artifacts`, root-owned, written through sudo. When the same file is already there nothing is uploaded and the answer is 200 `unchanged`; a new or replaced copy answers 201 `pushed`. One push per server runs at a time. Access entries are tried by priority until one logs in. Needs `servers:exec` and a fresh second factor: what is pushed is meant to be run on the server. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), `secret_expired` (a secret the access entry names has expired: nothing was sent with it; `details` has `secretId` and `secretName`; renew its expiry or replace the secret), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `artifact_broken`, `artifact_busy` (another push or removal is running on this server), `artifact_destination_conflict` (this version is on the server at the other destination: remove it first), `sudo_unavailable` (destination `system` needs root or a working sudo), `no_access_entry`, 502 `artifact_hash_mismatch` (the copy on the server does not hash to the catalogue's value: nothing is left there; `details` has `expected`, `actual`, `stage`), `ssh_connect_failed`, `ssh_auth_failed`, `ssh_key_invalid`, `ssh_failed`, 504 `ssh_timeout`.",
         "parameters": [
           {
             "name": "id",
@@ -4886,7 +4886,7 @@
             }
           }
         },
-        "description": "Hashes each copy on the server (`sha256sum`) and compares it with the catalogue: `ok`, `differs` (somebody or something changed the file) or `missing`. A copy of a version the catalogue no longer has is compared with what was pushed. The time and the result are kept and shown. A copy that differs or is missing is a result (200 with `ok: false`), not an error. Nothing is repaired: push again to replace it. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`. 404 when no copy of that artifact is on the server.",
+        "description": "Hashes each copy on the server (`sha256sum`) and compares it with the catalogue: `ok`, `differs` (somebody or something changed the file) or `missing`. A copy of a version the catalogue no longer has is compared with what was pushed. The time and the result are kept and shown. A copy that differs or is missing is a result (200 with `ok: false`), not an error. Nothing is repaired: push again to replace it. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), `secret_expired` (a secret the access entry names has expired: nothing was sent with it; `details` has `secretId` and `secretName`; renew its expiry or replace the secret), 423 `vault_sealed`, 429 `rate_limited`. 404 when no copy of that artifact is on the server.",
         "parameters": [
           {
             "name": "id",
@@ -4955,7 +4955,7 @@
             }
           }
         },
-        "description": "Deletes the copy on the server (and the directories left empty) and forgets it. Needs `servers:exec` and a fresh second factor. Nothing is removed that Swellwright did not put there: the path comes from the record of the push and is checked against the layout before anything is deleted. A copy that is already gone is not an error. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `artifact_busy`, `sudo_unavailable`.",
+        "description": "Deletes the copy on the server (and the directories left empty) and forgets it. Needs `servers:exec` and a fresh second factor. Nothing is removed that Swellwright did not put there: the path comes from the record of the push and is checked against the layout before anything is deleted. A copy that is already gone is not an error. Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), `secret_expired` (a secret the access entry names has expired: nothing was sent with it; `details` has `secretId` and `secretName`; renew its expiry or replace the secret), 423 `vault_sealed`, 429 `rate_limited`. Also 409 `artifact_busy`, `sudo_unavailable`.",
         "parameters": [
           {
             "name": "id",
@@ -6395,6 +6395,7 @@
           "forbidden",
           "step_up_required",
           "vault_sealed",
+          "secret_expired",
           "not_found",
           "conflict",
           "rate_limited",
@@ -7057,6 +7058,8 @@
           "secret.updated",
           "secret.deleted",
           "secret.revealed",
+          "secret.use_refused",
+          "secret.used_in_run",
           "authz.denied",
           "audit.chain.verified",
           "audit.exported",
@@ -8082,6 +8085,23 @@
               }
             ]
           },
+          "expired": {
+            "type": "boolean",
+            "description": "The expiry has passed (`expiresAt` is now or earlier, by the server clock). An expired secret is not handed to anything that uses it: a server login, a plugin, a run (409 `secret_expired`). It can still be revealed, renewed or replaced."
+          },
+          "expiresInDays": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole days until the expiry, rounded up; 0 or less once it has passed. Null when the secret has no expiry."
+          },
           "createdAt": {
             "type": "string",
             "format": "date-time",
@@ -8105,6 +8125,8 @@
           "description",
           "version",
           "expiresAt",
+          "expired",
+          "expiresInDays",
           "createdAt",
           "updatedAt",
           "valueChangedAt"
@@ -9413,6 +9435,10 @@
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991
           },
+          "expired": {
+            "type": "boolean",
+            "description": "The secret has expired. A person may still read it, to rotate it; nothing else is given it."
+          },
           "value": {
             "type": "string",
             "description": "The secret. Not kept anywhere by the console after it is hidden."
@@ -9423,6 +9449,7 @@
           "name",
           "type",
           "version",
+          "expired",
           "value"
         ],
         "additionalProperties": false
@@ -10458,12 +10485,44 @@
           },
           "type": {
             "$ref": "#/components/schemas/SecretType"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expired": {
+            "type": "boolean",
+            "description": "The secret has expired: an access entry that names it cannot be used until it is renewed or replaced."
+          },
+          "expiresInDays": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Whole days until the expiry, rounded up; 0 or less once it has passed."
           }
         },
         "required": [
           "id",
           "name",
-          "type"
+          "type",
+          "expiresAt",
+          "expired",
+          "expiresInDays"
         ],
         "additionalProperties": false,
         "description": "A vault secret by name. The value is never part of a server."
@@ -11201,6 +11260,57 @@
         ],
         "additionalProperties": false
       },
+      "SecretParameter": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "label": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string",
+            "const": "secret"
+          },
+          "secretTypes": {
+            "minItems": 1,
+            "maxItems": 6,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "generic",
+                "panel_token",
+                "provider_token",
+                "telegram",
+                "dns_oauth",
+                "ssh_password"
+              ]
+            },
+            "description": "The kinds of vault secret that may be chosen for it. The person picks a secret of the vault, never types a value."
+          }
+        },
+        "required": [
+          "name",
+          "label",
+          "required",
+          "type",
+          "secretTypes"
+        ],
+        "additionalProperties": false
+      },
       "ScriptParameter": {
         "oneOf": [
           {
@@ -11214,9 +11324,12 @@
           },
           {
             "$ref": "#/components/schemas/BooleanParameter"
+          },
+          {
+            "$ref": "#/components/schemas/SecretParameter"
           }
         ],
-        "description": "A typed parameter of a script. Its value reaches the script as the environment variable `SW_PARAM_<NAME>` (booleans as `1` or `0`), never inside the script text."
+        "description": "A typed parameter of a script. Its value reaches the script as the environment variable `SW_PARAM_<NAME>` (booleans as `1` or `0`), never inside the script text. A `secret` parameter is different: the value of the run is the id of a vault secret, and the script finds the secret in a file named by `<NAME>_FILE` (the parameter name in capitals), never in the environment, the script text or the stored run."
       },
       "ParameterValues": {
         "type": "object",
@@ -11239,6 +11352,58 @@
           ]
         },
         "description": "Values by parameter name: text, whole numbers and booleans."
+      },
+      "RunSecretRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]{0,63}$"
+          },
+          "secretId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "required": [
+          "name",
+          "secretId"
+        ],
+        "additionalProperties": false
+      },
+      "RunSecretView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name the script knows it by: the file is named by `<NAME>_FILE`."
+          },
+          "secretId": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null after the secret was deleted."
+          },
+          "secretName": {
+            "type": "string",
+            "description": "What the secret was called in the vault when the run was made."
+          }
+        },
+        "required": [
+          "name",
+          "secretId",
+          "secretName"
+        ],
+        "additionalProperties": false,
+        "description": "A vault secret that was handed to the run as a file. Only the name and the secret are kept, never a value."
       },
       "ScriptSummary": {
         "type": "object",
@@ -11942,6 +12107,13 @@
             ],
             "description": "The level the person confirmed when the run was started; null for a `read` run."
           },
+          "secrets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RunSecretView"
+            },
+            "description": "The vault secrets handed to the run, by name. Where the output holds one of their values, it shows `[secret NAME]` instead."
+          },
           "targets": {
             "type": "array",
             "items": {
@@ -11971,6 +12143,7 @@
           "scriptVersion",
           "parameters",
           "confirmedLevel",
+          "secrets",
           "targets"
         ],
         "additionalProperties": false
@@ -12005,6 +12178,14 @@
               "mode": {
                 "type": "string",
                 "const": "script"
+              },
+              "secrets": {
+                "description": "Vault secrets for the script, up to 8, by the name the script knows them by. Each is written to a file on the server (mode 0600) for the length of the run and removed afterwards; the script reads it through the variable `<NAME>_FILE`. Needs `vault:reveal` as well as `servers:exec`: a script can print what it reads. A secret that has expired is refused (409 `secret_expired`), and so is the vault being sealed (423).",
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RunSecretRequest"
+                }
               },
               "serverIds": {
                 "minItems": 1,
@@ -12050,6 +12231,14 @@
                 "type": "string",
                 "const": "inline"
               },
+              "secrets": {
+                "description": "Vault secrets for the script, up to 8, by the name the script knows them by. Each is written to a file on the server (mode 0600) for the length of the run and removed afterwards; the script reads it through the variable `<NAME>_FILE`. Needs `vault:reveal` as well as `servers:exec`: a script can print what it reads. A secret that has expired is refused (409 `secret_expired`), and so is the vault being sealed (423).",
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/RunSecretRequest"
+                }
+              },
               "serverIds": {
                 "minItems": 1,
                 "maxItems": 50,
@@ -12074,7 +12263,7 @@
               "command": {
                 "type": "string",
                 "minLength": 1,
-                "description": "POSIX sh. It is kept with the run, so do not put a secret in it: use a script with a vault-backed value, or type it on the server."
+                "description": "POSIX sh. It is kept with the run, so do not put a secret in it: hand a vault secret to the run with `secrets` and read it from `$NAME_FILE`."
               },
               "sudo": {
                 "description": "Run as root through sudo. False by default.",

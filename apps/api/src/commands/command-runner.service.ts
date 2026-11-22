@@ -23,6 +23,7 @@ import {
   getStepStatus,
   readStepOutput,
   removeStep,
+  removeStepSecrets,
   type StepStatus,
   SshStepError,
   startDetachedStep,
@@ -36,8 +37,12 @@ import { CodedHttpException } from '../http.js';
 import { ServersService } from '../servers/servers.service.js';
 import { SshService, type SshSession } from '../servers/ssh.service.js';
 import { CONFIG, DATABASE } from '../tokens.js';
+import { type RunSecretValue, VaultService } from '../vault/vault.service.js';
+import { OutputScrubber } from './scrub.js';
 
-type TargetRow = Prisma.CommandRunTargetGetPayload<{ include: { run: true } }>;
+type TargetRow = Prisma.CommandRunTargetGetPayload<{
+  include: { run: { include: { secrets: true } } };
+}>;
 type Stream = 'stdout' | 'stderr';
 
 /** A read of the server's file that goes at most this far at a time. */
@@ -57,12 +62,23 @@ const FATAL_CODES = new Set([
   'no_access_entry',
   'ssh_auth_failed',
   'ssh_key_invalid',
+  // The secret of every access entry expired before the script was started: renewing it is a person's job (ADR 0042).
+  'secret_expired',
 ]);
 /** The kinds that pass: the server may come back, the connection may be made again. */
 const TRANSIENT_CODES = new Set(['ssh_connect_failed', 'ssh_timeout', 'ssh_failed']);
 
 /** The row changed under the runner's hands (a finish, a restart overlapping): read it again. */
 class StaleTargetError extends Error {}
+
+/** A secret the run was handed cannot be used any more (it is gone, or its value is not the one that was meant). */
+class RunSecretError extends Error {}
+
+/** What the runner has of the secrets of a run for the length of one poll: the values to deliver, and the scrubber. */
+interface HandedSecrets {
+  readonly values: readonly RunSecretValue[];
+  readonly scrubber: OutputScrubber | undefined;
+}
 
 type Verdict =
   | { readonly kind: 'fatal'; readonly code: string; readonly message: string }
@@ -102,6 +118,9 @@ function isVaultProblem(error: unknown): error is Error {
 function classify(error: unknown): Verdict {
   if (error instanceof StaleTargetError) {
     return { kind: 'stale' };
+  }
+  if (error instanceof RunSecretError) {
+    return { kind: 'fatal', code: 'secret_unavailable', message: error.message };
   }
   if (error instanceof CodedHttpException) {
     if (FATAL_CODES.has(error.apiCode)) {
@@ -182,6 +201,7 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(ServersService) private readonly servers: ServersService,
     @Inject(SshService) private readonly ssh: SshService,
+    @Inject(VaultService) private readonly vault: VaultService,
   ) {}
 
   private get db(): Database['client'] {
@@ -342,7 +362,7 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
   ): Promise<'done' | 'progress' | 'quiet'> {
     const row = await this.db.commandRunTarget.findUnique({
       where: { id: targetId },
-      include: { run: true },
+      include: { run: { include: { secrets: true } } },
     });
     if (row?.state !== 'running') {
       return 'done';
@@ -511,6 +531,8 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
   ): Promise<WorkResult> {
     const remembered = info.access.filter((entry) => entry.id === row.accessId);
     const entries = remembered.length > 0 ? remembered : info.access;
+    // The secrets of the run come first: a secret that has expired or is gone ends the target before any login is made.
+    const handed = await this.handedSecrets(row);
     let refused: unknown;
     for (const entry of entries) {
       try {
@@ -518,7 +540,10 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
           { address: info.address, port: info.port, hostKeyTypes: info.hostKeyTypes },
           info.fingerprints,
           entry,
-          (session) => this.work(session, row, context),
+          (session) => this.work(session, row, context, handed),
+          // A script that has started is followed to its end whatever happens to the credential meanwhile: an expiry
+          // is checked when a use begins, not in the middle of one (ADR 0042).
+          { allowExpired: row.launched || row.run.cancelRequestedAt !== null },
         );
         if (row.accessId !== entry.id) {
           await this.db.commandRunTarget.updateMany({
@@ -531,7 +556,9 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
       } catch (error) {
         if (
           error instanceof CodedHttpException &&
-          (error.apiCode === 'ssh_auth_failed' || error.apiCode === 'ssh_key_invalid') &&
+          (error.apiCode === 'ssh_auth_failed' ||
+            error.apiCode === 'ssh_key_invalid' ||
+            error.apiCode === 'secret_expired') &&
           entries.length > 1
         ) {
           refused = error;
@@ -543,10 +570,49 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
     throw refused;
   }
 
+  /**
+   * The secrets a run was handed, as values, for one poll (ADR 0042). A target that has not started needs them to deliver
+   * them; one that has started needs them to take them out of the output it reads. They are decrypted for this poll and
+   * dropped with it: nothing keeps a value between two polls, and the runner never needs one to find a step again.
+   * A run that has started is followed whatever happens to the expiry of its secrets; one that is being stopped too.
+   */
+  private async handedSecrets(row: TargetRow): Promise<HandedSecrets> {
+    const entries = row.run.secrets;
+    if (entries.length === 0) {
+      return { values: [], scrubber: undefined };
+    }
+    const requests = entries.map((entry) => {
+      if (entry.secretId === null) {
+        throw new RunSecretError(
+          `The secret "${entry.secretName}" that was handed to ${entry.name} was deleted${row.launched ? '; the script may still be running' : ' before the script started'}.`,
+        );
+      }
+      return { name: entry.name, secretId: entry.secretId, version: entry.secretVersion };
+    });
+    try {
+      const values = await this.vault.readForRun(
+        requests,
+        { kind: 'command_run', id: row.runId },
+        { allowExpired: row.launched || row.run.cancelRequestedAt !== null },
+      );
+      return { values, scrubber: new OutputScrubber(values) };
+    } catch (error) {
+      if (error instanceof NotFoundException || error instanceof ConflictException) {
+        // The vault says why (gone, replaced, of a kind a run cannot have); a sealed vault and an expired secret keep
+        // their own answers, which the verdict knows.
+        throw new RunSecretError(
+          `${error.message}${row.launched ? ' The script may still be running.' : ''}`,
+        );
+      }
+      throw error;
+    }
+  }
+
   private async work(
     session: SshSession,
     row: TargetRow,
     context: TargetContext,
+    handed: HandedSecrets,
   ): Promise<WorkResult> {
     const { connection, sudoPassword } = session;
     const run = row.run;
@@ -563,6 +629,10 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
           id: row.stepId,
           script: run.body,
           env: environmentOf(run.parameters),
+          // Written to files on the server by the launch itself, from its standard input only (ADR 0042).
+          ...(handed.values.length === 0
+            ? {}
+            : { secrets: Object.fromEntries(handed.values.map((v) => [v.name, v.value])) }),
           ...(sudo === undefined ? {} : { sudo }),
         });
       } catch (error) {
@@ -605,7 +675,7 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
     }
 
     // The status was read first: when it says the step is over, everything it wrote is in the files.
-    const drained = await this.drain(connection, row, status);
+    const drained = await this.drain(connection, row, status, handed.scrubber);
 
     if (status.state === 'exited') {
       return { kind: 'exited', exitCode: status.exitCode ?? -1, truncated: drained.truncated };
@@ -638,49 +708,77 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
    * Reads what the script wrote since the last poll, up to the limit, stores it and records that the server answered.
    * The offset that is stored is where the next read starts, and a chunk whose offset was stored already is refused by
    * its key, so a connection that drops costs nothing and repeats nothing.
+   *
+   * When the run was handed secrets the output is scrubbed before it is stored (ADR 0042): what is stored is shorter or
+   * longer than what was read, so two offsets are kept, how far the server's file has been read and how much is stored.
+   * A tail of the read that might be the start of a value is not stored yet: it is read again with the next poll.
    */
   private async drain(
     connection: SshSession['connection'],
     row: TargetRow,
     status: StepStatus,
+    scrubber: OutputScrubber | undefined,
   ): Promise<{ progressed: boolean; truncated: boolean }> {
     const limit = this.config.commands.outputLimitBytes;
     let progressed = false;
     const counters: Record<
       Stream,
-      { stored: number; tail: Uint8Array; size: number; truncated: boolean }
+      { read: number; stored: number; tail: Uint8Array; size: number; truncated: boolean }
     > = {
       stdout: {
+        read: row.stdoutRead,
         stored: row.stdoutStored,
         tail: row.stdoutTail,
         size: status.stdoutBytes,
         truncated: row.stdoutTruncated,
       },
       stderr: {
+        read: row.stderrRead,
         stored: row.stderrStored,
         tail: row.stderrTail,
         size: status.stderrBytes,
         truncated: row.stderrTruncated,
       },
     };
+    // Nothing more will be written once the step is over: then a tail that looks like the start of a value is only text.
+    const over = status.state === 'exited' || status.state === 'lost';
     for (const stream of ['stdout', 'stderr'] as const) {
       const state = counters[stream];
-      while (state.stored < state.size && state.stored < limit) {
+      while (state.read < state.size && state.read < limit) {
         const slice = await readStepOutput(connection, row.stepId, {
           stream,
-          fromOffset: state.stored,
-          maxBytes: Math.min(READ_BYTES, limit - state.stored),
+          fromOffset: state.read,
+          maxBytes: Math.min(READ_BYTES, limit - state.read),
         });
         if (slice.data.length === 0) {
           break;
         }
-        const tail = Buffer.concat([state.tail, slice.data]).subarray(-OUTPUT_TAIL_BYTES);
-        await this.append(row.id, stream, state.stored, slice.data, tail, state.size);
-        state.stored += slice.data.length;
+        let kept = slice.data;
+        let consumed = slice.data.length;
+        if (scrubber?.active === true) {
+          const reachedEnd = state.read + slice.data.length >= state.size;
+          const scrubbed = scrubber.scrub(slice.data, { final: over && reachedEnd });
+          kept = scrubbed.out;
+          consumed = scrubbed.consumed;
+          if (state.read + slice.data.length >= limit) {
+            // The limit cuts the output here: what is held back is never stored, so it is not read again.
+            consumed = slice.data.length;
+          }
+        }
+        if (consumed === 0) {
+          break;
+        }
+        const tail = Buffer.concat([state.tail, kept]).subarray(-OUTPUT_TAIL_BYTES);
+        await this.append(row.id, stream, state, kept, consumed, tail);
+        state.stored += kept.length;
+        state.read += consumed;
         state.tail = tail;
         progressed = true;
+        if (consumed < slice.data.length) {
+          break;
+        }
       }
-      state.truncated = state.size > state.stored && state.stored >= limit;
+      state.truncated = state.size > state.read && state.read >= limit;
     }
     // The server answered: remember it, and what the files hold now.
     await this.db.commandRunTarget.updateMany({
@@ -700,41 +798,59 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
     };
   }
 
-  /** Stores one piece of output and moves the offset, or refuses when the row is not where the caller thinks. */
+  /**
+   * Stores one piece of output and moves the offsets, or refuses when the row is not where the caller thinks. `kept` is
+   * what is stored (it may be empty when the whole read was a value that left nothing but a marker elsewhere), `consumed`
+   * how many bytes of the server's file the piece stands for.
+   */
   private async append(
     targetId: string,
     stream: Stream,
-    startOffset: number,
-    data: Buffer,
+    at: { read: number; stored: number; size: number },
+    kept: Buffer,
+    consumed: number,
     tail: Uint8Array,
-    size: number,
   ): Promise<void> {
     try {
       await this.db.$transaction(async (tx) => {
         const moved =
           stream === 'stdout'
             ? await tx.commandRunTarget.updateMany({
-                where: { id: targetId, state: 'running', stdoutStored: startOffset },
+                where: {
+                  id: targetId,
+                  state: 'running',
+                  stdoutStored: at.stored,
+                  stdoutRead: at.read,
+                },
                 data: {
-                  stdoutStored: startOffset + data.length,
+                  stdoutStored: at.stored + kept.length,
+                  stdoutRead: at.read + consumed,
                   stdoutTail: new Uint8Array(tail),
-                  stdoutSize: size,
+                  stdoutSize: at.size,
                 },
               })
             : await tx.commandRunTarget.updateMany({
-                where: { id: targetId, state: 'running', stderrStored: startOffset },
+                where: {
+                  id: targetId,
+                  state: 'running',
+                  stderrStored: at.stored,
+                  stderrRead: at.read,
+                },
                 data: {
-                  stderrStored: startOffset + data.length,
+                  stderrStored: at.stored + kept.length,
+                  stderrRead: at.read + consumed,
                   stderrTail: new Uint8Array(tail),
-                  stderrSize: size,
+                  stderrSize: at.size,
                 },
               });
         if (moved.count === 0) {
           throw new StaleTargetError();
         }
-        await tx.commandOutputChunk.create({
-          data: { targetId, stream, startOffset, data: new Uint8Array(data) },
-        });
+        if (kept.length > 0) {
+          await tx.commandOutputChunk.create({
+            data: { targetId, stream, startOffset: at.stored, data: new Uint8Array(kept) },
+          });
+        }
       });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
@@ -808,8 +924,42 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
       row.accessId !== null;
     if (mayRemove) {
       await this.removeRecord(row, info);
+    } else if (ended.count === 1 && state === 'lost' && info !== undefined) {
+      await this.sweepSecrets(row, info);
     }
     return 'done';
+  }
+
+  /**
+   * A step that was lost (its wrapper was killed, so nothing removed its secrets) and that runs as root: the status read
+   * could remove only what the login user owns, and root owns these. Remove them through sudo; the record, which is the
+   * only trace of what happened, stays (ADR 0042). Best effort, like the removal of a record.
+   */
+  private async sweepSecrets(
+    row: TargetRow,
+    info: Awaited<ReturnType<ServersService['connectionInfo']>>,
+  ): Promise<void> {
+    const entry = info.access.find((candidate) => candidate.id === row.accessId);
+    if (!entry || this.stopping || !row.launched || !row.run.sudo || row.run.secrets.length === 0) {
+      return;
+    }
+    try {
+      await this.ssh.withAccess(
+        { address: info.address, port: info.port, hostKeyTypes: info.hostKeyTypes },
+        info.fingerprints,
+        entry,
+        async ({ connection, sudoPassword }) => {
+          await removeStepSecrets(connection, row.stepId, {
+            sudo: sudoPassword === undefined ? {} : { password: sudoPassword },
+          });
+        },
+        { allowExpired: true },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `could not remove the secrets of the lost target ${row.id} from its server: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
   }
 
   /** Best effort: the output is stored, so a record that stays on the server is only untidy. */
@@ -833,6 +983,8 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
               : {}),
           });
         },
+        // Tidying up after a script that started: allowed even if the credential has expired since.
+        { allowExpired: true },
       );
     } catch (error) {
       this.logger.warn(

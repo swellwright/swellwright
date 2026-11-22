@@ -63,7 +63,11 @@ export const commands = {
       integer: 'Whole number',
       enum: 'One of a list',
       boolean: 'Yes or no',
+      secret: 'Vault secret',
     },
+    secretTypes: 'Kinds of secret',
+    secretTypesDescription:
+      'The kinds of vault secret a person may choose. The script reads the file named by {{name}}.',
     required: 'Required',
     description: 'Description',
     pattern: 'Pattern',
@@ -109,12 +113,39 @@ export const commands = {
       label: 'Command',
       description: 'POSIX sh. Several lines are fine; it runs as one script.',
       secrets:
-        'The command is kept with the run, in plain text, and everybody who may read servers can read it. Do not put a password, a key or a token in it.',
+        'The command is kept with the run, in plain text, and everybody who may read servers can read it. Do not put a password, a key or a token in it: add the secret under Secrets below and read it from its file.',
       sudo: 'Run as root',
       sudoDescription: 'Through sudo, with the sudo password stored for the server.',
       level: 'What it does',
       levelDescription:
         'Swellwright cannot know what a command does, so this is your word. Anything but "Read" has to be confirmed before it starts.',
+    },
+    secrets: {
+      title: 'Secrets',
+      description:
+        'Hand a secret of the vault to the script as a file. It is written on the server for the length of the run and removed afterwards.',
+      notice:
+        'The script reads the file named by NAME_FILE, for example "$NODE_KEY_FILE". Nothing goes into the command line, the environment or the stored run. A script can print what it reads, so this needs the permission to reveal secrets and a fresh code. Where the output holds the exact value it shows [secret NAME] instead; a script that changes the value (encodes it, splits it up) is not caught.',
+      add: 'Add a secret',
+      remove: 'Remove the secret',
+      name: 'Name',
+      nameDescription: 'The variable is NAME_FILE.',
+      secret: 'Secret',
+      placeholder: 'Choose a secret',
+      nothing: 'No such secret',
+      noSecrets: 'The vault has no secret of a kind a run can be given.',
+      forbidden:
+        'Your role may not hand secrets to a run. It needs the permission to reveal secrets.',
+      full: 'At most {{count}} secrets in one run.',
+      parameterForbidden:
+        'This script needs a secret of the vault, and your role may not hand secrets to a run.',
+      parameterNoChoice: 'Choose a secret of the vault.',
+      errors: {
+        name: 'Capital letters, digits and underscores, starting with a letter. Not SW_ or SWELLWRIGHT_.',
+        duplicate: 'Another secret of this run has this name.',
+        choose: 'Choose a secret.',
+        summary: 'Some of the secrets are not valid.',
+      },
     },
     timeout: {
       label: 'Time limit',
@@ -207,7 +238,7 @@ export const commands = {
       'Through sudo, with the sudo password stored for the server. A login that is root needs none.',
     parameters: 'Parameters',
     parametersDescription:
-      'Values reach the script as environment variables named SW_PARAM_ and the name in capitals, never inside its text.',
+      'Values reach the script as environment variables named SW_PARAM_ and the name in capitals, never inside its text. A secret parameter is different: the script reads the file that NAME_FILE names, and the value is never in the environment.',
     body: 'Text of the script',
     bodyDescription:
       'POSIX sh, run as "sh script.sh". It is code that runs on your servers, usually as root.',
@@ -268,6 +299,10 @@ export const commands = {
     confirmed: 'Confirmed level',
     secretsNotice:
       'The output below is what the scripts printed. It can contain secrets, and everybody who may read servers can read it.',
+    handed: 'Secrets handed to the run',
+    handedNote:
+      'Written to a file on each server for the length of the run, and removed when the script ended. Where the output holds the exact value it shows [secret NAME] instead.',
+    handedDeleted: 'deleted since',
     text: 'The text that ran',
     textNote:
       'This is exactly what was sent to the servers, as it was when the run started. Editing or deleting the script later does not change it.',

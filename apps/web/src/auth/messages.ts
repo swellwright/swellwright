@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
 
+import { SecretExpiredDetailsSchema } from '@swellwright/contracts';
 import type { Namespace } from '@swellwright/i18n';
 
 import { ApiRequestError, ApiUnreachableError, StepUpCancelledError } from '../api.js';
@@ -45,6 +46,13 @@ export function describeError(
         return whenForbidden ?? t('errors:forbidden');
       case 'vault_sealed':
         return t('errors:vaultSealed');
+      case 'secret_expired': {
+        // The server names the secret (never its value): say which one has to be renewed.
+        const named = SecretExpiredDetailsSchema.safeParse(error.details);
+        return named.success
+          ? t('errors:secretExpired', { name: named.data.secretName })
+          : t('errors:secretExpiredUnnamed');
+      }
       case 'step_up_required':
         return t('errors:stepUpRequired');
       case 'not_ready':

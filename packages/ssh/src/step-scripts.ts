@@ -7,6 +7,9 @@
 //   script.sha256   its SHA-256; written last of the uploaded files, it marks the step as committed
 //   stdin           optional, the step's standard input (0600)
 //   env             optional, `export NAME='value'` lines the wrapper sources (0600)
+//   secrets/NAME    optional, one file per secret (the directory 0700, the files 0600), for the length of the script:
+//                   written by the launch as the login user, owned by root when the step runs as root (the wrapper
+//                   does that), removed by the wrapper when the script ends, whatever the way (ADR 0042)
 //   run.sh          the wrapper (0700): becomes the leader of a new session, records pid and start, runs the
 //                   script, records the exit code
 //   out, err        the script's standard output and standard error (0600, appended to)
@@ -52,6 +55,9 @@ cd "$D" || exit 70
 mkdir .claimed 2>/dev/null || exit 0
 trap '' HUP
 trap : TERM INT
+# A step that runs as root owns its secrets as root: the launch wrote them as the login user, and a program that is handed
+# a secret file may insist that it belongs to the user that runs it (the node installer does). They stay 0600 and 0700.
+if [ -d ./secrets ] && [ "$(id -u)" = 0 ]; then chown -R 0:0 ./secrets 2>/dev/null; fi
 umask 022
 printf '%s\\n' "$$" > pid.tmp && mv -f pid.tmp pid
 date -u '+%Y-%m-%dT%H:%M:%SZ' > started.tmp && mv -f started.tmp started
@@ -66,6 +72,9 @@ else
   sh ./script.sh < /dev/null >> out 2>> err
 fi
 rc=$?
+# The secrets of the step were on disk only while the script ran. They go before the exit marker is published, so a step
+# that is seen to have ended has none left; cancel, the status read and remove sweep up after a wrapper that was killed.
+rm -rf ./secrets
 umask 022
 tmp=exit.tmp.$$
 printf '%s\\n%s\\n' "$rc" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > "$tmp" || exit 71
@@ -113,6 +122,19 @@ getframe script script.sh 700 || fail "the script did not arrive intact" 67
 getframe stdin stdin 600 || fail "the stdin file did not arrive intact" 67
 getframe env env 600 || fail "the env file did not arrive intact" 67
 getframe run run.sh 700 || fail "the wrapper did not arrive intact" 67
+# Zero or more secrets follow: a line SECRET NAME sha256 and the base64 lines of the value (ADR 0042). Each becomes a file in
+# "$D/secrets" (0700, files 0600, owned by whoever runs this: the owner of the step directory), written from this
+# standard input only. Any failure takes the whole step directory with it.
+while IFS=' ' read -r tag sname ssha; do
+  [ "$tag" = SECRET ] || fail "unexpected input after the frames" 67
+  case $sname in ''|[!A-Z]*|*[!A-Z0-9_]*) fail "a secret has a bad name" 67;; esac
+  [ "\${#sname}" -le 64 ] || fail "a secret has a bad name" 67
+  [ -d "$D/secrets" ] || mkdir "$D/secrets" || fail "cannot create the secrets directory" 66
+  : > "$D/secrets/$sname" && chmod 600 "$D/secrets/$sname" || fail "cannot create a secret file" 66
+  while IFS= read -r line; do [ "$line" = . ] && break; printf '%s\\n' "$line"; done | base64 -d > "$D/secrets/$sname" || fail "a secret did not arrive intact" 67
+  got=$(sha256sum "$D/secrets/$sname" | cut -d' ' -f1)
+  [ "$got" = "$ssha" ] || fail "a secret did not arrive intact" 67
+done
 [ "$(sha256sum "$D/script.sh" | cut -d' ' -f1)" = "$WANT" ] || fail "the script hash differs" 67
 command -v setsid >/dev/null 2>&1 || fail "setsid is not installed on the server" 68
 : > "$D/out"; : > "$D/err"; chmod 600 "$D/out" "$D/err"
@@ -155,6 +177,9 @@ elif [ -f "$D/pid" ]; then
 else
   state=unknown
 fi
+# A step that is over has no use for its secrets: the wrapper removes them first, this is for a wrapper that was killed.
+# (Secrets that belong to root are out of reach of the login user: for those \`removeStepSecrets\` runs through sudo.)
+case $state in exited|lost) [ -d "$D/secrets" ] && rm -rf "$D/secrets" 2>/dev/null;; esac
 printf 'state=%s\\ncode=%s\\nstarted=%s\\nfinished=%s\\nsha=%s\\nout=%s\\nerr=%s\\n' "$state" "$code" "$st" "$fin" "$sha" "$so" "$se"
 exit 0
 `;
@@ -192,10 +217,11 @@ export const CANCEL_SCRIPT = `${PRELUDE}
 D=$1/$2
 GRACE=$3
 if [ ! -d "$D" ]; then echo "SWRESULT notfound"; exit 0; fi
-if [ -f "$D/exit" ]; then echo "SWRESULT finished"; exit 0; fi
+if [ -f "$D/exit" ]; then rm -rf "$D/secrets"; echo "SWRESULT finished"; exit 0; fi
 pid=
 [ -f "$D/pid" ] && pid=$(cat "$D/pid")
 if [ -z "$pid" ] || ! alive "$pid" "$2"; then
+  rm -rf "$D/secrets"
   publish_exit "$D" 143
   echo "SWRESULT cancelled"
   exit 0
@@ -210,6 +236,7 @@ if alive "$pid" "$2"; then
   i=0
   while alive "$pid" "$2" && [ "$i" -lt 25 ]; do nap; i=$((i + 1)); done
 fi
+rm -rf "$D/secrets"
 [ -f "$D/exit" ] || publish_exit "$D" 137
 echo "SWRESULT cancelled"
 exit 0
@@ -226,6 +253,19 @@ pid=
 [ -f "$D/pid" ] && pid=$(cat "$D/pid")
 if [ ! -f "$D/exit" ] && [ -n "$pid" ] && alive "$pid" "$2" && [ "$3" != 1 ]; then echo "SWRESULT running"; exit 0; fi
 rm -rf "$D"
+echo "SWRESULT removed"
+exit 0
+`;
+
+/**
+ * Removes only the secrets of a step, whatever state it is in. Positional parameters: base directory, step id. Run as
+ * root (through the sudo wrapper) for a step that runs as root, whose secrets the login user cannot remove. Prints
+ * `SWRESULT removed|notfound`.
+ */
+export const SECRETS_REMOVE_SCRIPT = `
+D=$1/$2
+if [ ! -d "$D" ]; then echo "SWRESULT notfound"; exit 0; fi
+rm -rf "$D/secrets"
 echo "SWRESULT removed"
 exit 0
 `;
