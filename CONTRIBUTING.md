@@ -1,6 +1,6 @@
 # Contributing
 
-Thank you for your interest. Swellwright is in the design phase, so the most useful contributions right now are design feedback, plugin ideas, documentation and translations.
+Thank you for your interest. Swellwright is a pre-alpha implementation with phases 1-3 complete (see [current status](docs/en/project-status.md)); useful contributions include the follow-ups listed there, design feedback, plugin ideas, documentation and translations.
 
 ## Developer Certificate of Origin
 

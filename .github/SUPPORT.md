@@ -1,6 +1,6 @@
 # Getting help
 
-Swellwright is in the design phase, so the most useful kinds of feedback are questions about the design, scenario ideas and plugin proposals.
+Swellwright is a pre-alpha implementation with phases 1-3 complete (see [current status](../docs/en/project-status.md)); useful feedback includes bugs in what is implemented, questions about the design, scenario ideas and plugin proposals.
 
 - **Questions and ideas:** open an issue and pick the matching template, or start a discussion if Discussions are enabled for this repository.
 - **Bugs:** use the bug report template; include the Swellwright and Remnawave versions and redacted logs.
