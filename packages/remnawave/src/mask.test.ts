@@ -27,7 +27,8 @@ describe('masking secrets', () => {
       assert.ok(!out.includes(secret), secret);
     }
     // What is not secret stays readable, and the shape of a list of short ids is kept.
-    assert.ok(out.includes('a.example.com') && out.includes('PUB') && out.includes('aes-256-gcm'));
+    assert.match(out, /a\.example\.com/u);
+    assert.ok(out.includes('PUB') && out.includes('aes-256-gcm'));
     const ids = (value as { realitySettings: { shortIds: string[] } }).realitySettings.shortIds;
     assert.deepEqual(ids, [MASK, MASK, '']);
     assert.equal(count, 6);

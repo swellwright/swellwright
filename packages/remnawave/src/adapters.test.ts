@@ -132,11 +132,8 @@ describe('the adapters', () => {
     );
     // The configuration reads normally except for the secrets, which are masked with a fingerprint.
     const text = JSON.stringify(detail.config);
-    assert.ok(
-      text.includes('VLESS_REALITY_MAIN') &&
-        text.includes('node-1.example.com') &&
-        text.includes('xtls-rprx-vision'),
-    );
+    assert.ok(text.includes('VLESS_REALITY_MAIN') && text.includes('xtls-rprx-vision'));
+    assert.match(text, /node-1\.example\.com/u);
     assert.match(text, /\[masked:[0-9a-f]{8}\]/u);
     assert.ok(detail.masked >= 8, `masked ${String(detail.masked)} values`);
     assert.ok(detail.inbounds.every((i) => i.raw !== undefined));
@@ -192,7 +189,8 @@ describe('the adapters', () => {
     assert.ok(JSON.stringify(must(json).templateJson).includes('"auth":"password"'));
     assert.equal(must(json).templateYaml, null);
     const yamlText = must(must(yaml).templateYaml);
-    assert.ok(yamlText.includes('type: vless') && yamlText.includes('node-1.example.com'));
+    assert.ok(yamlText.includes('type: vless'));
+    assert.match(yamlText, /node-1\.example\.com/u);
     assert.ok(yamlText.includes('masked'));
     assert.equal(must(yaml).templateJson, null);
     assert.equal(must(broken).templateYaml, null, 'a YAML that cannot be read is not shown');
@@ -220,7 +218,7 @@ describe('the adapters', () => {
       context,
     );
     PanelNodePluginViewSchema.parse(plugin);
-    assert.ok(JSON.stringify(plugin.pluginConfig).includes('hooks.example.com'));
+    assert.match(JSON.stringify(plugin.pluginConfig), /hooks\.example\.com/u);
 
     const infra = adaptInfra(
       read(PANEL_ENDPOINTS.infraProviders, { total: 1, providers: fixtures.providers }).response
