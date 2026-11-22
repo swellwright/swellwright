@@ -265,7 +265,9 @@ t_journal_is_private_and_complete() {
     _log="$R/var/log/swellwright-node-installer.log"
     assert_file "$_log"
     assert_mode_recorded 600 "$_log"
-    assert_contains "$_log" "=== swellwright-node-installer 1.0.0, action: system"
+    # The version in the journal is the one of the installer (a number that is raised with every change of the script).
+    _ver=$(sed -n 's/^INSTALLER_VERSION=//p' "$INSTALLER")
+    assert_contains "$_log" "=== swellwright-node-installer $_ver, action: system"
     assert_contains "$_log" "== System tuning"
     assert_contains "$_log" "OK written: /etc/sysctl.d/99-sw-net.conf"
 }
