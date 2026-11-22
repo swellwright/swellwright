@@ -27,7 +27,7 @@
 
 set -u
 
-INSTALLER_VERSION=1.0.1
+INSTALLER_VERSION=1.0.2
 
 DEFAULT_NODE_PORT=62050
 # The node image is pinned (never :latest). Update the default with the artifact version when the supported node release changes.
@@ -48,9 +48,9 @@ DEFAULT_HAPROXY_VERSION=3.2
 #@step {"id":"certsync","title":"Certificate receiver (restricted rsync key)","readOnly":false,"needsRoot":true,"inFull":true,"params":["CERTSYNC_PUBKEY","NODE_DOMAIN"],"requires":["CERTSYNC_PUBKEY","NODE_DOMAIN"]}
 #@step {"id":"nginx","title":"nginx: SelfSNI site and default site","readOnly":false,"needsRoot":true,"inFull":true,"params":["NODE_DOMAIN"],"requires":["NODE_DOMAIN"]}
 #@step {"id":"haproxy","title":"HAProxy: SNI routing with a default backend","readOnly":false,"needsRoot":true,"inFull":true,"params":["NODE_DOMAIN","NODE_IP","HAPROXY_SOURCE","HAPROXY_VERSION"],"requires":["NODE_DOMAIN","NODE_IP"]}
-#@step {"id":"node","title":"Remnawave node container","readOnly":false,"needsRoot":true,"inFull":true,"params":["NODE_PORT","SECRET_KEY","NODE_IMAGE_TAG"],"requires":["SECRET_KEY"]}
+#@step {"id":"node","title":"Remnawave node container","readOnly":false,"needsRoot":true,"inFull":true,"params":["NODE_PORT","SECRET_KEY","SECRET_KEY_FILE","NODE_IMAGE_TAG"],"requires":["SECRET_KEY"]}
 #@step {"id":"verify","title":"Verify the node","readOnly":true,"needsRoot":true,"inFull":true,"params":["NODE_DOMAIN","NODE_IP","NODE_PORT","NODE_IMAGE_TAG"],"requires":[]}
-#@step {"id":"ssh","title":"SSH: administrator account, keys, root login","readOnly":false,"needsRoot":true,"inFull":false,"params":["SSH_PHASE","NEW_USER","NEW_USER_PUBKEY","NEW_USER_PUBKEY2","NEW_USER_PASSWORD","SSH_DISABLE_ROOT","SSH_DISABLE_PASSWORD"],"requires":["NEW_USER","NEW_USER_PUBKEY"]}
+#@step {"id":"ssh","title":"SSH: administrator account, keys, root and password login","readOnly":false,"needsRoot":true,"inFull":false,"params":["SSH_PHASE","NEW_USER","NEW_USER_PUBKEY","NEW_USER_PUBKEY2","NEW_USER_PASSWORD","NEW_USER_PASSWORD_FILE","SSH_DISABLE_ROOT","SSH_DISABLE_PASSWORD"],"requires":["NEW_USER","NEW_USER_PUBKEY"]}
 #@step {"id":"rename","title":"Rename the node on this server","readOnly":false,"needsRoot":true,"inFull":false,"params":["NODE_DOMAIN","RENAME_FROM","RENAME_ALIAS","NODE_IP"],"requires":["NODE_DOMAIN"]}
 
 # Parameters. pattern and default may name a constant of this file as "@NAME": the manifest takes its text from the
@@ -59,7 +59,8 @@ DEFAULT_HAPROXY_VERSION=3.2
 #@param {"name":"NODE_DOMAIN","group":"node","description":"Public domain name of the node: SNI, host name and SelfSNI site. Upper case is converted to lower case.","secret":false,"pattern":"@RE_DOMAIN","example":"node1.example.com"}
 #@param {"name":"NODE_IP","group":"node","description":"Public IPv4 address of this server; HAProxy binds it on port 443.","secret":false,"pattern":"@RE_IPV4","example":"192.0.2.10"}
 #@param {"name":"NODE_PORT","group":"node","description":"TCP port of the node API (panel to node).","secret":false,"pattern":"@RE_PORT","default":"@DEFAULT_NODE_PORT","example":"62050"}
-#@param {"name":"SECRET_KEY","group":"node","description":"Node secret key from the panel (the SECRET_KEY of the compose file the panel shows for the node). 16 to 8192 characters of letters, digits and + / = _ . : -. Kept only in the compose file, mode 600.","secret":true,"pattern":"@RE_SECRET"}
+#@param {"name":"SECRET_KEY","group":"node","description":"Node secret key from the panel (the SECRET_KEY of the compose file the panel shows for the node). 16 to 8192 characters of letters, digits and + / = _ . : -. Kept only in the compose file, mode 600. Or give SECRET_KEY_FILE.","secret":true,"pattern":"@RE_SECRET"}
+#@param {"name":"SECRET_KEY_FILE","group":"node","description":"Path of a file that holds the node secret key instead of SECRET_KEY: a regular file (not a link) owned by root or by the user running the installer, mode 600 or 400, one line, at most 16 KiB. Giving both is refused. Also the option --secret-file SECRET_KEY=PATH.","secret":false,"pattern":"@RE_PATH","example":"/run/secrets/node-secret-key"}
 #@param {"name":"PANEL_ALLOW_IP","group":"node","description":"IPv4 addresses (space separated) that may reach the node API port: the panel. Nobody else can.","secret":false,"pattern":"@RE_IPV4_LIST","example":"192.0.2.20 198.51.100.7"}
 #@param {"name":"SSH_PORT","group":"node","description":"SSH port that the firewall keeps open. Default: the port sshd reports, else 22.","secret":false,"pattern":"@RE_PORT","default":"22","example":"22"}
 #@param {"name":"CERTSYNC_PUBKEY","group":"node","description":"Public key of whatever delivers certificates to /opt/certs. Installed for the user certsync, limited to rrsync in that directory (command=, restrict). Empty: the receiver is not set up and full skips it.","secret":false,"pattern":"@RE_PUBKEY","example":"ssh-ed25519 AAAA... sender@example"}
@@ -69,13 +70,14 @@ DEFAULT_HAPROXY_VERSION=3.2
 #@param {"name":"DOCKER_SOURCE","group":"node","description":"apt: Docker's apt repository with its signing key checked against a pinned fingerprint. script: the get.docker.com convenience script.","secret":false,"enum":["apt","script"],"default":"apt"}
 #@param {"name":"HAPROXY_SOURCE","group":"node","description":"auto: the PPA on Ubuntu, the distribution package on Debian. ppa: the vbernat PPA of HAPROXY_VERSION. distro: the distribution package.","secret":false,"enum":["auto","ppa","distro"],"default":"auto"}
 #@param {"name":"HAPROXY_VERSION","group":"node","description":"HAProxy series for the PPA (major.minor).","secret":false,"pattern":"@RE_VERSION2","default":"@DEFAULT_HAPROXY_VERSION","example":"3.2"}
-#@param {"name":"SSH_PHASE","group":"node","description":"user: create the administrator and its keys. root: close root login (needs an administrator). all: both.","secret":false,"enum":["user","root","all"],"default":"all"}
+#@param {"name":"SSH_PHASE","group":"node","description":"user: create the administrator and its keys. root: close root login, and password login when asked, once an administrator can really log in (the report of the step shows who counts). all: both.","secret":false,"enum":["user","root","all"],"default":"all"}
 #@param {"name":"NEW_USER","group":"node","description":"Administrator account with sudo (not required for SSH_PHASE=root). Not root and not certsync.","secret":false,"pattern":"@RE_USER","example":"admin"}
 #@param {"name":"NEW_USER_PUBKEY","group":"node","description":"Public SSH key of the administrator (not required for SSH_PHASE=root).","secret":false,"pattern":"@RE_PUBKEY","example":"ssh-ed25519 AAAA... admin@example"}
 #@param {"name":"NEW_USER_PUBKEY2","group":"node","description":"Optional second (backup) public SSH key of the administrator.","secret":false,"pattern":"@RE_PUBKEY","example":"ssh-ed25519 AAAA... backup@example"}
-#@param {"name":"NEW_USER_PASSWORD","group":"node","description":"Password of a newly created administrator (sudo needs it). Required without a terminal. Only through the environment or an env file, never logged.","secret":true,"pattern":"@RE_PASSWORD"}
-#@param {"name":"SSH_DISABLE_ROOT","group":"node","description":"Close root login over SSH (only when an administrator exists).","secret":false,"enum":["yes","no"],"default":"yes"}
-#@param {"name":"SSH_DISABLE_PASSWORD","group":"node","description":"Close password login over SSH (only when an administrator has a key). Check the key login in another window first.","secret":false,"enum":["yes","no"],"default":"no"}
+#@param {"name":"NEW_USER_PASSWORD","group":"node","description":"Password of a newly created administrator (sudo needs it). Required without a terminal. Only through the environment, an env file or NEW_USER_PASSWORD_FILE, never logged.","secret":true,"pattern":"@RE_PASSWORD"}
+#@param {"name":"NEW_USER_PASSWORD_FILE","group":"node","description":"Path of a file that holds the password of the new administrator instead of NEW_USER_PASSWORD: same rules as SECRET_KEY_FILE. Giving both is refused. Also the option --secret-file NEW_USER_PASSWORD=PATH.","secret":false,"pattern":"@RE_PATH","example":"/run/secrets/admin-password"}
+#@param {"name":"SSH_DISABLE_ROOT","group":"node","description":"Close root login over SSH (only when an administrator can really log in: see the README, section SSH).","secret":false,"enum":["yes","no"],"default":"yes"}
+#@param {"name":"SSH_DISABLE_PASSWORD","group":"node","description":"Close password login over SSH (only when an administrator can really log in with a key). Check the key login in another window first.","secret":false,"enum":["yes","no"],"default":"no"}
 #@param {"name":"RENAME_FROM","group":"node","description":"The former domain in the rename step. Default: the domain from the saved configuration.","secret":false,"pattern":"@RE_DOMAIN","example":"node1.example.com"}
 #@param {"name":"RENAME_ALIAS","group":"node","description":"Domains (space separated) that nginx and HAProxy keep accepting besides the new one, until clients have the new name.","secret":false,"pattern":"@RE_DOMAIN_LIST","example":"node1.example.com"}
 #@param {"name":"INSTALL_MODE","group":"node","description":"new: a node that is not in the panel yet. redeploy: an existing node on a new or reinstalled server (changes the closing checklist).","secret":false,"enum":["new","redeploy"],"default":"new"}
@@ -86,7 +88,11 @@ DEFAULT_HAPROXY_VERSION=3.2
 #@param {"name":"NO_COLOR","group":"installer","description":"Any non-empty value switches colours off (no-color.org).","secret":false,"example":"1"}
 
 # Parameters read from the environment, an env file and the saved configuration (the group node above).
-PARAM_NAMES="NODE_DOMAIN NODE_IP NODE_PORT SECRET_KEY PANEL_ALLOW_IP SSH_PORT CERTSYNC_PUBKEY NODE_IMAGE_TAG FAIL2BAN_IGNORE_EXTRA BASE_UPGRADE DOCKER_SOURCE HAPROXY_SOURCE HAPROXY_VERSION SSH_PHASE NEW_USER NEW_USER_PUBKEY NEW_USER_PUBKEY2 NEW_USER_PASSWORD SSH_DISABLE_ROOT SSH_DISABLE_PASSWORD RENAME_FROM RENAME_ALIAS INSTALL_MODE"
+PARAM_NAMES="NODE_DOMAIN NODE_IP NODE_PORT SECRET_KEY SECRET_KEY_FILE PANEL_ALLOW_IP SSH_PORT CERTSYNC_PUBKEY NODE_IMAGE_TAG FAIL2BAN_IGNORE_EXTRA BASE_UPGRADE DOCKER_SOURCE HAPROXY_SOURCE HAPROXY_VERSION SSH_PHASE NEW_USER NEW_USER_PUBKEY NEW_USER_PUBKEY2 NEW_USER_PASSWORD NEW_USER_PASSWORD_FILE SSH_DISABLE_ROOT SSH_DISABLE_PASSWORD RENAME_FROM RENAME_ALIAS INSTALL_MODE"
+# The parameters that are secrets (the manifest says secret: true). Each can be given as NAME_FILE=path instead of NAME.
+SECRET_PARAMS="SECRET_KEY NEW_USER_PASSWORD"
+# The largest file that may hold a secret (the longest secret is 8192 characters).
+SECRET_FILE_MAX=16384
 # Parameters that are saved to the configuration file (never a secret).
 SAVED_PARAMS="NODE_DOMAIN NODE_IP NODE_PORT SSH_PORT CERTSYNC_PUBKEY PANEL_ALLOW_IP FAIL2BAN_IGNORE_EXTRA"
 # What `full` runs, in this order.
@@ -106,6 +112,8 @@ RE_VERSION2='^[0-9]{1,2}\.[0-9]{1,2}$'
 RE_USER='^[a-z_][a-z0-9_-]{0,31}$'
 RE_PASSWORD='^[ -~]{8,128}$'
 RE_DOMAIN_LIST='^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,63}|xn--[a-z0-9-]{1,59})( ([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,63}|xn--[a-z0-9-]{1,59}))*$'
+# An absolute path of plain characters (no space, quote or shell syntax); the length is checked by v_path.
+RE_PATH='^/[A-Za-z0-9._/@+=,:-]+$'
 
 # Paths. R is empty in production. The names without $R are what configuration files and commands see.
 R=${SW_TEST_ROOT:-}
@@ -308,6 +316,7 @@ v_domain_list() {
 }
 v_port() { re_match "$1" "$RE_PORT"; }
 v_secret() { re_match "$1" "$RE_SECRET" && [ "${#1}" -le 8192 ]; }
+v_path() { re_match "$1" "$RE_PATH" && [ "${#1}" -le 4096 ]; }
 v_user() { re_match "$1" "$RE_USER" && [ "$1" != root ] && [ "$1" != "$CERT_USER" ]; }
 # A unicast address that can be the address of a server: not 0.x, not loopback, not multicast or above.
 ip_usable() {
@@ -330,6 +339,7 @@ param_valid() {
         NODE_IP) v_ipv4 "$_pv" ;;
         NODE_PORT|SSH_PORT) v_port "$_pv" ;;
         SECRET_KEY) v_secret "$_pv" ;;
+        SECRET_KEY_FILE|NEW_USER_PASSWORD_FILE) v_path "$_pv" ;;
         PANEL_ALLOW_IP) v_ips "$_pv" ;;
         CERTSYNC_PUBKEY|NEW_USER_PUBKEY|NEW_USER_PUBKEY2) re_match "$_pv" "$RE_PUBKEY" ;;
         NODE_IMAGE_TAG) re_match "$_pv" "$RE_TAG" ;;
@@ -355,6 +365,7 @@ param_hint() {
         NODE_IP) echo "a public IPv4 address such as 192.0.2.10" ;;
         NODE_PORT|SSH_PORT) echo "a TCP port from 1 to 65535" ;;
         SECRET_KEY) echo "the key from the panel (letters, digits and + / = _ . : -, 16 to 8192 characters)" ;;
+        SECRET_KEY_FILE|NEW_USER_PASSWORD_FILE) echo "an absolute path of letters, digits and . _ / @ + = , : - (up to 4096 characters)" ;;
         PANEL_ALLOW_IP) echo "IPv4 addresses separated by spaces (not 0.x, 127.x or 224 and above)" ;;
         CERTSYNC_PUBKEY|NEW_USER_PUBKEY|NEW_USER_PUBKEY2) echo "a public key: ssh-ed25519, ssh-rsa or ecdsa-sha2-nistp256/384/521, the key, an optional comment" ;;
         NODE_IMAGE_TAG) echo "a Docker image tag (letters, digits, _ . -, up to 128 characters)" ;;
@@ -424,6 +435,46 @@ check_env_file() {
     case $_em in 600|400|0600|0400) ;; *) die "$1 must have mode 600 (it is $_em): it may hold secrets" ;; esac
     _eo=$(stat -c '%u' "$1" 2>/dev/null)
     [ "$_eo" = "$(id -u)" ] || die "$1 must be owned by the user running the installer"
+}
+
+# A secret can be given as a file: NAME_FILE=path instead of NAME (the environment, an env file or the option --secret-file
+# NAME=path). The file is read here, once, before anything is validated. It must be a regular file (a link is refused: the
+# caller named a file, not what it points to), owned by root or by the user running the installer, mode 600 or 400, one line
+# (one final line break is removed) and not larger than SECRET_FILE_MAX. Giving NAME as well is refused as ambiguous. The
+# value is never printed; the journal says only that a file was used.
+resolve_secret_files() {
+    for _sn in $SECRET_PARAMS; do
+        eval "_sv=\${$_sn:-}; _sf=\${${_sn}_FILE:-}"
+        [ -n "$_sf" ] || continue
+        [ -z "$_sv" ] || die "$_sn and ${_sn}_FILE are both given: give only one of them (the file is the safer way)"
+        v_path "$_sf" || die "${_sn}_FILE: expected $(param_hint "${_sn}_FILE")"
+        [ ! -L "$_sf" ] || die "${_sn}_FILE: $_sf is a symbolic link: give the file itself"
+        [ -e "$_sf" ] || die "${_sn}_FILE: $_sf does not exist"
+        [ -f "$_sf" ] || die "${_sn}_FILE: $_sf is not a regular file"
+        _sm=$(stat -c '%a' "$_sf" 2>/dev/null) || die "Cannot read the mode of $_sf"
+        case $_sm in 600|400|0600|0400) ;; *) die "${_sn}_FILE: $_sf must have mode 600 or 400 (it is $_sm): it holds a secret" ;; esac
+        _so=$(stat -c '%u' "$_sf" 2>/dev/null) || die "Cannot read the owner of $_sf"
+        case $_so in 0|"$(id -u)") ;; *) die "${_sn}_FILE: $_sf must be owned by root or by the user running the installer" ;; esac
+        _ss=$(stat -c '%s' "$_sf" 2>/dev/null) || die "Cannot read the size of $_sf"
+        [ "$_ss" -gt 0 ] || die "${_sn}_FILE: $_sf is empty"
+        [ "$_ss" -le "$SECRET_FILE_MAX" ] || die "${_sn}_FILE: $_sf is larger than $SECRET_FILE_MAX bytes"
+        _sl=; _sx=
+        { IFS= read -r _sl; IFS= read -r _sx; _sr=$?; } <"$_sf"
+        { [ "$_sr" -ne 0 ] && [ -z "$_sx" ]; } || die "${_sn}_FILE: $_sf must hold one line (one final line break is allowed)"
+        [ -n "$_sl" ] || die "${_sn}_FILE: $_sf is empty"
+        eval "$_sn=\$_sl"
+        ASKED="$ASKED $_sn"
+        note "$_sn is read from ${_sn}_FILE ($_sf)"
+    done
+    _sl=; _sx=
+}
+
+# --secret-file NAME=PATH is the same as NAME_FILE=PATH (an option beats the environment).
+secret_file_option() {
+    case $1 in *=*) ;; *) die "--secret-file needs NAME=PATH, for example SECRET_KEY=/run/secrets/node-secret-key" ;; esac
+    _on=${1%%=*}
+    case " $SECRET_PARAMS " in *" $_on "*) ;; *) die "--secret-file: $_on is not a secret parameter (they are: $SECRET_PARAMS)" ;; esac
+    eval "${_on}_FILE=\${1#*=}"
 }
 
 param_check() {
@@ -608,7 +659,7 @@ ask_secret() {
     if [ -n "${SECRET_KEY:-}" ] && { is_asked SECRET_KEY || [ "$NONINTERACTIVE" = 1 ]; }; then return 0; fi
     _cur=$(current_secret)
     if [ "$NONINTERACTIVE" = 1 ]; then
-        [ -n "$_cur" ] || die "SECRET_KEY is required: set it in the environment or in the --env-file file"
+        [ -n "$_cur" ] || die "SECRET_KEY is required: set it in the environment, in the --env-file file or as SECRET_KEY_FILE"
         SECRET_KEY=$_cur
         param_check SECRET_KEY
         return 0
@@ -1387,6 +1438,15 @@ step_verify() {
     if [ "$_prl" = no ]; then res ok "SSH: root login" "closed"; else res warn "SSH: root login" "${_prl:-?} (no expected, ssh step)"; fi
     _pwa=$(sshd -T 2>/dev/null | awk '$1=="passwordauthentication"{print $2}')
     if [ "$_pwa" = no ]; then res ok "SSH: password login" "closed"; else res warn "SSH: password login" "${_pwa:-?} (open; the ssh step with SSH_DISABLE_PASSWORD=yes closes it)"; fi
+    # The accounts the ssh step would count as administrators (the same rules it applies before it closes anything).
+    ssh_admins_scan
+    if [ -n "$ADMINS_OK" ]; then
+        if [ -n "$ADMINS_NOT" ]; then res ok "SSH: administrators with key login" "$ADMINS_OK (not counted: $(ssh_admins_why))"; else res ok "SSH: administrators with key login" "$ADMINS_OK"; fi
+    elif [ "$_prl" = no ] && [ "$_pwa" = no ]; then
+        res fail "SSH: administrators with key login" "none, and root and password login are closed: $(ssh_admins_why)"
+    else
+        res warn "SSH: administrators with key login" "none, the ssh step would not close root or password login: $(ssh_admins_why)"
+    fi
 
     sect "Answers from outside"
     if [ -n "${NODE_DOMAIN:-}" ] && [ -n "${NODE_IP:-}" ]; then
@@ -1411,25 +1471,349 @@ step_verify() {
 
 # ---------------------------------------------------------------- SSH
 
-# Is there a member of the sudo group with a key in authorized_keys?
-ssh_admin_with_key() {
-    for _m in $(getent group sudo | cut -d: -f4 | tr ',' ' '); do
-        _mh=$(getent passwd "$_m" | cut -d: -f6)
-        [ -n "$_mh" ] || continue
-        grep -Eq '(^|[[:space:]])(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)) ' "$_mh/.ssh/authorized_keys" 2>/dev/null && return 0
-    done
-    return 1
-}
-
 # Does the account have a usable password? (adduser --disabled-password leaves it locked: status L.)
 has_password() { [ "$(passwd -S "$1" 2>/dev/null | awk '{print $2}')" = P ]; }
 
+# ---- who counts as an administrator
+#
+# Root login, and password login, may be closed only when somebody else can really log in and administer the server. Being a
+# member of the sudo group is not enough (found on a real server: an account of the hosting provider sat in the group, had no
+# key, and root login was closed with nobody able to log in). An account counts only when every rule below holds; the first
+# rule that fails is its reason, in words, so that the operator knows what to fix.
+#   1. It is a real account: it exists, is neither root nor the certificate receiver, has an ordinary user id (UID_MIN to
+#      UID_MAX of login.defs, 1000 to 60000 without it) and is a member of the sudo group (as a member or by its primary group).
+#   2. sshd lets it in with a key. Asked of `sshd -T -C user=...`, which applies the Match blocks: PubkeyAuthentication is on,
+#      AuthenticationMethods does not ask for more than a key, and AllowUsers, DenyUsers, AllowGroups and DenyGroups do not
+#      keep it out.
+#   3. The account is not disabled: its login shell is a real executable shell (not nologin, not false), its expiry date has not
+#      passed, and a locked password is fine only when sshd uses PAM (without PAM sshd refuses a locked account even for a key).
+#   4. A key can be read where sshd looks (AuthorizedKeysFile): the file, ~/.ssh and the home directory belong to the account or
+#      to root and cannot be written by group or others (StrictModes; skipped when sshd runs without it), the account can read the
+#      file, and at least one line is a valid key (ssh-keygen -l) that gives a shell: no command=, and neither restrict nor
+#      no-pty unless a later pty switches the terminal on again.
+#   5. It can become root: sudo is installed, sudoers does not refuse it, and it has a password or a NOPASSWD rule.
+
+# The path for the screen: the fake root of the tests is not part of what the operator sees.
+rp() { printf '%s' "${1#"$R"}"; }
+
+# The words of every line of an `sshd -T` dump that starts with the key $1 (the dump is $2), one per line; and the first word.
+sshd_words() { printf '%s\n' "$2" | awk -v k="$1" '$1 == k { for (i = 2; i <= NF; i++) print $i }'; }
+sshd_word() { printf '%s\n' "$2" | awk -v k="$1" '$1 == k { print $2; exit }'; }
+
+# ssh_acl_reason NAME DUMP: why AllowUsers, DenyUsers, AllowGroups or DenyGroups keep the account out (nothing when they do not).
+# sshd matches the patterns with * and ?, as the patterns of case do. A user@host entry is taken by its user part when it
+# allows, and ignored when it denies (a deny limited to a host does not keep the account out everywhere).
+ssh_acl_reason() {
+    _ar_groups=" $(id -Gn "$1" 2>/dev/null) "
+    _ar_list=$(sshd_words denyusers "$2")
+    while IFS= read -r _ar_p; do
+        [ -n "$_ar_p" ] || continue
+        case $_ar_p in *@*) continue ;; esac
+        # shellcheck disable=SC2254
+        case $1 in $_ar_p) echo "DenyUsers keeps it out"; return 0 ;; esac
+    done <<EOF
+$_ar_list
+EOF
+    _ar_list=$(sshd_words denygroups "$2")
+    while IFS= read -r _ar_p; do
+        [ -n "$_ar_p" ] || continue
+        for _ar_g in $_ar_groups; do
+            # shellcheck disable=SC2254
+            case $_ar_g in $_ar_p) echo "DenyGroups keeps it out (group $_ar_g)"; return 0 ;; esac
+        done
+    done <<EOF
+$_ar_list
+EOF
+    _ar_list=$(sshd_words allowusers "$2")
+    if [ -n "$_ar_list" ]; then
+        _ar_hit=0
+        while IFS= read -r _ar_p; do
+            _ar_u=${_ar_p%%@*}
+            # shellcheck disable=SC2254
+            case $1 in $_ar_u) _ar_hit=1 ;; esac
+        done <<EOF
+$_ar_list
+EOF
+        [ "$_ar_hit" = 1 ] || { echo "AllowUsers does not list it"; return 0; }
+    fi
+    _ar_list=$(sshd_words allowgroups "$2")
+    if [ -n "$_ar_list" ]; then
+        _ar_hit=0
+        while IFS= read -r _ar_p; do
+            for _ar_g in $_ar_groups; do
+                # shellcheck disable=SC2254
+                case $_ar_g in $_ar_p) _ar_hit=1 ;; esac
+            done
+        done <<EOF
+$_ar_list
+EOF
+        [ "$_ar_hit" = 1 ] || { echo "AllowGroups does not list any of its groups"; return 0; }
+    fi
+    return 0
+}
+
+# ssh_path_reason PATH UID: why StrictModes would refuse the path (it must belong to the account or to root and must not be
+# writable by group or others); nothing when it is fine.
+ssh_path_reason() {
+    _pr_m=$(stat -L -c '%a' "$1" 2>/dev/null) || { echo "cannot read the mode of $(rp "$1")"; return 0; }
+    _pr_o=$(stat -L -c '%u' "$1" 2>/dev/null) || { echo "cannot read the owner of $(rp "$1")"; return 0; }
+    case $_pr_o in 0|"$2") ;; *) echo "$(rp "$1") is owned by user id $_pr_o, not by the account or root (StrictModes)"; return 0 ;; esac
+    if [ $((0$_pr_m & 022)) -ne 0 ]; then
+        echo "$(rp "$1") can be written by group or others, mode $_pr_m (StrictModes)"
+    fi
+    return 0
+}
+
+# ssh_key_survey FILE: prints "GOOD FORCED RESTRICTED INVALID", the number of lines of an authorized_keys file that give a
+# shell by key, that force a command (command=), that have no terminal (restrict or no-pty, with no pty after it), and that are
+# not a key at all (ssh-keygen -l refuses a copy of the line). Other options (from=, no-agent-forwarding ...) do not matter.
+ssh_key_survey() {
+    _ks_g=0; _ks_f=0; _ks_r=0; _ks_i=0
+    _ks_t=$(mktemp) || return 1
+    _ks_tab=$(printf '\t')
+    while IFS= read -r _ks_l || [ -n "$_ks_l" ]; do
+        _ks_c=$(printf '%s\n' "$_ks_l" | awk '
+            { line = $0; n = length(line); i = 1
+              while (i <= n && (substr(line, i, 1) == " " || substr(line, i, 1) == "\t")) i++
+              if (i > n || substr(line, i, 1) == "#") exit
+              start = i; q = 0
+              for (; i <= n; i++) {
+                  c = substr(line, i, 1)
+                  if (c == "\\" && q) { i++; continue }
+                  if (c == "\"") { q = !q; continue }
+                  if (!q && (c == " " || c == "\t")) break
+              }
+              first = substr(line, start, i - start); rest = substr(line, i); sub(/^[ \t]+/, "", rest)
+              if (first ~ /^(ssh-|ecdsa-|sk-)/) { opts = ""; key = first " " rest } else { opts = first; key = rest }
+              pty = 1; cmd = 0; m = length(opts); q = 0; cur = ""
+              for (j = 1; j <= m + 1; j++) {
+                  c = (j <= m) ? substr(opts, j, 1) : ","
+                  if (c == "\\" && q) { cur = cur c substr(opts, j + 1, 1); j++; continue }
+                  if (c == "\"") { q = !q; cur = cur c; continue }
+                  if (c == "," && !q) {
+                      name = tolower(cur); sub(/=.*/, "", name)
+                      if (name == "command") cmd = 1
+                      else if (name == "restrict" || name == "no-pty") pty = 0
+                      else if (name == "pty") pty = 1
+                      cur = ""; continue
+                  }
+                  cur = cur c
+              }
+              class = cmd ? "forced" : (pty ? "plain" : "restricted")
+              print class "\t" key
+            }')
+        [ -n "$_ks_c" ] || continue
+        printf '%s\n' "${_ks_c#*"$_ks_tab"}" >"$_ks_t"
+        if ! ssh-keygen -l -f "$_ks_t" >/dev/null 2>&1 </dev/null; then _ks_i=$((_ks_i + 1)); continue; fi
+        case ${_ks_c%%"$_ks_tab"*} in
+            plain) _ks_g=$((_ks_g + 1)) ;;
+            forced) _ks_f=$((_ks_f + 1)) ;;
+            *) _ks_r=$((_ks_r + 1)) ;;
+        esac
+    done <"$1"
+    rm -f "$_ks_t"
+    printf '%s %s %s %s\n' "$_ks_g" "$_ks_f" "$_ks_r" "$_ks_i"
+}
+
+# ssh_keys_reason FILE HOME UID STRICT: why the key file gives no administrator access (nothing when a line does).
+ssh_keys_reason() {
+    _kr_f=$1
+    [ -e "$_kr_f" ] || { echo "$(rp "$_kr_f") does not exist: no key"; return 0; }
+    [ -f "$_kr_f" ] || { echo "$(rp "$_kr_f") is not a regular file"; return 0; }
+    if [ "$4" = yes ]; then
+        _kr_w=$(ssh_path_reason "$_kr_f" "$3")
+        if [ -z "$_kr_w" ]; then
+            # The account must be able to read it (sshd opens the file as the account).
+            _kr_m=$(stat -L -c '%a' "$_kr_f" 2>/dev/null)
+            _kr_o=$(stat -L -c '%u' "$_kr_f" 2>/dev/null)
+            if [ "$_kr_o" = "$3" ]; then _kr_need=256; else _kr_need=4; fi
+            [ $((0$_kr_m & _kr_need)) -ne 0 ] || _kr_w="$(rp "$_kr_f") cannot be read by the account (mode $_kr_m)"
+        fi
+        if [ -z "$_kr_w" ]; then
+            case $_kr_f in
+                "$2"/*)
+                    _kr_d=$(dirname "$_kr_f")
+                    while :; do
+                        _kr_w=$(ssh_path_reason "$_kr_d" "$3")
+                        [ -z "$_kr_w" ] || break
+                        [ "$_kr_d" != "$2" ] || break
+                        _kr_d=$(dirname "$_kr_d")
+                        [ "$_kr_d" != / ] && [ "$_kr_d" != . ] || break
+                    done ;;
+            esac
+        fi
+        [ -z "$_kr_w" ] || { echo "$_kr_w"; return 0; }
+    fi
+    read -r _kr_g _kr_c _kr_r _kr_i <<EOF
+$(ssh_key_survey "$_kr_f")
+EOF
+    [ "${_kr_g:-0}" -eq 0 ] || return 0
+    _kr_p=
+    [ "${_kr_c:-0}" -eq 0 ] || _kr_p="$_kr_p, ${_kr_c} with a forced command (command=)"
+    [ "${_kr_r:-0}" -eq 0 ] || _kr_p="$_kr_p, ${_kr_r} without a terminal (restrict or no-pty)"
+    [ "${_kr_i:-0}" -eq 0 ] || _kr_p="$_kr_p, ${_kr_i} that are not a valid key"
+    if [ -z "$_kr_p" ]; then echo "$(rp "$_kr_f") holds no key"; else echo "$(rp "$_kr_f") holds no key that gives a shell (${_kr_p#, })"; fi
+    return 0
+}
+
+# ssh_keyfile_path TOKEN NAME UID HOME: an AuthorizedKeysFile entry with %h %u %U %% replaced; relative ones are in the home.
+ssh_keyfile_path() {
+    _kp_x=$1; _kp_o=
+    while [ -n "$_kp_x" ]; do
+        case $_kp_x in
+            '%%'*) _kp_o="$_kp_o%"; _kp_x=${_kp_x#'%%'} ;;
+            '%h'*) _kp_o="$_kp_o$4"; _kp_x=${_kp_x#'%h'} ;;
+            '%u'*) _kp_o="$_kp_o$2"; _kp_x=${_kp_x#'%u'} ;;
+            '%U'*) _kp_o="$_kp_o$3"; _kp_x=${_kp_x#'%U'} ;;
+            *) _kp_c=${_kp_x%"${_kp_x#?}"}; _kp_o="$_kp_o$_kp_c"; _kp_x=${_kp_x#?} ;;
+        esac
+    done
+    case $_kp_o in /*) ;; *) _kp_o="$4/$_kp_o" ;; esac
+    printf '%s' "$_kp_o"
+}
+
+# ssh_admin_check NAME: 0 when the account counts as an administrator (the rules above); otherwise 1 and ADMIN_WHY says why.
+ssh_admin_check() {
+    ADMIN_WHY=
+    _ac_n=$1
+    case $_ac_n in
+        root) ADMIN_WHY="root is not counted: the point is a second way in"; return 1 ;;
+        "$CERT_USER") ADMIN_WHY="$CERT_USER only receives certificates (a restricted key)"; return 1 ;;
+    esac
+    _ac_pw=$(getent passwd "$_ac_n" 2>/dev/null)
+    [ -n "$_ac_pw" ] || { ADMIN_WHY="the account does not exist (the group lists a name that passwd does not know)"; return 1; }
+    _ac_uid=$(printf '%s\n' "$_ac_pw" | cut -d: -f3)
+    _ac_home=$(printf '%s\n' "$_ac_pw" | cut -d: -f6)
+    _ac_shell=$(printf '%s\n' "$_ac_pw" | cut -d: -f7)
+    _ac_min=$(sed -n 's/^UID_MIN[[:space:]]\{1,\}\([0-9]\{1,\}\).*/\1/p' "$R/etc/login.defs" 2>/dev/null | head -n 1)
+    _ac_max=$(sed -n 's/^UID_MAX[[:space:]]\{1,\}\([0-9]\{1,\}\).*/\1/p' "$R/etc/login.defs" 2>/dev/null | head -n 1)
+    : "${_ac_min:=1000}" "${_ac_max:=60000}"
+    case $_ac_uid in ''|*[!0-9]*) ADMIN_WHY="its user id is not a number"; return 1 ;; esac
+    if [ "$_ac_uid" -lt "$_ac_min" ] || [ "$_ac_uid" -gt "$_ac_max" ]; then
+        ADMIN_WHY="user id $_ac_uid is not an ordinary account ($_ac_min to $_ac_max)"; return 1
+    fi
+    case $_ac_shell in
+        */nologin|*/false) ADMIN_WHY="its login shell is $(rp "$_ac_shell"): no session can be opened"; return 1 ;;
+    esac
+    [ -n "$_ac_shell" ] || _ac_shell=/bin/sh
+    [ -x "$_ac_shell" ] || { ADMIN_WHY="its login shell $(rp "$_ac_shell") is missing or not executable"; return 1; }
+
+    # sshd's own view of this account (the Match blocks are applied).
+    _ac_cfg=$(sshd -T -C "user=$_ac_n,host=localhost,addr=127.0.0.1" 2>/dev/null) || { ADMIN_WHY="sshd -T does not accept the configuration"; return 1; }
+    [ "$(sshd_word pubkeyauthentication "$_ac_cfg")" != no ] || { ADMIN_WHY="sshd has PubkeyAuthentication off for it"; return 1; }
+    _ac_am=$(sshd_words authenticationmethods "$_ac_cfg")
+    if [ -n "$_ac_am" ]; then
+        _ac_ok=0
+        for _ac_m in $_ac_am; do case $_ac_m in any|publickey) _ac_ok=1 ;; esac; done
+        [ "$_ac_ok" = 1 ] || { ADMIN_WHY="AuthenticationMethods asks for more than a key ($_ac_am)"; return 1; }
+    fi
+    _ac_r=$(ssh_acl_reason "$_ac_n" "$_ac_cfg")
+    [ -z "$_ac_r" ] || { ADMIN_WHY=$_ac_r; return 1; }
+
+    # Locked, expired, inactive.
+    case $(passwd -S "$_ac_n" 2>/dev/null | awk '{print $2}') in
+        L|LK) [ "$(sshd_word usepam "$_ac_cfg")" != no ] || { ADMIN_WHY="its password is locked and sshd runs without PAM, which refuses a locked account even for a key"; return 1; } ;;
+    esac
+    _ac_sh=$(getent shadow "$_ac_n" 2>/dev/null)
+    if [ -n "$_ac_sh" ]; then
+        _ac_r=$(printf '%s\n' "$_ac_sh" | awk -F: -v t="$(($(date +%s) / 86400))" '
+            $8 != "" && $8 + 0 >= 0 && t >= $8 + 0 { print "the account has expired"; exit }
+            $5 != "" && $5 + 0 < 99999 && $7 != "" && $7 + 0 >= 0 && t > $3 + $5 + $7 { print "its password expired and the inactivity period has passed, so the account is locked out"; exit }')
+        [ -z "$_ac_r" ] || { ADMIN_WHY=$_ac_r; return 1; }
+    fi
+
+    # A key that sshd reads and accepts.
+    _ac_strict=$(sshd_word strictmodes "$_ac_cfg"); [ "$_ac_strict" = no ] || _ac_strict=yes
+    command -v ssh-keygen >/dev/null 2>&1 || { ADMIN_WHY="ssh-keygen is not installed, so the keys cannot be checked"; return 1; }
+    _ac_files=$(sshd_words authorizedkeysfile "$_ac_cfg")
+    [ -n "$_ac_files" ] || _ac_files=".ssh/authorized_keys .ssh/authorized_keys2"
+    _ac_first=; _ac_found=0; _ac_any=0
+    for _ac_t in $_ac_files; do
+        [ "$_ac_t" != none ] || continue
+        _ac_any=1
+        _ac_f=$(ssh_keyfile_path "$_ac_t" "$_ac_n" "$_ac_uid" "$_ac_home")
+        _ac_r=$(ssh_keys_reason "$_ac_f" "$_ac_home" "$_ac_uid" "$_ac_strict")
+        if [ -z "$_ac_r" ]; then _ac_found=1; break; fi
+        # A file that is not there is only the reason when no other file is: the first existing one tells more.
+        case $_ac_r in *"does not exist"*) [ -n "$_ac_first" ] || _ac_first=$_ac_r ;; *) _ac_first=$_ac_r; break ;; esac
+    done
+    if [ "$_ac_found" != 1 ]; then
+        if [ "$_ac_any" = 0 ]; then ADMIN_WHY="sshd reads no key file (AuthorizedKeysFile none)"; else ADMIN_WHY=$_ac_first; fi
+        return 1
+    fi
+
+    # Becoming root.
+    command -v sudo >/dev/null 2>&1 || { ADMIN_WHY="sudo is not installed, so it cannot become root"; return 1; }
+    _ac_sl=$(sudo -n -l -U "$_ac_n" 2>&1)
+    case $_ac_sl in *"is not allowed to run sudo"*) ADMIN_WHY="sudoers does not let it run sudo"; return 1 ;; esac
+    if ! has_password "$_ac_n"; then
+        case $_ac_sl in *NOPASSWD*) ;; *) ADMIN_WHY="sudo would ask for a password and the account has none (locked or empty), and no NOPASSWD rule applies"; return 1 ;; esac
+    fi
+    return 0
+}
+
+# The accounts the sudo group gives sudo to, one per line: its members, and the accounts whose primary group it is.
+ssh_admin_candidates() {
+    _sc_g=$(getent group sudo 2>/dev/null)
+    _sc_id=$(printf '%s\n' "$_sc_g" | cut -d: -f3)
+    {
+        printf '%s\n' "$_sc_g" | cut -d: -f4 | tr ',' '\n'
+        [ -z "$_sc_id" ] || getent passwd 2>/dev/null | awk -F: -v g="$_sc_id" '$4 == g { print $1 }'
+    } | sed '/^$/d' | sort -u
+}
+
+# ssh_admins_scan: ADMINS_OK is the list of the accounts that count, ADMINS_NOT one "name: reason" line for each one that does
+# not, ADMINS_N the number of accounts examined.
+ssh_admins_scan() {
+    ADMINS_OK=; ADMINS_NOT=; ADMINS_N=0
+    for _as_c in $(ssh_admin_candidates); do
+        ADMINS_N=$((ADMINS_N + 1))
+        if ssh_admin_check "$_as_c"; then ADMINS_OK="$ADMINS_OK $_as_c"; else ADMINS_NOT="$ADMINS_NOT$_as_c: $ADMIN_WHY$NL"; fi
+    done
+    ADMINS_OK=${ADMINS_OK# }
+}
+
+# The reasons of the last scan on one line.
+ssh_admins_why() {
+    if [ "$ADMINS_N" -eq 0 ]; then printf 'the sudo group has no members'; return 0; fi
+    printf '%s' "$ADMINS_NOT" | sed '/^$/d' | tr '\n' ';' | sed 's/;/; /g; s/; $//'
+}
+
+# Shows who counts; nothing is changed. Printed before anything is closed, so the operator sees it first.
+ssh_admins_show() {
+    ssh_admins_scan
+    if [ -n "$ADMINS_OK" ]; then
+        ok "Administrators who can log in with a key: $ADMINS_OK"
+        _ss_f=note
+    else
+        _ss_f=warn
+        if [ "$ADMINS_N" -eq 0 ]; then warn "The sudo group has no members: nobody but root can administer this server"; fi
+    fi
+    while IFS= read -r _ss_l; do
+        [ -z "$_ss_l" ] || "$_ss_f" "not counted: $_ss_l"
+    done <<EOF
+$ADMINS_NOT
+EOF
+    [ -n "$ADMINS_OK" ] || warn "No administrator can log in with a key: root login and password login will not be closed"
+    return 0
+}
+
+# ssh_refuse WHAT: stops the run because no administrator can log in (the scan has been made and shown); the message itself
+# names every account that was examined and the reason it does not count.
+ssh_refuse() {
+    if [ "$ADMINS_N" -eq 0 ]; then
+        die "Refusing to close $1. The sudo group has no members: run the user phase first (closing it now would lose access)"
+    fi
+    die "Refusing to close $1: no member of the sudo group can log in with a key. Examined: $(ssh_admins_why). Fix that and run the step again, or leave it open (SSH_DISABLE_ROOT=no, SSH_DISABLE_PASSWORD=no)"
+}
+
 # An administrator with sudo and keys, then closing root login and, only if asked, password login. SSH_PHASE: user (the account and
 # its keys), root (the closing), all. A caller that logs in as the new account between the two phases cannot lose access.
-# Safety: root login is closed only when the sudo group has a member, password login only when a member has a key, a failed
-# `sshd -t` reverts the change, and the current session is never touched (restart keeps it).
+# Safety: root login and password login are closed only when an administrator can really log in (the rules above: not just a
+# member of the sudo group), the accounts that count and those that do not, with the reason, are shown before anything is
+# closed, a failed `sshd -t` reverts the change, and the current session is never touched (restart keeps it).
 step_ssh() {
-    title "SSH: administrator account, keys, root login"
+    title "SSH: administrator account, keys, root and password login"
     _phase=$SSH_PHASE
     if [ "$_phase" != root ]; then
         warn "Do not close this session until you have checked the login of the new account"
@@ -1440,7 +1824,7 @@ step_ssh() {
         if ! id "$NEW_USER" >/dev/null 2>&1; then
             # sudo asks for a password: an account without one would be an administrator who cannot administer.
             if [ -z "${NEW_USER_PASSWORD:-}" ] && [ "$NONINTERACTIVE" = 1 ]; then
-                die "NEW_USER_PASSWORD is required without a terminal when the account is created (sudo needs a password)"
+                die "NEW_USER_PASSWORD is required without a terminal when the account is created (sudo needs a password): give it, or NEW_USER_PASSWORD_FILE"
             fi
             command -v sudo >/dev/null 2>&1 || apt_install sudo
             adduser --disabled-password --gecos "" "$NEW_USER" || die "adduser failed"
@@ -1468,15 +1852,15 @@ step_ssh() {
         chmod 600 "$_home/.ssh/authorized_keys"
         ok "keys of $NEW_USER written ($(grep -c . "$_home/.ssh/authorized_keys") in authorized_keys)"
     fi
+    # Who can administer this server? Shown before anything is closed (and, after the user phase, what is still missing).
+    ssh_admins_show
     [ "$_phase" = user ] && return 0
 
-    # Never close root login while nobody else can administer the server.
-    if [ -z "$(getent group sudo | cut -d: -f4)" ]; then
-        die "The sudo group has no members: run the user phase first (closing root login now would lose access)"
-    fi
-
+    # Never close root login while nobody else can really log in. The question is not asked when the answer cannot be yes.
     _d=n; [ "$SSH_DISABLE_ROOT" = yes ] && _d=y
+    if [ -z "$ADMINS_OK" ] && [ "$_d" = y ]; then ssh_refuse "root login"; fi
     if confirm "Close root login over SSH (PermitRootLogin no)?" "$_d"; then
+        [ -n "$ADMINS_OK" ] || ssh_refuse "root login"
         _had=0; [ -f "$R/etc/ssh/sshd_config.d/00-sw-hardening.conf" ] && _had=1
         if [ -f "$R/etc/ssh/sshd_config" ]; then
             backup_file "$R/etc/ssh/sshd_config"
@@ -1495,8 +1879,9 @@ step_ssh() {
 
     # Close password login only after the key login was checked in another window: otherwise access can be lost.
     _d=n; [ "$SSH_DISABLE_PASSWORD" = yes ] && _d=y
+    if [ -z "$ADMINS_OK" ] && [ "$_d" = y ]; then ssh_refuse "password login"; fi
     if confirm "Close password login (keys only)? Check a key login in another window first" "$_d"; then
-        ssh_admin_with_key || die "Refusing to close password login: no member of the sudo group has a key in authorized_keys"
+        [ -n "$ADMINS_OK" ] || ssh_refuse "password login"
         printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' | write_file "$R/etc/ssh/sshd_config.d/01-sw-keys-only.conf"
         if ! sshd -t; then
             rm -f "$R/etc/ssh/sshd_config.d/01-sw-keys-only.conf"
@@ -1739,13 +2124,14 @@ ${C_Y}${C_B}Install${C_0}
   ${C_C}nginx${C_0}           SelfSNI and default site        ${C_C}haproxy${C_0}   SNI routing
   ${C_C}node${C_0}            the node container
 ${C_Y}${C_B}Access and control${C_0}
-  ${C_C}ssh${C_0}             administrator, keys, close root login (not part of full)
+  ${C_C}ssh${C_0}             administrator, keys, close root and password login once an administrator can log in (not in full)
   ${C_C}rename${C_0}          rename the node on this server (NODE_DOMAIN = new, RENAME_FROM, RENAME_ALIAS)
   ${C_C}verify${C_0}          read-only checks of a finished node (exit code 2 on a failure)
 ${C_Y}${C_B}Help${C_0}
   ${C_C}menu${C_0}  ${C_C}help${C_0}  ${C_C}version${C_0}  ${C_C}demo${C_0} (shows the appearance, changes nothing)
 
 ${C_B}Options:${C_0}  --env-file FILE (NAME=value lines, mode 600, never executed)   --non-interactive
+             --secret-file NAME=PATH (a secret from a file, mode 600: SECRET_KEY, NEW_USER_PASSWORD; same as NAME_FILE=PATH)
 ${C_B}Parameters${C_0} (environment, --env-file, or the saved $CONF_FILE):
 $(printf '%s\n' "$PARAM_NAMES" | fold -s -w 68 | sed 's/ *$//; s/^/  /')
 ${C_B}Display:${C_0}  NO_COLOR=1  SW_ASCII=1  SW_VERBOSE=1  SW_NONINTERACTIVE=1
@@ -1888,6 +2274,8 @@ main() {
         case $1 in
             --env-file) [ $# -ge 2 ] || die "--env-file needs a file name"; SW_ENV_FILE=$2; shift 2 ;;
             --env-file=*) SW_ENV_FILE=${1#*=}; shift ;;
+            --secret-file) [ $# -ge 2 ] || die "--secret-file needs NAME=PATH"; secret_file_option "$2"; shift 2 ;;
+            --secret-file=*) secret_file_option "${1#*=}"; shift ;;
             --non-interactive) NONINTERACTIVE=1; shift ;;
             -h|--help) ACTION=help; shift ;;
             -V|--version) ACTION=version; shift ;;
@@ -1945,6 +2333,7 @@ main() {
         load_params_file "$SW_ENV_FILE" strict
     fi
     [ -f "$CONF_FILE" ] && load_params_file "$CONF_FILE" lenient
+    case $ACTION in preflight|verify) ;; *) resolve_secret_files ;; esac
     apply_defaults
     validate_params
 

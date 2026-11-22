@@ -13,7 +13,7 @@ A foreign or missing SNI is answered with an ordinary 404, not a dropped connect
 
 ## Requirements
 
-- Debian 12, Ubuntu 22.04 or 24.04, `root`, an IPv4 address on the server, internet access to the package repositories, `download.docker.com` and `nginx.org` (and the HAProxy PPA on Ubuntu). The steps are derived from an installer that has run on Ubuntu servers in production; this script itself is verified by tests with stubbed commands (every step) and, since 1.0.1, by every step (twice each, and `full` on the finished node) on a reset Ubuntu 24.04 server. Debian is supported by the code and covered by stubs only.
+- Debian 12, Ubuntu 22.04 or 24.04, `root`, an IPv4 address on the server, internet access to the package repositories, `download.docker.com` and `nginx.org` (and the HAProxy PPA on Ubuntu). The steps are derived from an installer that has run on Ubuntu servers in production; this script itself is verified by tests with stubbed commands (every step) and, since 1.0.1, by every step (twice each, and `full` on the finished node) on a reset Ubuntu 24.04 server; the rules of the `ssh` step (1.0.2) were also checked against the real sshd there. Debian is supported by the code and covered by stubs only.
 - A domain name for the node whose A record points at the server, and the node's `SECRET_KEY` from the panel.
 - The address of the panel, as the node sees it (`PANEL_ALLOW_IP`).
 
@@ -52,7 +52,18 @@ sh install.sh --non-interactive --env-file /root/node.env verify
 
 Priority of a parameter: the environment, then the env file, then the configuration the installer saved (`/etc/swellwright-node-installer.conf`, never a secret), then the default. Every value is validated, whether it was typed or given, before the first step runs. The steps are idempotent: after a failure fix the cause and run the step (or `full`) again.
 
-`ssh` is not part of `full`: it needs an administrator and keys. Run it when you are ready, in two phases if you want to test the new login between them (`SSH_PHASE=user`, then `SSH_PHASE=root`).
+`ssh` is not part of `full`: it needs an administrator and keys. Run it when you are ready, in two phases if you want to test the new login between them (`SSH_PHASE=user`, then `SSH_PHASE=root`). What it checks before it closes anything is in [SSH: who counts as an administrator](#ssh-who-counts-as-an-administrator).
+
+### Secrets from files
+
+A secret parameter (`SECRET_KEY`, `NEW_USER_PASSWORD`; the manifest marks them `secret: true`) can be given as a file instead of a value: `SECRET_KEY_FILE=/path`, `NEW_USER_PASSWORD_FILE=/path`, in the environment or in the env file, or as the option `--secret-file NAME=PATH`. A program that drives the installer should use this, so that no secret is ever an environment variable or an argument. The file must be a regular file (a symbolic link is refused), owned by root or by the user running the installer, with mode 600 or 400, hold one line (one final line break is removed) and be at most 16 KiB. The value is validated like a typed one. Giving the value as well as the file is refused as ambiguous, whichever of the two is in the environment and which in the env file. The value is never printed; the journal says only `SECRET_KEY is read from SECRET_KEY_FILE (path)`. `preflight` and `verify` do not read the files.
+
+```sh
+install -m 600 /dev/null /root/node-secret
+printf '%s' "$KEY_FROM_THE_PANEL" >/root/node-secret
+SECRET_KEY_FILE=/root/node-secret sh install.sh --non-interactive --env-file /root/node.env node
+sh install.sh --non-interactive --env-file /root/node.env --secret-file SECRET_KEY=/root/node-secret node
+```
 
 ## Steps
 
@@ -70,9 +81,9 @@ Priority of a parameter: the environment, then the env file, then the configurat
 | `certsync` | Certificate receiver (restricted rsync key) | yes | yes | **CERTSYNC_PUBKEY**, **NODE_DOMAIN** |
 | `nginx` | nginx: SelfSNI site and default site | yes | yes | **NODE_DOMAIN** |
 | `haproxy` | HAProxy: SNI routing with a default backend | yes | yes | **NODE_DOMAIN**, **NODE_IP**, HAPROXY_SOURCE, HAPROXY_VERSION |
-| `node` | Remnawave node container | yes | yes | NODE_PORT, **SECRET_KEY**, NODE_IMAGE_TAG |
+| `node` | Remnawave node container | yes | yes | NODE_PORT, **SECRET_KEY**, SECRET_KEY_FILE, NODE_IMAGE_TAG |
 | `verify` | Verify the node | no (read-only) | yes | NODE_DOMAIN, NODE_IP, NODE_PORT, NODE_IMAGE_TAG |
-| `ssh` | SSH: administrator account, keys, root login | yes | no | SSH_PHASE, **NEW_USER**, **NEW_USER_PUBKEY**, NEW_USER_PUBKEY2, NEW_USER_PASSWORD, SSH_DISABLE_ROOT, SSH_DISABLE_PASSWORD |
+| `ssh` | SSH: administrator account, keys, root and password login | yes | no | SSH_PHASE, **NEW_USER**, **NEW_USER_PUBKEY**, NEW_USER_PUBKEY2, NEW_USER_PASSWORD, NEW_USER_PASSWORD_FILE, SSH_DISABLE_ROOT, SSH_DISABLE_PASSWORD |
 | `rename` | Rename the node on this server | yes | no | **NODE_DOMAIN**, RENAME_FROM, RENAME_ALIAS, NODE_IP |
 <!-- manifest:steps:end -->
 
@@ -88,7 +99,8 @@ Read from the environment, an env file or the saved configuration:
 | `NODE_DOMAIN` | yes | - | `node1.example.com` | no | Public domain name of the node: SNI, host name and SelfSNI site. Upper case is converted to lower case. |
 | `NODE_IP` | yes | - | `192.0.2.10` | no | Public IPv4 address of this server; HAProxy binds it on port 443. |
 | `NODE_PORT` | no | `62050` | `62050` | no | TCP port of the node API (panel to node). |
-| `SECRET_KEY` | yes | - | - | yes | Node secret key from the panel (the SECRET_KEY of the compose file the panel shows for the node). 16 to 8192 characters of letters, digits and + / = _ . : -. Kept only in the compose file, mode 600. |
+| `SECRET_KEY` | yes | - | - | yes | Node secret key from the panel (the SECRET_KEY of the compose file the panel shows for the node). 16 to 8192 characters of letters, digits and + / = _ . : -. Kept only in the compose file, mode 600. Or give SECRET_KEY_FILE. |
+| `SECRET_KEY_FILE` | no | - | `/run/secrets/node-secret-key` | no | Path of a file that holds the node secret key instead of SECRET_KEY: a regular file (not a link) owned by root or by the user running the installer, mode 600 or 400, one line, at most 16 KiB. Giving both is refused. Also the option --secret-file SECRET_KEY=PATH. |
 | `PANEL_ALLOW_IP` | yes | - | `192.0.2.20 198.51.100.7` | no | IPv4 addresses (space separated) that may reach the node API port: the panel. Nobody else can. |
 | `SSH_PORT` | no | `22` | `22` | no | SSH port that the firewall keeps open. Default: the port sshd reports, else 22. |
 | `CERTSYNC_PUBKEY` | yes | - | `ssh-ed25519 AAAA... sender@example` | no | Public key of whatever delivers certificates to /opt/certs. Installed for the user certsync, limited to rrsync in that directory (command=, restrict). Empty: the receiver is not set up and full skips it. |
@@ -98,13 +110,14 @@ Read from the environment, an env file or the saved configuration:
 | `DOCKER_SOURCE` | no | `apt` | `apt`, `script` | no | apt: Docker's apt repository with its signing key checked against a pinned fingerprint. script: the get.docker.com convenience script. |
 | `HAPROXY_SOURCE` | no | `auto` | `auto`, `ppa`, `distro` | no | auto: the PPA on Ubuntu, the distribution package on Debian. ppa: the vbernat PPA of HAPROXY_VERSION. distro: the distribution package. |
 | `HAPROXY_VERSION` | no | `3.2` | `3.2` | no | HAProxy series for the PPA (major.minor). |
-| `SSH_PHASE` | no | `all` | `user`, `root`, `all` | no | user: create the administrator and its keys. root: close root login (needs an administrator). all: both. |
+| `SSH_PHASE` | no | `all` | `user`, `root`, `all` | no | user: create the administrator and its keys. root: close root login, and password login when asked, once an administrator can really log in (the report of the step shows who counts). all: both. |
 | `NEW_USER` | yes | - | `admin` | no | Administrator account with sudo (not required for SSH_PHASE=root). Not root and not certsync. |
 | `NEW_USER_PUBKEY` | yes | - | `ssh-ed25519 AAAA... admin@example` | no | Public SSH key of the administrator (not required for SSH_PHASE=root). |
 | `NEW_USER_PUBKEY2` | no | - | `ssh-ed25519 AAAA... backup@example` | no | Optional second (backup) public SSH key of the administrator. |
-| `NEW_USER_PASSWORD` | no | - | - | yes | Password of a newly created administrator (sudo needs it). Required without a terminal. Only through the environment or an env file, never logged. |
-| `SSH_DISABLE_ROOT` | no | `yes` | `yes`, `no` | no | Close root login over SSH (only when an administrator exists). |
-| `SSH_DISABLE_PASSWORD` | no | `no` | `yes`, `no` | no | Close password login over SSH (only when an administrator has a key). Check the key login in another window first. |
+| `NEW_USER_PASSWORD` | no | - | - | yes | Password of a newly created administrator (sudo needs it). Required without a terminal. Only through the environment, an env file or NEW_USER_PASSWORD_FILE, never logged. |
+| `NEW_USER_PASSWORD_FILE` | no | - | `/run/secrets/admin-password` | no | Path of a file that holds the password of the new administrator instead of NEW_USER_PASSWORD: same rules as SECRET_KEY_FILE. Giving both is refused. Also the option --secret-file NEW_USER_PASSWORD=PATH. |
+| `SSH_DISABLE_ROOT` | no | `yes` | `yes`, `no` | no | Close root login over SSH (only when an administrator can really log in: see the README, section SSH). |
+| `SSH_DISABLE_PASSWORD` | no | `no` | `yes`, `no` | no | Close password login over SSH (only when an administrator can really log in with a key). Check the key login in another window first. |
 | `RENAME_FROM` | no | - | `node1.example.com` | no | The former domain in the rename step. Default: the domain from the saved configuration. |
 | `RENAME_ALIAS` | no | - | `node1.example.com` | no | Domains (space separated) that nginx and HAProxy keep accepting besides the new one, until clients have the new name. |
 | `INSTALL_MODE` | no | `new` | `new`, `redeploy` | no | new: a node that is not in the panel yet. redeploy: an existing node on a new or reinstalled server (changes the closing checklist). |
@@ -122,11 +135,27 @@ Only the environment or an option (`--env-file`, `--non-interactive`):
 | `NO_COLOR` | no | - | `1` | no | Any non-empty value switches colours off (no-color.org). |
 <!-- manifest:installerParams:end -->
 
+## SSH: who counts as an administrator
+
+Closing root login, or password login, is safe only when somebody else can really log in and administer the server. Being a member of the `sudo` group does not show that: on a real server an account of the hosting provider sat in the group, had no key, and an earlier version (1.0.1) closed root login with nobody able to log in. Since 1.0.2 the `ssh` step closes either only when at least one account passes every rule below (one function, used before both closings), and a refusal names every account it looked at and the first rule that each failed, in words.
+
+Candidates are the accounts the `sudo` group gives sudo to: its members and the accounts whose primary group it is. An account counts when:
+
+1. **It is a real account**: it exists in `passwd`, is not `root` and not `certsync`, and has an ordinary user id (`UID_MIN` to `UID_MAX` of `login.defs`, 1000 to 60000 without it).
+2. **sshd lets it in with a key.** Asked of `sshd -T -C user=NAME,host=localhost,addr=127.0.0.1`, which applies the `Match` blocks: `PubkeyAuthentication` is on, `AuthenticationMethods` does not ask for more than a key (`any`, or an alternative that is `publickey` alone), and `AllowUsers`, `DenyUsers`, `AllowGroups` and `DenyGroups` do not keep it out (patterns with `*` and `?`; an entry `user@host` is taken by its user part when it allows, and ignored when it denies).
+3. **The account is not disabled.** Its login shell is an executable file that is not `nologin` or `false`; its expiry date (`shadow`) has not passed, nor the inactivity period after an expired password; a locked password is fine when sshd uses PAM (it accepts a key for a locked account) and refused when `UsePAM no` (sshd then refuses a locked account even for a key).
+4. **A key can be read where sshd looks** (`AuthorizedKeysFile` of that dump, `%h`, `%u`, `%U` expanded, `none` meaning no file). Unless `StrictModes no`: the file, `~/.ssh` and the home directory belong to the account or to root and are not writable by group or others, and the account can read the file. At least one line must be a valid public key (`ssh-keygen -l` accepts a copy of it) that gives a shell: not `command=`, and not `restrict` or `no-pty` unless a later `pty` gives the terminal back. Other options (`from=`, `no-agent-forwarding`, ...) do not matter.
+5. **It can become root**: `sudo` is installed, `sudo -l -U NAME` does not say that sudoers refuses it, and it has a usable password or a `NOPASSWD` rule (an account with a locked password and no such rule could log in and not administer).
+
+The rules are stricter than sshd in one place, on purpose. Measured on Ubuntu 24.04 (OpenSSH 9.6): `StrictModes` refuses a path that others can write, and one that a group with other members can write, but accepts a group-writable home directory, `~/.ssh` or key file when the group is the account's own private group with no other member. The installer refuses any write by group or others, because it cannot know which build of sshd answers and a wrong yes loses access; `chmod g-w` is the fix. The same measurement confirmed the other rules: an expired account is refused by PAM even with a valid key, a locked password is not (the key logs in), a forced command runs instead of the shell, `restrict` still lets a key run commands but gives no terminal (the installer counts that as no administrator, see rule 4), and `nologin` accepts the key and closes the session.
+
+You see this before anything is closed: the `ssh` step prints `Administrators who can log in with a key: ...` and one `not counted: NAME: reason` line for every other candidate, in both phases, and `verify` has a check, `SSH: administrators with key login`, with the same list (a warning when nobody counts, a failure when nobody counts and root and password login are already closed). A refusal is exit code 1 like every other stop. What it does not recognise: keys given by `AuthorizedKeysCommand` or certificates (`cert-authority`), accounts that are not in the `sudo` group (a `wheel` group, `sudoers` entries by name). On such a server the step refuses and root login stays open; there is no bypass, and closing it is then a decision made by hand.
+
 ## What it refuses to do
 
 - It never lets a secret appear on the screen, in the journal or in an argument of a command. The node secret lives in `/opt/remnanode/docker-compose.yml` (mode 600); a new administrator's password goes to `chpasswd` on its standard input.
 - It never opens the node API port to anyone but `PANEL_ALLOW_IP`, and it removes an older rule that opened it to everybody. The firewall allows SSH first; the port of the session that runs the installer is kept open too, and a firewall that cannot be enabled stops the run.
-- It never closes root login unless the `sudo` group has a member, never closes password login unless a member has a key, and reverts a change that `sshd -t` refuses. Open sessions are not touched.
+- It never closes root login or password login unless an account can really log in as an administrator (not merely a member of the `sudo` group: see below), says who counts and why the others do not before it changes anything, and reverts a change that `sshd -t` refuses. Open sessions are not touched.
 - It never executes what it reads. An env file and the saved configuration are parsed line by line, an unknown name stops the run, a value with a line break or shell syntax is refused by its validator before it can reach a configuration file.
 - It never trusts a downloaded signing key by its name: Docker's and nginx.org's keys are accepted only with a pinned fingerprint.
 - It never installs `latest`: the node image tag is a parameter with a pinned default.
