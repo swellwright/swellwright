@@ -55,6 +55,30 @@ import {
   UpdateScriptRequestSchema,
 } from './commands.js';
 import {
+  BaselineFleetSchema,
+  BaselineIdParamsSchema,
+  BaselineListSchema,
+  BaselineSummarySchema,
+  BaselineViewQuerySchema,
+  BaselineViewSchema,
+  CheckRunDiffQuerySchema,
+  CheckRunDiffSchema,
+  CheckRunIdParamsSchema,
+  CheckRunListQuerySchema,
+  CheckRunListSchema,
+  CheckRunSummarySchema,
+  CheckRunViewSchema,
+  CreateBaselineRequestSchema,
+  ObservationCatalogueSchema,
+  SetBaselineAssignmentsRequestSchema,
+  StartBaselineRunsRequestSchema,
+  StartBaselineRunsResultSchema,
+  StartServerBaselineRunRequestSchema,
+  UpdateBaselineRequestSchema,
+  ValidateBaselineRequestSchema,
+  ValidateBaselineResultSchema,
+} from './baselines.js';
+import {
   ChecksQuerySchema,
   ConventionLastRunSchema,
   ConventionPackQuerySchema,
@@ -2088,6 +2112,209 @@ export const ROUTES_OPEN_TO_ANY_SESSION: readonly string[] = [
 ];
 
 /** Every route of the public API. The server binds its handlers to these definitions. */
+// ---- Baseline checks (ADR 0045) ----
+
+const BASELINE_ERRORS =
+  'Errors: 400 `validation_failed` (the body; for a document each problem is also listed by `POST /baselines/validate` with its line), 404, 409 `conflict` (a built-in baseline cannot be changed or deleted, the name is taken, `expectedVersion` is not the current version).';
+
+const BASELINE_RUN_ERRORS =
+  'Errors: 404, 409 `conflict` (`details.reason`: `no_baseline` when nothing is assigned and none is given, `already_running` when a run of this server is queued or going on), 423 `vault_sealed` (nothing was queued), 429 `rate_limited`. A server that cannot be reached (no pinned host key, no access entry, the host key changed, a login refused, an expired secret) is not an error of the request: the run is queued and ends as `error` with `errorCode`, and a fleet request lists the servers it left out in `skipped`.';
+
+export const getBaselineCatalogueRoute = defineRoute({
+  operationId: 'getBaselineCatalogue',
+  method: 'get',
+  path: '/baseline-catalogue',
+  tags: ['baselines'],
+  summary: 'The observations a baseline may use',
+  description:
+    'The closed catalogue: every kind of observation with its parameters, the fields it reports and whether it needs root, the comparators, and the categories. A baseline picks a kind and one of its fields and says what the field must be.',
+  auth: 'any',
+  permission: 'servers:read',
+  responses: { 200: { description: 'The catalogue.', schema: ObservationCatalogueSchema } },
+});
+
+export const listBaselinesRoute = defineRoute({
+  operationId: 'listBaselines',
+  method: 'get',
+  path: '/baselines',
+  tags: ['baselines'],
+  summary: 'The baselines',
+  description:
+    'The built-in baselines and those of this instance, with what each is assigned to and how many servers use it.',
+  auth: 'any',
+  permission: 'servers:read',
+  responses: { 200: { description: 'The baselines, by name.', schema: BaselineListSchema } },
+});
+
+export const validateBaselineRoute = defineRoute({
+  operationId: 'validateBaseline',
+  method: 'post',
+  path: '/baselines/validate',
+  tags: ['baselines'],
+  summary: 'Check a baseline document without saving it',
+  description:
+    'Parses the text as YAML (JSON is YAML), checks it against the schema, the catalogue and the rules of the comparators, and lists every problem with the line and column it was found at. Nothing is stored and nothing touches a server.',
+  auth: 'any',
+  permission: 'servers:read',
+  request: { body: ValidateBaselineRequestSchema },
+  responses: { 200: { description: 'The verdict.', schema: ValidateBaselineResultSchema } },
+});
+
+export const createBaselineRoute = defineRoute({
+  operationId: 'createBaseline',
+  method: 'post',
+  path: '/baselines',
+  tags: ['baselines'],
+  summary: 'Add a baseline',
+  description: `Creates a baseline with its first version from the text. ${BASELINE_ERRORS}`,
+  auth: 'session',
+  permission: 'servers:write',
+  stepUp: true,
+  request: { body: CreateBaselineRequestSchema },
+  responses: { 201: { description: 'The baseline.', schema: BaselineViewSchema } },
+});
+
+export const getBaselineRoute = defineRoute({
+  operationId: 'getBaseline',
+  method: 'get',
+  path: '/baselines/{id}',
+  tags: ['baselines'],
+  summary: 'One baseline with its document and versions',
+  description:
+    'The document of the current version (or of the `version` asked for) as it was written, with its comments, and the list of versions.',
+  auth: 'any',
+  permission: 'servers:read',
+  request: { params: BaselineIdParamsSchema, query: BaselineViewQuerySchema },
+  responses: { 200: { description: 'The baseline.', schema: BaselineViewSchema } },
+});
+
+export const updateBaselineRoute = defineRoute({
+  operationId: 'updateBaseline',
+  method: 'put',
+  path: '/baselines/{id}',
+  tags: ['baselines'],
+  summary: 'Change a baseline',
+  description: `A changed document becomes a new version and the old one stays, so a run can always be read against the version it ran with. A document that is the same as the current one changes nothing. ${BASELINE_ERRORS}`,
+  auth: 'session',
+  permission: 'servers:write',
+  stepUp: true,
+  request: { params: BaselineIdParamsSchema, body: UpdateBaselineRequestSchema },
+  responses: { 200: { description: 'The baseline after the change.', schema: BaselineViewSchema } },
+});
+
+export const deleteBaselineRoute = defineRoute({
+  operationId: 'deleteBaseline',
+  method: 'delete',
+  path: '/baselines/{id}',
+  tags: ['baselines'],
+  summary: 'Delete a baseline',
+  description: `Its versions and assignments go with it; the runs that were made against it stay and say which baseline and version they ran with. ${BASELINE_ERRORS}`,
+  auth: 'session',
+  permission: 'servers:write',
+  stepUp: true,
+  request: { params: BaselineIdParamsSchema },
+  responses: { 204: { description: 'The baseline is gone.', schema: z.undefined(), empty: true } },
+});
+
+export const setBaselineAssignmentsRoute = defineRoute({
+  operationId: 'setBaselineAssignments',
+  method: 'put',
+  path: '/baselines/{id}/assignments',
+  tags: ['baselines'],
+  summary: 'Say which servers and tags a baseline applies to',
+  description: `Replaces the assignments of this baseline. A server or tag that another baseline had is moved here. ${BASELINE_ERRORS}`,
+  auth: 'session',
+  permission: 'servers:write',
+  stepUp: true,
+  request: { params: BaselineIdParamsSchema, body: SetBaselineAssignmentsRequestSchema },
+  responses: {
+    200: { description: 'The baseline after the change.', schema: BaselineSummarySchema },
+  },
+});
+
+export const startServerBaselineRunRoute = defineRoute({
+  operationId: 'startServerBaselineRun',
+  method: 'post',
+  path: '/servers/{id}/baseline-runs',
+  tags: ['baselines'],
+  summary: 'Check one server against its baseline',
+  description: `Queues a check and returns at once; poll \`GET /baseline-runs/{id}\`. The server is reached with its stored access entries (the pinned host key is required), one read-only script is run in one SSH session, and nothing is changed on the server. ${BASELINE_RUN_ERRORS}`,
+  auth: 'session',
+  permission: 'servers:exec',
+  stepUp: true,
+  request: { params: ServerIdParamsSchema, body: StartServerBaselineRunRequestSchema },
+  responses: { 201: { description: 'The queued run.', schema: CheckRunSummarySchema } },
+});
+
+export const startBaselineRunsRoute = defineRoute({
+  operationId: 'startBaselineRuns',
+  method: 'post',
+  path: '/baseline-runs',
+  tags: ['baselines'],
+  summary: 'Check several servers, or the whole fleet',
+  description: `Queues one run per server and returns at once. The servers are worked on at most \`SW_CHECKS_PARALLELISM\` at a time, one run per server at a time. With \`all\`, every server that has a baseline assigned. ${BASELINE_RUN_ERRORS}`,
+  auth: 'session',
+  permission: 'servers:exec',
+  stepUp: true,
+  request: { body: StartBaselineRunsRequestSchema },
+  responses: { 201: { description: 'The queued runs.', schema: StartBaselineRunsResultSchema } },
+});
+
+export const listServerBaselineRunsRoute = defineRoute({
+  operationId: 'listServerBaselineRuns',
+  method: 'get',
+  path: '/servers/{id}/baseline-runs',
+  tags: ['baselines'],
+  summary: 'The runs of one server',
+  description:
+    'Newest first, without the results. At most `SW_CHECKS_KEEP_RUNS` runs of a server are kept; older ones are deleted when a new one finishes.',
+  auth: 'any',
+  permission: 'servers:read',
+  request: { params: ServerIdParamsSchema, query: CheckRunListQuerySchema },
+  responses: { 200: { description: 'One page of runs.', schema: CheckRunListSchema } },
+});
+
+export const getBaselineRunRoute = defineRoute({
+  operationId: 'getBaselineRun',
+  method: 'get',
+  path: '/baseline-runs/{id}',
+  tags: ['baselines'],
+  summary: 'One run with its results',
+  description:
+    'Every check with its status, what was observed, what was expected, why it did not pass and the hint. No secret is in a result: the script never reads one.',
+  auth: 'any',
+  permission: 'servers:read',
+  request: { params: CheckRunIdParamsSchema },
+  responses: { 200: { description: 'The run.', schema: CheckRunViewSchema } },
+});
+
+export const diffBaselineRunRoute = defineRoute({
+  operationId: 'diffBaselineRun',
+  method: 'get',
+  path: '/baseline-runs/{id}/diff',
+  tags: ['baselines'],
+  summary: 'What changed since the previous run',
+  description:
+    'The drift of one server: the checks whose status got worse or better, the checks whose observed text, flag or list changed (a number only while the check is not passing), and the checks that exist in one baseline only. With `against=previous` (the default) the run is compared with the completed run before it, with an id with that run of the same server. "No differences" is a result (`identical: true`).',
+  auth: 'any',
+  permission: 'servers:read',
+  request: { params: CheckRunIdParamsSchema, query: CheckRunDiffQuerySchema },
+  responses: { 200: { description: 'The differences.', schema: CheckRunDiffSchema } },
+});
+
+export const getBaselineFleetRoute = defineRoute({
+  operationId: 'getBaselineFleet',
+  method: 'get',
+  path: '/baseline-fleet',
+  tags: ['baselines'],
+  summary: 'The state of the fleet against its baselines',
+  description:
+    'Every server with the baseline that applies to it, the newest finished run and whether it got better or worse, and the totals.',
+  auth: 'any',
+  permission: 'servers:read',
+  responses: { 200: { description: 'The fleet.', schema: BaselineFleetSchema } },
+});
+
 const CONSOLE_ERRORS =
   "Besides the codes of the panel reads (409 `panel_not_connected`, 409 `panel_unsupported_version`, 502 `panel_unauthorized`, 502 `panel_unreachable`, 504 `panel_timeout`, 429 `panel_rate_limited`, 423 `vault_sealed`): 400 `validation_failed` with `details.issues` naming each field of the request that is wrong, 404 `console_operation_unknown`, 403 `console_operation_blocked` (a write, or a read that is never sent; `details.reason`), 403 `console_user_data_disabled`, 403 `step_up_required` for an operation about people, 502 `console_response_too_large`, 502 `console_response_unsupported`, 429 `rate_limited` (this console's own limit per user).";
 
@@ -2266,6 +2493,20 @@ export const routes = [
   deletePanelSnapshotRoute,
   diffPanelSnapshotRoute,
   exportPanelSnapshotRoute,
+  getBaselineCatalogueRoute,
+  listBaselinesRoute,
+  validateBaselineRoute,
+  createBaselineRoute,
+  getBaselineRoute,
+  updateBaselineRoute,
+  deleteBaselineRoute,
+  setBaselineAssignmentsRoute,
+  startServerBaselineRunRoute,
+  startBaselineRunsRoute,
+  listServerBaselineRunsRoute,
+  getBaselineRunRoute,
+  diffBaselineRunRoute,
+  getBaselineFleetRoute,
   listPanelConsoleOperationsRoute,
   getPanelConsoleOperationRoute,
   sendPanelConsoleRequestRoute,

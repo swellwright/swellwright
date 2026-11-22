@@ -371,6 +371,8 @@ model Server {
   fact           ServerFact?
   commandTargets CommandRunTarget[]
   artifacts      ServerArtifact[]
+  baselineAssignment BaselineAssignment?
+  checkRuns      CheckRun[]
 
   @@index([state])
   @@index([tags], type: Gin)
@@ -821,4 +823,168 @@ model PanelSnapshotContent {
   snapshot PanelSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
 
   @@map("panel_snapshot_contents")
+}
+
+/// A named baseline: what a healthy server looks like (ADR 0045). The document of every version is kept as it was, so
+/// that a run can always be read against the version it ran with.
+model BaselineProfile {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  name           String   @unique @db.VarChar(64)
+  description    String?  @db.VarChar(300)
+  /// Shipped with Swellwright and kept current by name at start; it cannot be edited or deleted.
+  builtIn        Boolean  @default(false) @map("built_in")
+  /// The number of the newest version.
+  currentVersion Int      @default(1) @map("current_version")
+  /// The user who created it. No foreign key, like the audit chain.
+  createdById    String?  @map("created_by_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  versions    BaselineVersion[]
+  assignments BaselineAssignment[]
+  runs        CheckRun[]
+
+  @@map("baseline_profiles")
+}
+
+/// One immutable version of a baseline: the validated document as JSON and its SHA-256 (of the canonical text).
+model BaselineVersion {
+  id             String   @id @default(uuid(7)) @db.Uuid
+  profileId      String   @map("profile_id") @db.Uuid
+  version        Int
+  document       Json
+  /// The text the author saved, with its comments (YAML or JSON); `document` is what it parsed to.
+  source         String
+  documentSha256 String   @map("document_sha256") @db.VarChar(64)
+  checkCount     Int      @map("check_count")
+  comment        String?  @db.VarChar(200)
+  /// Who made it, and the name at the time. No foreign key, like the audit chain.
+  createdById    String?  @map("created_by_id") @db.Uuid
+  createdByName  String?  @map("created_by_name") @db.VarChar(64)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  profile BaselineProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, version])
+  @@map("baseline_versions")
+}
+
+/// A baseline applies to one server or to every server that carries a tag. A server has at most one baseline of its own
+/// and a tag belongs to at most one baseline, so what applies to a server is never ambiguous. The migration adds a check
+/// that exactly one of `server_id` and `tag` is set.
+model BaselineAssignment {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  profileId   String   @map("profile_id") @db.Uuid
+  serverId    String?  @unique @map("server_id") @db.Uuid
+  tag         String?  @unique @db.VarChar(32)
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  profile BaselineProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  server  Server?         @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+  @@map("baseline_assignments")
+}
+
+enum CheckRunState {
+  queued
+  running
+  completed
+  error
+
+  @@map("check_run_state")
+}
+
+enum CheckTrigger {
+  manual
+  scheduled
+
+  @@map("check_trigger")
+}
+
+enum CheckStatus {
+  pass
+  warn
+  fail
+  error
+  skipped
+
+  @@map("check_status")
+}
+
+/// One baseline check of one server (ADR 0045): when it ran, against which version of which baseline, and the counts. A
+/// run copies what it needs from the baseline (name, version, hash), so it stays readable after the baseline is edited or
+/// deleted. A run that cannot reach the server has no results and says why in `errorCode`.
+model CheckRun {
+  id                   String        @id @default(uuid(7)) @db.Uuid
+  serverId             String        @map("server_id") @db.Uuid
+  /// The name of the server at the time.
+  serverName           String        @map("server_name") @db.VarChar(64)
+  /// The baseline it ran against; null after the baseline was deleted. The name, version and hash stay.
+  profileId            String?       @map("profile_id") @db.Uuid
+  baselineName         String        @map("baseline_name") @db.VarChar(64)
+  baselineVersion      Int           @map("baseline_version")
+  baselineSha256       String        @map("baseline_sha256") @db.VarChar(64)
+  trigger              CheckTrigger
+  state                CheckRunState @default(queued)
+  queuedAt             DateTime      @default(now()) @map("queued_at") @db.Timestamptz(3)
+  startedAt            DateTime?     @map("started_at") @db.Timestamptz(3)
+  finishedAt           DateTime?     @map("finished_at") @db.Timestamptz(3)
+  /// Who started it and the name at the time; null for the schedule. No foreign key, like the audit chain.
+  startedById          String?       @map("started_by_id") @db.Uuid
+  startedByName        String?       @map("started_by_name") @db.VarChar(64)
+  passCount            Int           @default(0) @map("pass_count")
+  warnCount            Int           @default(0) @map("warn_count")
+  failCount            Int           @default(0) @map("fail_count")
+  errorCount           Int           @default(0) @map("error_count")
+  skippedCount         Int           @default(0) @map("skipped_count")
+  /// How many checks changed status since the previous completed run of the server; null for the first one.
+  changedSincePrevious Int?          @map("changed_since_previous")
+  /// `better`, `worse` or `same` against the previous completed run of the server; null for the first one.
+  trend                String?       @db.VarChar(6)
+  errorCode            String?       @map("error_code") @db.VarChar(40)
+  errorMessage         String?       @map("error_message") @db.VarChar(500)
+  /// `root`, `sudo` or `user`: with which rights the observations ran.
+  collectedAs          String?       @map("collected_as") @db.VarChar(8)
+  scriptSha256         String?       @map("script_sha256") @db.VarChar(64)
+
+  server  Server           @relation(fields: [serverId], references: [id], onDelete: Cascade)
+  profile BaselineProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  results CheckResult[]
+
+  @@index([serverId, queuedAt(sort: Desc)])
+  @@index([state])
+  @@index([profileId])
+  @@map("check_runs")
+}
+
+/// The outcome of one check in a run. It copies the check's title, category and severity so a result reads without the
+/// baseline it came from.
+model CheckResult {
+  id                String      @id @default(uuid(7)) @db.Uuid
+  runId             String      @map("run_id") @db.Uuid
+  /// The place in the baseline; the results come back in this order.
+  position          Int
+  checkId           String      @map("check_id") @db.VarChar(64)
+  title             String      @db.VarChar(160)
+  category          String      @db.VarChar(16)
+  severity          String      @db.VarChar(8)
+  status            CheckStatus
+  observationKind   String      @map("observation_kind") @db.VarChar(40)
+  observationField  String      @map("observation_field") @db.VarChar(40)
+  observationParams Json        @default("{}") @map("observation_params")
+  observationStatus String      @map("observation_status") @db.VarChar(16)
+  /// The value of the field, bounded; null when nothing was observed.
+  observed          Json?
+  comparator        String      @db.VarChar(16)
+  expected          Json?
+  message           String?     @db.VarChar(600)
+  remediationHint   String?     @map("remediation_hint") @db.VarChar(300)
+
+  run CheckRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, checkId])
+  @@index([runId, position])
+  @@map("check_results")
 }

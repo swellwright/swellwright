@@ -1,4 +1,32 @@
 import {
+  type BaselineFleet,
+  BaselineFleetSchema,
+  type BaselineList,
+  BaselineListSchema,
+  type BaselineSummary,
+  BaselineSummarySchema,
+  type BaselineView,
+  BaselineViewSchema,
+  type CheckRunDiff,
+  CheckRunDiffSchema,
+  type CheckRunList,
+  CheckRunListSchema,
+  type CheckRunListQuery,
+  type CheckRunSummary,
+  CheckRunSummarySchema,
+  type CheckRunView,
+  CheckRunViewSchema,
+  type CreateBaselineRequest,
+  type ObservationCatalogue,
+  ObservationCatalogueSchema,
+  type SetBaselineAssignmentsRequest,
+  type StartBaselineRunsRequest,
+  type StartBaselineRunsResult,
+  StartBaselineRunsResultSchema,
+  type StartServerBaselineRunRequest,
+  type UpdateBaselineRequest,
+  type ValidateBaselineResult,
+  ValidateBaselineResultSchema,
   type AcceptHostKeyRequest,
   type AcceptInvitationRequest,
   type AccessVerification,
@@ -841,6 +869,84 @@ export const diffPanelSnapshot = (
 /** Where a snapshot is downloaded from as a JSON file: the browser follows it, with the session cookie. */
 export const panelSnapshotExportPath = (id: string): string =>
   `${BASE}/panel/snapshots/${id}/export`;
+
+// ---- baseline checks of servers over SSH (ADR 0045) ------------------------------------------------------------------
+
+/** The observations a baseline may use: kinds, parameters, fields, comparators (`servers:read`). */
+export const getBaselineCatalogue = (): Promise<ObservationCatalogue> =>
+  send('GET', '/baseline-catalogue', undefined, ObservationCatalogueSchema);
+
+export const listBaselines = (): Promise<BaselineList> =>
+  send('GET', '/baselines', undefined, BaselineListSchema);
+
+/** One baseline with its document as the author wrote it and its versions; an older `version` can be asked for. */
+export const getBaseline = (id: string, version?: number): Promise<BaselineView> =>
+  send(
+    'GET',
+    `/baselines/${id}${queryString(version === undefined ? {} : { version })}`,
+    undefined,
+    BaselineViewSchema,
+  );
+
+/** Checks a text against the schema and the catalogue without saving it; every problem comes with its line. */
+export const validateBaseline = (source: string): Promise<ValidateBaselineResult> =>
+  send('POST', '/baselines/validate', { source }, ValidateBaselineResultSchema);
+
+export const createBaseline = (request: CreateBaselineRequest): Promise<BaselineView> =>
+  send('POST', '/baselines', request, BaselineViewSchema);
+
+export const updateBaseline = (id: string, request: UpdateBaselineRequest): Promise<BaselineView> =>
+  send('PUT', `/baselines/${id}`, request, BaselineViewSchema);
+
+export const deleteBaseline = (id: string): Promise<void> =>
+  send('DELETE', `/baselines/${id}`, undefined, undefined);
+
+export const setBaselineAssignments = (
+  id: string,
+  request: SetBaselineAssignmentsRequest,
+): Promise<BaselineSummary> =>
+  send('PUT', `/baselines/${id}/assignments`, request, BaselineSummarySchema);
+
+/** The state of the fleet against its baselines: every server with its baseline and newest finished run. */
+export const getBaselineFleet = (): Promise<BaselineFleet> =>
+  send('GET', '/baseline-fleet', undefined, BaselineFleetSchema);
+
+/** Queues a check of one server (`servers:exec`, needs a fresh code) and answers at once. */
+export const startServerBaselineRun = (
+  serverId: string,
+  request: StartServerBaselineRunRequest = {},
+): Promise<CheckRunSummary> =>
+  send('POST', `/servers/${serverId}/baseline-runs`, request, CheckRunSummarySchema);
+
+/** Queues a check for several servers, or for every server that has a baseline. */
+export const startBaselineRuns = (
+  request: StartBaselineRunsRequest,
+): Promise<StartBaselineRunsResult> =>
+  send('POST', '/baseline-runs', request, StartBaselineRunsResultSchema);
+
+export const listServerBaselineRuns = (
+  serverId: string,
+  query: CheckRunListQuery = {},
+): Promise<CheckRunList> =>
+  send(
+    'GET',
+    `/servers/${serverId}/baseline-runs${queryString(query)}`,
+    undefined,
+    CheckRunListSchema,
+  );
+
+/** One run with every result. Poll it while the run is `queued` or `running`. */
+export const getBaselineRun = (id: string): Promise<CheckRunView> =>
+  send('GET', `/baseline-runs/${id}`, undefined, CheckRunViewSchema);
+
+/** What changed since the previous completed run of the server, or against another run of it. */
+export const diffBaselineRun = (id: string, against?: string): Promise<CheckRunDiff> =>
+  send(
+    'GET',
+    `/baseline-runs/${id}/diff${queryString(against === undefined ? {} : { against })}`,
+    undefined,
+    CheckRunDiffSchema,
+  );
 
 /** The current session, or null when nobody is signed in. */
 export async function getMe(): Promise<SessionInfo | null> {

@@ -124,7 +124,7 @@ Steps and checks account in advance for typical failures when working with nodes
 - Removing old host keys on redeploy.
 
 ## 11. Schedules and windows
-Cron expressions, time zones, maintenance windows per node and group, a "quota of concurrent changes" across the fleet, holiday exceptions; schedules: baseline check, update check, panel snapshots, backups, restore verification, daily report, probes.
+Cron expressions, time zones, maintenance windows per node and group, a "quota of concurrent changes" across the fleet, holiday exceptions; schedules: baseline check (built in Phase 3 as a simple interval, `SW_CHECKS_INTERVAL_HOURS`, ADR 0045: staggered, skipped while the vault is sealed or a secret has expired), update check, panel snapshots, backups, restore verification, daily report, probes.
 
 ## 12. Engine observability
 Metrics: stage durations, errors by type, number of rollbacks, lock age, queue, approval time. The run timeline is saved to compare against "as usual" and to find speed regressions.

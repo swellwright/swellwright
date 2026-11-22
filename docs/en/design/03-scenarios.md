@@ -49,6 +49,8 @@ Policies: list of affected packages, CVE labels (`S09`), windows, canary, `reboo
 ### N12 Hardening baseline: check, drift, repair (L/M)
 The baseline and extension check set (service, ports, UFW, DOCKER-USER, fail2ban, sshd, sysctl, certificate, key permissions, SNI_VERIFICATION, decoy site, etc.). Comparison with the baseline; for each difference a **fixing step from the installer** (idempotent) is proposed and a diff is shown. Schedule: "check" daily, "fix" on demand with approval. Results are stored, trends are visible.
 
+**Built in Phase 3 (ADR 0045): the check half, read-only.** A baseline is a versioned document of checks over a closed catalogue of 31 read-only observations (`docs/en/baselines.md`); two ship with Swellwright (`linux-generic`, `node-selfsteal`) and yours are copies with your values. One script, one SSH session per server; results with the value seen, what was expected and a hint; the drift against the previous run; the fleet view; a schedule (`SW_CHECKS_INTERVAL_HOURS`, off by default). The fixing step and the approval are phase 4: a hint names the installer step to run.
+
 ### N13 Node API port (ACL): changing the allow list (H)
 Bulk change of the list of addresses to which the node API port is open (allow list, the sources allowed to reach the API port; DOCKER-USER, UFW), for example when the panel's external address changes: canary, a check that the panel sees the node, rollback. Several addresses are supported (primary and spare).
 

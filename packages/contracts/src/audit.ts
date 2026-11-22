@@ -83,6 +83,11 @@ export const AUDIT_ACTIONS = [
   'panel.convention_pack.reset',
   'panel.snapshot.created',
   'panel.snapshot.deleted',
+  'baseline.run',
+  'baseline.run.finished',
+  'baseline.version.created',
+  'baseline.assigned',
+  'baseline.deleted',
   'panel.console.request',
 ] as const;
 export const AuditActionSchema = z.enum(AUDIT_ACTIONS).meta({ id: 'AuditAction' });

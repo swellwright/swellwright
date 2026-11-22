@@ -54,6 +54,7 @@ import { notifyFailure } from '../security/notify-failure.js';
 import { QueryErrorCard } from '../security/query-error.js';
 import { useLastDefined } from '../security/use-last-defined.js';
 import { confirmAction, notifySuccess } from '../shell/feedback.js';
+import { BaselineCard } from '../baseline/baseline-card.js';
 import { AccessCard } from './access-card.js';
 import { ArtifactsCard } from './artifacts-card.js';
 import { useCountries } from './countries.js';
@@ -507,6 +508,7 @@ function ServerBody({
               server={server}
             />
             <FactsCard canWrite={canWrite} onChanged={refreshAll} server={server} />
+            <BaselineCard canExec={canExec} serverId={server.id} serverName={server.name} />
             <ArtifactsCard
               canExec={canExec}
               canWrite={canWrite}

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.29.0",
+    "version": "0.30.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -62,6 +62,10 @@
     {
       "name": "commands",
       "description": "The script library and runs of a script or a command on several servers at once, with the output of each server (ADR 0038). Writing scripts and starting or stopping runs need `servers:exec` and a fresh authenticator code; reading the history needs `servers:read`."
+    },
+    {
+      "name": "baselines",
+      "description": "Baseline checks of servers over SSH (ADR 0045): documents that say what a healthy server looks like, the closed catalogue of read-only observations they use, runs that compare a server with its baseline, the drift between two runs and the state of the fleet. Starting a run needs `servers:exec` and a fresh authenticator code; editing a baseline needs `servers:write` and one; reading needs `servers:read`. A run changes nothing on a server."
     },
     {
       "name": "panel",
@@ -6916,6 +6920,763 @@
         "x-sw-permission": "panel:read"
       }
     },
+    "/baseline-catalogue": {
+      "get": {
+        "operationId": "getBaselineCatalogue",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "The observations a baseline may use",
+        "responses": {
+          "200": {
+            "description": "The catalogue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObservationCatalogue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The closed catalogue: every kind of observation with its parameters, the fields it reports and whether it needs root, the comparators, and the categories. A baseline picks a kind and one of its fields and says what the field must be.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      }
+    },
+    "/baselines": {
+      "get": {
+        "operationId": "listBaselines",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "The baselines",
+        "responses": {
+          "200": {
+            "description": "The baselines, by name.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaselineList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The built-in baselines and those of this instance, with what each is assigned to and how many servers use it.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      },
+      "post": {
+        "operationId": "createBaseline",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "Add a baseline",
+        "responses": {
+          "201": {
+            "description": "The baseline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaselineView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Creates a baseline with its first version from the text. Errors: 400 `validation_failed` (the body; for a document each problem is also listed by `POST /baselines/validate` with its line), 404, 409 `conflict` (a built-in baseline cannot be changed or deleted, the name is taken, `expectedVersion` is not the current version).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateBaselineRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "servers:write",
+        "x-sw-step-up": true
+      }
+    },
+    "/baselines/validate": {
+      "post": {
+        "operationId": "validateBaseline",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "Check a baseline document without saving it",
+        "responses": {
+          "200": {
+            "description": "The verdict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidateBaselineResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Parses the text as YAML (JSON is YAML), checks it against the schema, the catalogue and the rules of the comparators, and lists every problem with the line and column it was found at. Nothing is stored and nothing touches a server.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateBaselineRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      }
+    },
+    "/baselines/{id}": {
+      "get": {
+        "operationId": "getBaseline",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "One baseline with its document and versions",
+        "responses": {
+          "200": {
+            "description": "The baseline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaselineView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The document of the current version (or of the `version` asked for) as it was written, with its comments, and the list of versions.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "An older version; the current one by default.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      },
+      "put": {
+        "operationId": "updateBaseline",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "Change a baseline",
+        "responses": {
+          "200": {
+            "description": "The baseline after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaselineView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "A changed document becomes a new version and the old one stays, so a run can always be read against the version it ran with. A document that is the same as the current one changes nothing. Errors: 400 `validation_failed` (the body; for a document each problem is also listed by `POST /baselines/validate` with its line), 404, 409 `conflict` (a built-in baseline cannot be changed or deleted, the name is taken, `expectedVersion` is not the current version).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateBaselineRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "servers:write",
+        "x-sw-step-up": true
+      },
+      "delete": {
+        "operationId": "deleteBaseline",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "Delete a baseline",
+        "responses": {
+          "204": {
+            "description": "The baseline is gone."
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Its versions and assignments go with it; the runs that were made against it stay and say which baseline and version they ran with. Errors: 400 `validation_failed` (the body; for a document each problem is also listed by `POST /baselines/validate` with its line), 404, 409 `conflict` (a built-in baseline cannot be changed or deleted, the name is taken, `expectedVersion` is not the current version).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "servers:write",
+        "x-sw-step-up": true
+      }
+    },
+    "/baselines/{id}/assignments": {
+      "put": {
+        "operationId": "setBaselineAssignments",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "Say which servers and tags a baseline applies to",
+        "responses": {
+          "200": {
+            "description": "The baseline after the change.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaselineSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Replaces the assignments of this baseline. A server or tag that another baseline had is moved here. Errors: 400 `validation_failed` (the body; for a document each problem is also listed by `POST /baselines/validate` with its line), 404, 409 `conflict` (a built-in baseline cannot be changed or deleted, the name is taken, `expectedVersion` is not the current version).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetBaselineAssignmentsRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "servers:write",
+        "x-sw-step-up": true
+      }
+    },
+    "/servers/{id}/baseline-runs": {
+      "post": {
+        "operationId": "startServerBaselineRun",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "Check one server against its baseline",
+        "responses": {
+          "201": {
+            "description": "The queued run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckRunSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Queues a check and returns at once; poll `GET /baseline-runs/{id}`. The server is reached with its stored access entries (the pinned host key is required), one read-only script is run in one SSH session, and nothing is changed on the server. Errors: 404, 409 `conflict` (`details.reason`: `no_baseline` when nothing is assigned and none is given, `already_running` when a run of this server is queued or going on), 423 `vault_sealed` (nothing was queued), 429 `rate_limited`. A server that cannot be reached (no pinned host key, no access entry, the host key changed, a login refused, an expired secret) is not an error of the request: the run is queued and ends as `error` with `errorCode`, and a fleet request lists the servers it left out in `skipped`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartServerBaselineRunRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "servers:exec",
+        "x-sw-step-up": true
+      },
+      "get": {
+        "operationId": "listServerBaselineRuns",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "The runs of one server",
+        "responses": {
+          "200": {
+            "description": "One page of runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckRunList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Newest first, without the results. At most `SW_CHECKS_KEEP_RUNS` runs of a server are kept; older ones are deleted when a new one finishes.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "30 by default.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      }
+    },
+    "/baseline-runs": {
+      "post": {
+        "operationId": "startBaselineRuns",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "Check several servers, or the whole fleet",
+        "responses": {
+          "201": {
+            "description": "The queued runs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartBaselineRunsResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Queues one run per server and returns at once. The servers are worked on at most `SW_CHECKS_PARALLELISM` at a time, one run per server at a time. With `all`, every server that has a baseline assigned. Errors: 404, 409 `conflict` (`details.reason`: `no_baseline` when nothing is assigned and none is given, `already_running` when a run of this server is queued or going on), 423 `vault_sealed` (nothing was queued), 429 `rate_limited`. A server that cannot be reached (no pinned host key, no access entry, the host key changed, a login refused, an expired secret) is not an error of the request: the run is queued and ends as `error` with `errorCode`, and a fleet request lists the servers it left out in `skipped`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartBaselineRunsRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "servers:exec",
+        "x-sw-step-up": true
+      }
+    },
+    "/baseline-runs/{id}": {
+      "get": {
+        "operationId": "getBaselineRun",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "One run with its results",
+        "responses": {
+          "200": {
+            "description": "The run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckRunView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every check with its status, what was observed, what was expected, why it did not pass and the hint. No secret is in a result: the script never reads one.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      }
+    },
+    "/baseline-runs/{id}/diff": {
+      "get": {
+        "operationId": "diffBaselineRun",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "What changed since the previous run",
+        "responses": {
+          "200": {
+            "description": "The differences.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CheckRunDiff"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The drift of one server: the checks whose status got worse or better, the checks whose observed text, flag or list changed (a number only while the check is not passing), and the checks that exist in one baseline only. With `against=previous` (the default) the run is compared with the completed run before it, with an id with that run of the same server. \"No differences\" is a result (`identical: true`).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "against",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "`previous` (the default): the completed run before this one on the same server. Or the id of a run of the same server.",
+              "type": "string",
+              "pattern": "^(?:previous|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      }
+    },
+    "/baseline-fleet": {
+      "get": {
+        "operationId": "getBaselineFleet",
+        "tags": [
+          "baselines"
+        ],
+        "summary": "The state of the fleet against its baselines",
+        "responses": {
+          "200": {
+            "description": "The fleet.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BaselineFleet"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every server with the baseline that applies to it, the newest finished run and whether it got better or worse, and the totals.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      }
+    },
     "/panel/api-console/operations": {
       "get": {
         "operationId": "listPanelConsoleOperations",
@@ -7789,6 +8550,11 @@
           "panel.convention_pack.reset",
           "panel.snapshot.created",
           "panel.snapshot.deleted",
+          "baseline.run",
+          "baseline.run.finished",
+          "baseline.version.created",
+          "baseline.assigned",
+          "baseline.deleted",
           "panel.console.request"
         ]
       },
@@ -19478,6 +20244,2050 @@
         ],
         "additionalProperties": false,
         "description": "The differences between two snapshots, or between a snapshot and the live panel, seen from `from` to `to`. Runtime state (online, counters, versions of a node) is not compared; a masked secret is compared by its keyed fingerprint and never shown."
+      },
+      "BaselineCategory": {
+        "type": "string",
+        "enum": [
+          "system",
+          "updates",
+          "time",
+          "resources",
+          "network",
+          "firewall",
+          "ssh",
+          "accounts",
+          "services",
+          "docker",
+          "node",
+          "tls",
+          "web",
+          "installer"
+        ]
+      },
+      "BaselineSeverity": {
+        "type": "string",
+        "enum": [
+          "high",
+          "medium",
+          "low"
+        ],
+        "description": "What a missed expectation means: `high` is a `fail`, `medium` and `low` are a `warn` (`low` is shown less prominently)."
+      },
+      "BaselineExpectation": {
+        "type": "object",
+        "properties": {
+          "equals": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 400
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "notEquals": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 400
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "in": {
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 400
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "matches": {
+            "type": "string"
+          },
+          "atLeast": {
+            "type": "number"
+          },
+          "atMost": {
+            "type": "number"
+          },
+          "contains": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "notContains": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "absent": {
+            "type": "boolean",
+            "const": true
+          },
+          "present": {
+            "type": "boolean",
+            "const": true
+          },
+          "versionAtLeast": {
+            "type": "string"
+          },
+          "ageLessThan": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false,
+        "description": "What the observed field must be. Exactly one of: equals, notEquals, in, matches, atLeast, atMost, contains, notContains, absent, present, versionAtLeast, ageLessThan."
+      },
+      "BaselineObserve": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "params": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 400
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "field": {
+            "type": "string",
+            "maxLength": 40
+          }
+        },
+        "required": [
+          "kind",
+          "field"
+        ],
+        "additionalProperties": false,
+        "description": "Which observation to make (a kind of the catalogue, GET /baseline-catalogue), with its parameters, and which of its fields to compare."
+      },
+      "BaselineCheck": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9._-]{0,63}$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          },
+          "category": {
+            "$ref": "#/components/schemas/BaselineCategory"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/BaselineSeverity"
+          },
+          "observe": {
+            "$ref": "#/components/schemas/BaselineObserve"
+          },
+          "expect": {
+            "$ref": "#/components/schemas/BaselineExpectation"
+          },
+          "remediationHint": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "category",
+          "severity",
+          "observe",
+          "expect"
+        ],
+        "additionalProperties": false
+      },
+      "BaselineDocument": {
+        "type": "object",
+        "properties": {
+          "schema": {
+            "type": "number",
+            "const": 1
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "checks": {
+            "minItems": 1,
+            "maxItems": 300,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BaselineCheck"
+            }
+          }
+        },
+        "required": [
+          "schema",
+          "checks"
+        ],
+        "additionalProperties": false,
+        "description": "What a healthy server looks like: a list of checks, each an observation of the catalogue and an expectation about one of its fields."
+      },
+      "CheckStatus": {
+        "type": "string",
+        "enum": [
+          "pass",
+          "warn",
+          "fail",
+          "error",
+          "skipped"
+        ],
+        "description": "`pass`: as expected. `warn` and `fail`: not as expected (by the severity of the check). `error`: it could not be observed (needs root, the tool failed, a time limit). `skipped`: not applicable here."
+      },
+      "ObservationStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "denied",
+          "error",
+          "timeout",
+          "unsupported"
+        ]
+      },
+      "CheckRunState": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "error"
+        ],
+        "description": "`queued` and `running` are going on. `completed`: the server was observed (the results may still fail). `error`: it could not be observed at all (`errorCode` says why)."
+      },
+      "CheckTrigger": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "scheduled"
+        ]
+      },
+      "ObservedValue": {
+        "anyOf": [
+          {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "description": "A text, a number, a boolean or a list of texts; null when nothing was observed."
+      },
+      "CheckResultView": {
+        "type": "object",
+        "properties": {
+          "checkId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "category": {
+            "$ref": "#/components/schemas/BaselineCategory"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/BaselineSeverity"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CheckStatus"
+          },
+          "observation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "field": {
+                "type": "string"
+              },
+              "params": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 400
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                }
+              },
+              "status": {
+                "$ref": "#/components/schemas/ObservationStatus"
+              }
+            },
+            "required": [
+              "kind",
+              "field",
+              "params",
+              "status"
+            ],
+            "additionalProperties": false
+          },
+          "observed": {
+            "$ref": "#/components/schemas/ObservedValue"
+          },
+          "expectation": {
+            "type": "object",
+            "properties": {
+              "comparator": {
+                "type": "string",
+                "enum": [
+                  "equals",
+                  "notEquals",
+                  "in",
+                  "matches",
+                  "atLeast",
+                  "atMost",
+                  "contains",
+                  "notContains",
+                  "absent",
+                  "present",
+                  "versionAtLeast",
+                  "ageLessThan"
+                ]
+              },
+              "value": {}
+            },
+            "required": [
+              "comparator",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          "message": {
+            "description": "Why the check did not pass, in one sentence; null when it passed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "remediationHint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "checkId",
+          "title",
+          "category",
+          "severity",
+          "status",
+          "observation",
+          "observed",
+          "expectation",
+          "message",
+          "remediationHint"
+        ],
+        "additionalProperties": false
+      },
+      "CheckCounts": {
+        "type": "object",
+        "properties": {
+          "pass": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "warn": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "fail": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "error": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "skipped": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "pass",
+          "warn",
+          "fail",
+          "error",
+          "skipped"
+        ],
+        "additionalProperties": false
+      },
+      "CheckRunSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "serverId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "serverName": {
+            "type": "string",
+            "description": "The name of the server at the time of the run."
+          },
+          "baseline": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Null when the baseline was deleted since."
+              },
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "description": "SHA-256 of the canonical document that ran."
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "version",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/CheckTrigger"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CheckRunState"
+          },
+          "queuedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the run was created."
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the server was first contacted; null while it waits."
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From the start to the end."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CheckCounts"
+          },
+          "trend": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "better",
+                  "worse",
+                  "same"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Better or worse than the completed run before it; null for the first completed run and for a run that did not complete."
+          },
+          "changedSincePrevious": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many checks changed status since the previous completed run of this server; null for the first."
+          },
+          "errorCode": {
+            "description": "Why a run could not observe the server (an API error code).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errorMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedBy": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a scheduled run."
+          },
+          "collectedAs": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "root",
+                  "sudo",
+                  "user"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With which rights the observations ran. `user` cannot see what needs root."
+          }
+        },
+        "required": [
+          "id",
+          "serverId",
+          "serverName",
+          "baseline",
+          "trigger",
+          "state",
+          "queuedAt",
+          "startedAt",
+          "finishedAt",
+          "durationMs",
+          "counts",
+          "trend",
+          "changedSincePrevious",
+          "errorCode",
+          "errorMessage",
+          "startedBy",
+          "collectedAs"
+        ],
+        "additionalProperties": false
+      },
+      "CheckRunView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "serverId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "serverName": {
+            "type": "string",
+            "description": "The name of the server at the time of the run."
+          },
+          "baseline": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Null when the baseline was deleted since."
+              },
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sha256": {
+                "type": "string",
+                "description": "SHA-256 of the canonical document that ran."
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "version",
+              "sha256"
+            ],
+            "additionalProperties": false
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/CheckTrigger"
+          },
+          "state": {
+            "$ref": "#/components/schemas/CheckRunState"
+          },
+          "queuedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the run was created."
+          },
+          "startedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the server was first contacted; null while it waits."
+          },
+          "finishedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "durationMs": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "From the start to the end."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/CheckCounts"
+          },
+          "trend": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "better",
+                  "worse",
+                  "same"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Better or worse than the completed run before it; null for the first completed run and for a run that did not complete."
+          },
+          "changedSincePrevious": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many checks changed status since the previous completed run of this server; null for the first."
+          },
+          "errorCode": {
+            "description": "Why a run could not observe the server (an API error code).",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "errorMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedBy": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a scheduled run."
+          },
+          "collectedAs": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "root",
+                  "sudo",
+                  "user"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "With which rights the observations ran. `user` cannot see what needs root."
+          },
+          "scriptSha256": {
+            "description": "SHA-256 of the observation script that ran.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "results": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckResultView"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "serverId",
+          "serverName",
+          "baseline",
+          "trigger",
+          "state",
+          "queuedAt",
+          "startedAt",
+          "finishedAt",
+          "durationMs",
+          "counts",
+          "trend",
+          "changedSincePrevious",
+          "errorCode",
+          "errorMessage",
+          "startedBy",
+          "collectedAs",
+          "scriptSha256",
+          "results"
+        ],
+        "additionalProperties": false
+      },
+      "CheckRunList": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckRunSummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "runs",
+          "total"
+        ],
+        "additionalProperties": false
+      },
+      "DriftChange": {
+        "type": "string",
+        "enum": [
+          "regressed",
+          "improved",
+          "changed",
+          "added",
+          "removed"
+        ],
+        "description": "`regressed`: the status got worse. `improved`: it got better. `changed`: the status is the same, the observed value is not. `added` and `removed`: the check is in one baseline only."
+      },
+      "DriftItem": {
+        "type": "object",
+        "properties": {
+          "checkId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "category": {
+            "$ref": "#/components/schemas/BaselineCategory"
+          },
+          "severity": {
+            "$ref": "#/components/schemas/BaselineSeverity"
+          },
+          "change": {
+            "$ref": "#/components/schemas/DriftChange"
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "$ref": "#/components/schemas/CheckStatus"
+                  },
+                  "observed": {
+                    "$ref": "#/components/schemas/ObservedValue"
+                  },
+                  "message": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "status",
+                  "observed",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "$ref": "#/components/schemas/CheckStatus"
+                  },
+                  "observed": {
+                    "$ref": "#/components/schemas/ObservedValue"
+                  },
+                  "message": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "status",
+                  "observed",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "checkId",
+          "title",
+          "category",
+          "severity",
+          "change",
+          "from",
+          "to"
+        ],
+        "additionalProperties": false
+      },
+      "DriftCounts": {
+        "type": "object",
+        "properties": {
+          "regressed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "improved": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "changed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "added": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unchanged": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "regressed",
+          "improved",
+          "changed",
+          "added",
+          "removed",
+          "unchanged"
+        ],
+        "additionalProperties": false
+      },
+      "CheckRunDiff": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckRunSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when there is no earlier completed run to compare with."
+          },
+          "to": {
+            "$ref": "#/components/schemas/CheckRunSummary"
+          },
+          "identical": {
+            "type": "boolean",
+            "description": "Nothing differs: every check has the same status and the same observed value."
+          },
+          "counts": {
+            "$ref": "#/components/schemas/DriftCounts"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DriftItem"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "baseline_version_differs",
+                "baseline_differs",
+                "no_previous_run"
+              ]
+            }
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "identical",
+          "counts",
+          "changes",
+          "notes"
+        ],
+        "additionalProperties": false
+      },
+      "BaselineVersionInfo": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sha256": {
+            "type": "string"
+          },
+          "checkCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "version",
+          "createdAt",
+          "createdBy",
+          "comment",
+          "sha256",
+          "checkCount"
+        ],
+        "additionalProperties": false
+      },
+      "BaselineAssignments": {
+        "type": "object",
+        "properties": {
+          "servers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "servers",
+          "tags"
+        ],
+        "additionalProperties": false
+      },
+      "BaselineSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "builtIn": {
+            "type": "boolean",
+            "description": "Shipped with Swellwright: it cannot be changed, but it can be copied and assigned."
+          },
+          "currentVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "checkCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "assignments": {
+            "$ref": "#/components/schemas/BaselineAssignments"
+          },
+          "serverCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many servers use it now (explicitly or by a tag)."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "builtIn",
+          "currentVersion",
+          "checkCount",
+          "updatedAt",
+          "assignments",
+          "serverCount"
+        ],
+        "additionalProperties": false
+      },
+      "BaselineList": {
+        "type": "object",
+        "properties": {
+          "baselines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BaselineSummary"
+            }
+          }
+        },
+        "required": [
+          "baselines"
+        ],
+        "additionalProperties": false
+      },
+      "BaselineView": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "builtIn": {
+            "type": "boolean",
+            "description": "Shipped with Swellwright: it cannot be changed, but it can be copied and assigned."
+          },
+          "currentVersion": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "checkCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "assignments": {
+            "$ref": "#/components/schemas/BaselineAssignments"
+          },
+          "serverCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many servers use it now (explicitly or by a tag)."
+          },
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "The version `document` and `source` are of."
+          },
+          "document": {
+            "$ref": "#/components/schemas/BaselineDocument"
+          },
+          "source": {
+            "type": "string",
+            "description": "The document as YAML, the text the editor shows."
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BaselineVersionInfo"
+            },
+            "description": "Newest first."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "description",
+          "builtIn",
+          "currentVersion",
+          "checkCount",
+          "updatedAt",
+          "assignments",
+          "serverCount",
+          "version",
+          "document",
+          "source",
+          "versions"
+        ],
+        "additionalProperties": false
+      },
+      "CreateBaselineRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9 _.-]{1,64}$"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The document as YAML or JSON text."
+          },
+          "comment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "required": [
+          "name",
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "UpdateBaselineRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The document as YAML or JSON text."
+          },
+          "comment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "expectedVersion": {
+            "description": "The version this change was made from; another current version answers 409, so that nobody overwrites a newer one.",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 9007199254740991
+          }
+        },
+        "additionalProperties": false,
+        "description": "A changed document becomes a new version; the old one stays. A built-in baseline cannot be changed (409)."
+      },
+      "ValidateBaselineRequest": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "minLength": 1,
+            "description": "The document as YAML or JSON text."
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "additionalProperties": false
+      },
+      "BaselineIssue": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Where, for example `checks[3].observe.field`; empty for the whole document."
+          },
+          "message": {
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "1-based line in the source, when it can be told."
+          },
+          "column": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "message",
+          "line",
+          "column"
+        ],
+        "additionalProperties": false
+      },
+      "ValidateBaselineResult": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BaselineIssue"
+            }
+          },
+          "checkCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "category": {
+                  "$ref": "#/components/schemas/BaselineCategory"
+                },
+                "checks": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "category",
+                "checks"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "sha256": {
+            "description": "The hash of the canonical document, when it is valid.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "valid",
+          "issues",
+          "checkCount",
+          "categories",
+          "sha256"
+        ],
+        "additionalProperties": false
+      },
+      "SetBaselineAssignmentsRequest": {
+        "type": "object",
+        "properties": {
+          "serverIds": {
+            "maxItems": 500,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "tags": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9_.:-]{0,31}$"
+            }
+          }
+        },
+        "required": [
+          "serverIds",
+          "tags"
+        ],
+        "additionalProperties": false,
+        "description": "The servers and tags this baseline applies to, replacing what it had. A server or tag that another baseline had is moved here. A server named here uses this baseline whatever its tags say; otherwise the baseline of a tag it carries applies (the first by name when it has several)."
+      },
+      "ObservationCatalogue": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "type": "number",
+            "const": 1
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BaselineCategory"
+            }
+          },
+          "comparators": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "comparator": {
+                  "type": "string",
+                  "enum": [
+                    "equals",
+                    "notEquals",
+                    "in",
+                    "matches",
+                    "atLeast",
+                    "atMost",
+                    "contains",
+                    "notContains",
+                    "absent",
+                    "present",
+                    "versionAtLeast",
+                    "ageLessThan"
+                  ]
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "comparator",
+                "description"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "needsRoot": {
+                  "type": "boolean"
+                },
+                "presence": {
+                  "type": "string",
+                  "enum": [
+                    "exists",
+                    "installed"
+                  ]
+                },
+                "params": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "string",
+                          "integer",
+                          "enum"
+                        ]
+                      },
+                      "required": {
+                        "type": "boolean"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "default": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 400
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      },
+                      "options": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      },
+                      "pattern": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "type",
+                      "required",
+                      "description"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "list"
+                        ]
+                      },
+                      "description": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "type",
+                      "description"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "kind",
+                "title",
+                "description",
+                "needsRoot",
+                "params",
+                "fields"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "categories",
+          "comparators",
+          "kinds"
+        ],
+        "additionalProperties": false,
+        "description": "The closed catalogue of read-only observations a baseline may use."
+      },
+      "StartServerBaselineRunRequest": {
+        "type": "object",
+        "properties": {
+          "baselineId": {
+            "description": "Check against this baseline instead of the one assigned to the server.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StartBaselineRunsRequest": {
+        "type": "object",
+        "properties": {
+          "serverIds": {
+            "minItems": 1,
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "all": {
+            "description": "Every server that has a baseline assigned.",
+            "type": "boolean",
+            "const": true
+          },
+          "baselineId": {
+            "description": "Check against this baseline instead of the assigned ones.",
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StartBaselineRunsResult": {
+        "type": "object",
+        "properties": {
+          "runs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckRunSummary"
+            }
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "serverId": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "serverName": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "already_running",
+                    "no_baseline"
+                  ]
+                }
+              },
+              "required": [
+                "serverId",
+                "serverName",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "runs",
+          "skipped"
+        ],
+        "additionalProperties": false,
+        "description": "The runs that were queued, and the servers that were left out with the reason (a server that has no baseline, or that already has a run going). The runs are worked on in the background, at most `SW_CHECKS_PARALLELISM` at a time."
+      },
+      "BaselineFleetItem": {
+        "type": "object",
+        "properties": {
+          "server": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "name": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "country": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "state",
+              "country",
+              "tags"
+            ],
+            "additionalProperties": false
+          },
+          "baseline": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "id",
+                  "name",
+                  "version"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "assignedBy": {
+            "type": "string",
+            "enum": [
+              "server",
+              "tag",
+              "none"
+            ]
+          },
+          "lastRun": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckRunSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The newest run that finished, completed or not."
+          },
+          "trend": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "better",
+                  "worse",
+                  "same"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Better or worse than the completed run before it; null with fewer than two completed runs."
+          },
+          "running": {
+            "type": "boolean",
+            "description": "A run of this server is queued or going on now."
+          }
+        },
+        "required": [
+          "server",
+          "baseline",
+          "assignedBy",
+          "lastRun",
+          "trend",
+          "running"
+        ],
+        "additionalProperties": false
+      },
+      "BaselineFleet": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "servers": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "assigned": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "checked": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Servers with a completed run."
+              },
+              "failing": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Servers whose last completed run has a `fail`."
+              },
+              "warning": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Servers with a `warn` and no `fail`."
+              },
+              "unreachable": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Servers whose last run could not observe them."
+              },
+              "lastRunAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "failingChecks": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "warningChecks": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "servers",
+              "assigned",
+              "checked",
+              "failing",
+              "warning",
+              "unreachable",
+              "lastRunAt",
+              "failingChecks",
+              "warningChecks"
+            ],
+            "additionalProperties": false
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BaselineFleetItem"
+            }
+          }
+        },
+        "required": [
+          "generatedAt",
+          "totals",
+          "items"
+        ],
+        "additionalProperties": false
       },
       "PanelConsoleAvailability": {
         "type": "string",

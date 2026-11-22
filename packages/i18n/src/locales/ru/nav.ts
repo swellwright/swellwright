@@ -7,6 +7,7 @@ export const nav = {
   nodes: 'Ноды',
   chains: 'Цепочки',
   dns: 'DNS',
+  baseline: 'Эталон',
   certificates: 'Сертификаты',
 
   operations: 'Операции',

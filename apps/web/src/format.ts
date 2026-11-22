@@ -46,6 +46,13 @@ export function useDateTime(
   return useMemo(() => (value) => formatMoment(value, language, TIME_FIRST_DATETIME), [language]);
 }
 
+/** A time of day without the date (`14:30:00`), for a card that shows the date on its own line. */
+export function useTimeOfDay(): (value: Moment) => string {
+  const { i18n } = useTranslation();
+  const language = i18n.language;
+  return useMemo(() => (value) => formatMoment(value, language, 'HH:mm:ss'), [language]);
+}
+
 /** A date without the time, as the panel's `FULL_DATE` (`5 March 2026`, `5 марта 2026`). */
 export function useFullDate(): (value: Moment) => string {
   const { i18n } = useTranslation();

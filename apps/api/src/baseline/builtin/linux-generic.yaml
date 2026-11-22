@@ -1,0 +1,240 @@
+# Baseline "linux-generic": what a healthy general-purpose Debian or Ubuntu server looks like (ADR 0045).
+# Shipped with Swellwright and kept current by name at start. It cannot be edited here: copy it to a baseline of your
+# own (Fleet > Baseline > New baseline) and change the copy.
+#
+# Every check observes one field of a read-only observation and compares it with an expectation. `severity: high`
+# makes a missed expectation a failure, `medium` and `low` a warning. The hint says what to do about it.
+schema: 1
+description: A general-purpose Debian or Ubuntu server - updates, time, resources, SSH, accounts and the firewall.
+checks:
+  # ---- updates ----
+  - id: updates.reboot-pending
+    title: No reboot is waiting for a kernel or library update
+    category: updates
+    severity: medium
+    observe: { kind: kernel, field: rebootRequired }
+    expect: { equals: false }
+    remediationHint: Reboot the server in a quiet hour; a reboot is needed to run the updated kernel and libraries.
+
+  - id: updates.kernel-current
+    title: The running kernel is the newest installed one
+    category: updates
+    severity: low
+    observe: { kind: kernel, field: behind }
+    expect: { equals: false }
+    remediationHint: Reboot to run the newest installed kernel.
+
+  - id: updates.security-pending
+    title: No security updates are waiting
+    category: updates
+    severity: high
+    observe: { kind: updates.pending, field: security }
+    expect: { atMost: 0 }
+    remediationHint: Install the pending updates (apt-get upgrade) and reboot if asked to.
+
+  - id: updates.pending-count
+    title: Few updates are waiting
+    category: updates
+    severity: low
+    observe: { kind: updates.pending, field: upgradable }
+    expect: { atMost: 20 }
+    remediationHint: Run apt-get upgrade in a quiet hour.
+
+  - id: updates.lists-fresh
+    title: The package lists were refreshed within the last week
+    category: updates
+    severity: low
+    observe: { kind: updates.pending, field: listAgeSeconds }
+    expect: { ageLessThan: 7d }
+    remediationHint: Run apt-get update, or let the apt-daily timer do it.
+
+  - id: updates.unattended-installed
+    title: Unattended upgrades are installed
+    category: updates
+    severity: medium
+    observe: { kind: updates.auto, field: installed }
+    expect: { equals: true }
+    remediationHint: Install the unattended-upgrades package.
+
+  - id: updates.unattended-enabled
+    title: Unattended upgrades are switched on
+    category: updates
+    severity: medium
+    observe: { kind: updates.auto, field: enabled }
+    expect: { equals: true }
+    remediationHint: Set APT::Periodic::Unattended-Upgrade "1"; in /etc/apt/apt.conf.d/20auto-upgrades.
+
+  # ---- time ----
+  - id: time.synchronized
+    title: The clock is synchronised
+    category: time
+    severity: medium
+    observe: { kind: time.sync, field: synchronized }
+    expect: { equals: true }
+    remediationHint: Enable a time service (systemd-timesyncd or chrony) and check that it reaches its servers.
+
+  - id: time.service
+    title: A time service is running
+    category: time
+    severity: medium
+    observe: { kind: time.sync, field: service }
+    expect: { in: [chrony, systemd-timesyncd, ntpd] }
+    remediationHint: Install and start chrony or systemd-timesyncd.
+
+  - id: time.skew
+    title: The clock is within 5 seconds of the clock of this server
+    category: time
+    severity: medium
+    observe: { kind: time.sync, field: skewSeconds }
+    expect: { atMost: 5 }
+    remediationHint: Fix the time service; TLS and one-time codes need a clock that is right.
+
+  # ---- resources ----
+  - id: resources.disk-root-full
+    title: The root filesystem is not nearly full
+    category: resources
+    severity: high
+    observe: { kind: disk.usage, params: { path: / }, field: usedPercent }
+    expect: { atMost: 90 }
+    remediationHint: Free space on / (journal, old logs, unused images) or grow the disk.
+
+  - id: resources.disk-root-warning
+    title: The root filesystem has room
+    category: resources
+    severity: low
+    observe: { kind: disk.usage, params: { path: / }, field: usedPercent }
+    expect: { atMost: 80 }
+    remediationHint: Plan to free space on / or grow the disk.
+
+  - id: resources.inodes-root
+    title: The root filesystem has free inodes
+    category: resources
+    severity: medium
+    observe: { kind: disk.usage, params: { path: / }, field: inodeUsedPercent }
+    expect: { atMost: 90 }
+    remediationHint: Find the directory with millions of small files and clean it.
+
+  - id: resources.memory-available
+    title: At least 10 percent of the memory is available
+    category: resources
+    severity: medium
+    observe: { kind: memory, field: availablePercent }
+    expect: { atLeast: 10 }
+    remediationHint: Find what uses the memory (top, docker stats) or add memory.
+
+  - id: resources.swap-pressure
+    title: Swap is not heavily used
+    category: resources
+    severity: low
+    observe: { kind: memory, field: swapUsedPercent }
+    expect: { atMost: 80 }
+    remediationHint: Heavy swap use means the memory is too small for the load.
+
+  # ---- services ----
+  - id: services.no-failed-units
+    title: No systemd unit has failed
+    category: services
+    severity: medium
+    observe: { kind: systemd.failed, field: failedCount }
+    expect: { atMost: 0 }
+    remediationHint: Look at systemctl --failed and the journal of each unit; fix it or disable it.
+
+  # ---- ssh ----
+  - id: ssh.root-login
+    title: Root cannot log in with a password
+    category: ssh
+    severity: medium
+    observe: { kind: sshd.effective, field: permitrootlogin }
+    expect: { in: [no, prohibit-password, without-password, forced-commands-only] }
+    remediationHint: Set PermitRootLogin no (or prohibit-password) once an administrator account with a key exists.
+
+  - id: ssh.password-login
+    title: SSH password login is closed
+    category: ssh
+    severity: medium
+    observe: { kind: sshd.effective, field: passwordauthentication }
+    expect: { equals: "no" }
+    remediationHint: Set PasswordAuthentication no after you have verified a key login.
+
+  - id: ssh.empty-passwords
+    title: Accounts without a password cannot log in over SSH
+    category: ssh
+    severity: high
+    observe: { kind: sshd.effective, field: permitemptypasswords }
+    expect: { equals: "no" }
+    remediationHint: Set PermitEmptyPasswords no.
+
+  - id: ssh.auth-tries
+    title: At most 6 password tries per connection
+    category: ssh
+    severity: low
+    observe: { kind: sshd.effective, field: maxauthtries }
+    expect: { matches: "^[1-6]$" }
+    remediationHint: Set MaxAuthTries 4 in the sshd configuration.
+
+  - id: ssh.keys-present
+    title: At least one SSH key is authorized
+    category: ssh
+    severity: medium
+    observe: { kind: ssh.keys, field: total }
+    expect: { atLeast: 1 }
+    remediationHint: Authorize a key for an administrator account before closing password login.
+
+  # ---- accounts ----
+  - id: accounts.single-uid-zero
+    title: Only root has user id 0
+    category: accounts
+    severity: high
+    observe: { kind: users.login, field: uidZero }
+    expect: { in: [root] }
+    remediationHint: Remove or change the second account with user id 0.
+
+  - id: accounts.no-empty-passwords
+    title: No account has an empty password
+    category: accounts
+    severity: high
+    observe: { kind: users.login, field: emptyPassword }
+    expect: { absent: true }
+    remediationHint: Lock the account (passwd -l) or give it a password.
+
+  # ---- firewall ----
+  - id: firewall.active
+    title: The firewall (UFW) is active
+    category: firewall
+    severity: medium
+    observe: { kind: ufw.status, field: active }
+    expect: { equals: true }
+    remediationHint: Enable UFW after allowing SSH (ufw allow 22/tcp; ufw enable).
+
+  - id: firewall.default-deny
+    title: The firewall denies incoming traffic by default
+    category: firewall
+    severity: high
+    observe: { kind: ufw.status, field: defaultIncoming }
+    expect: { equals: deny }
+    remediationHint: Set the default to deny incoming (ufw default deny incoming).
+
+  - id: firewall.fail2ban
+    title: fail2ban is running
+    category: firewall
+    severity: low
+    observe: { kind: fail2ban.status, field: active }
+    expect: { equals: true }
+    remediationHint: Install fail2ban and enable the sshd jail.
+
+  # ---- network ----
+  - id: network.own-name-resolves
+    title: The name of the machine resolves
+    category: network
+    severity: low
+    observe: { kind: dns.self, field: resolves }
+    expect: { equals: true }
+    remediationHint: Add the host name to /etc/hosts or to DNS.
+
+  - id: network.syncookies
+    title: SYN cookies are on
+    category: network
+    severity: low
+    observe: { kind: sysctl.value, params: { key: net.ipv4.tcp_syncookies }, field: value }
+    expect: { equals: "1" }
+    remediationHint: Set net.ipv4.tcp_syncookies = 1 in /etc/sysctl.d.
