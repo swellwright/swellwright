@@ -1,3 +1,4 @@
+import { apiConsole } from './apiConsole.js';
 import { artifacts } from './artifacts.js';
 import { audit } from './audit.js';
 import { auth } from './auth.js';
@@ -40,4 +41,5 @@ export const ru = {
   checks,
   snapshots,
   baseline,
+  apiConsole,
 } as const;

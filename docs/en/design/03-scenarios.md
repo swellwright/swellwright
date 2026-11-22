@@ -165,7 +165,7 @@ Traffic by node and squad, usage, recap and digest, Prometheus, summaries.
 Automatic checks: versions, port 62050 open only to the panel, `SNI_VERIFICATION`, kernel and CVEs, BBR, log limits, SSH policies, convention drift; a report in Markdown format and in the UI.
 
 ### P21 API console (M/H)
-A typed explorer of all 218 operations (the Remnawave 3.4.x OpenAPI specification) with schema prefill, history and a "dry run" (validation of the body against the contract); writes require approval; dangerous operations (`DELETE`, bulk) are flagged.
+A typed explorer of all 218 operations (the Remnawave 3.4.x OpenAPI specification) with schema prefill, history and a "dry run" (validation of the body against the contract); writes require approval; dangerous operations (`DELETE`, bulk) are flagged. **Built in Phase 3 (ADR 0046), the read half:** the catalogue, typed parameters, the masked answer and the history; writes and the dry run are phase 7.
 
 ## C. DNS (D)
 - **D01 Drivers:** RU-CENTER (NIC.RU) (OAuth password grant, XML exchange, commit/rollback, waiting on authoritative NS), Cloudflare, Route 53, Yandex Cloud DNS, Selectel, Reg.ru, Timeweb, RFC 2136 (nsupdate), "manual".

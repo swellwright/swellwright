@@ -81,6 +81,17 @@ export function describeError(
           ? t('errors:panel.contractChangedAt', where)
           : t('errors:panel.contractChanged');
       }
+      // The API console (ADR 0046).
+      case 'console_operation_unknown':
+        return t('apiConsole:errors.unknownOperation');
+      case 'console_operation_blocked':
+        return t('apiConsole:errors.blocked');
+      case 'console_user_data_disabled':
+        return t('apiConsole:errors.userDataDisabled');
+      case 'console_response_too_large':
+        return t('apiConsole:errors.tooLarge');
+      case 'console_response_unsupported':
+        return t('apiConsole:errors.unsupported');
       // Snapshots of the panel (ADR 0043).
       case 'snapshot_other_panel':
         return t('errors:snapshot.otherPanel');

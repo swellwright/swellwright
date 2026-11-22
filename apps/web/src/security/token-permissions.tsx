@@ -52,6 +52,7 @@ const RESOURCE_OF = {
   'servers:exec': 'servers',
   'panel:read': 'panel',
   'panel:write': 'panel',
+  'panel:console': 'panel',
   'runs:read': 'runs',
   'runs:execute': 'runs',
   'vault:read': 'vault',

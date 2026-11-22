@@ -11,6 +11,14 @@ export {
 } from './fixtures.js';
 export type { FixtureOptions, Json, PanelFixtures } from './fixtures.js';
 export { applyChecksScenario, CHECKS_ZONE } from './fixtures-checks.js';
+export {
+  buildConsoleFixtures,
+  fakeAccessTexts,
+  FAKE_USER_ACCESS,
+  FAKE_USER_PERSONAL,
+  fakePersonalTexts,
+} from './console-fixtures.js';
+export type { ConsoleFixtures } from './console-fixtures.js';
 export { must } from './must.js';
 export {
   addClient,

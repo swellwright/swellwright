@@ -6,8 +6,10 @@ import {
   PanelForbiddenError,
   PanelNotFoundError,
   PanelRateLimitedError,
+  PanelResponseTooLargeError,
   PanelTimeoutError,
   PanelUnavailableError,
+  PanelUnsupportedResponseError,
   PanelUrlError,
   PanelVersionError,
 } from '@swellwright/remnawave';
@@ -77,6 +79,19 @@ export function panelException(error: PanelError, options: MapOptions = {}): Err
     return new CodedHttpException(502, 'panel_unreachable', error.message, {
       endpoint: error.endpoint,
       reason: error.reason,
+    });
+  }
+  if (error instanceof PanelResponseTooLargeError) {
+    // Only the API console reads a raw answer (ADR 0046): a typed read that gets too much is a contract error below.
+    return new CodedHttpException(502, 'console_response_too_large', error.message, {
+      endpoint: error.endpoint,
+      limitBytes: error.limitBytes,
+    });
+  }
+  if (error instanceof PanelUnsupportedResponseError) {
+    return new CodedHttpException(502, 'console_response_unsupported', error.message, {
+      endpoint: error.endpoint,
+      contentType: error.contentType,
     });
   }
   if (error instanceof PanelContractError) {

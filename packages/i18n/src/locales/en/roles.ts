@@ -54,6 +54,8 @@ export const roles = {
       'Run scripts and commands on servers, stop a run, and write the scripts of the library.',
     panelRead: 'See the connected Remnawave panel: nodes, hosts, profiles, squads.',
     panelWrite: 'Change panel objects through Swellwright.',
+    panelConsole:
+      'Send read requests to the panel from the API console with the stored token. What it reads is masked; the operations about people need more (reveal secrets).',
     runsRead: 'See runs, their steps and logs.',
     runsExecute: 'Start, approve, cancel and roll back runs.',
     vaultRead: 'See the vault status and the list of secrets, never their values.',

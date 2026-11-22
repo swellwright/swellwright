@@ -199,6 +199,17 @@ import {
   PanelWarningSchema,
 } from './panel.js';
 import {
+  PanelConsoleAvailabilitySchema,
+  PanelConsoleBlockedReasonSchema,
+  PanelConsoleCatalogueSchema,
+  PanelConsoleIssuesSchema,
+  PanelConsoleOperationDetailSchema,
+  PanelConsoleOperationSchema,
+  PanelConsoleParamSchema,
+  PanelConsoleRequestSchema,
+  PanelConsoleResultSchema,
+} from './panel-console.js';
+import {
   CreatePanelSnapshotRequestSchema,
   PanelDiffCountsSchema,
   PanelDiffNoteSchema,
@@ -305,7 +316,7 @@ import {
 } from './system.js';
 
 /** Version of the API description. Bump it with every contract change (oasdiff checks the rules). */
-export const OPENAPI_INFO_VERSION = '0.28.0';
+export const OPENAPI_INFO_VERSION = '0.29.0';
 
 /** Named schemas that appear under `components.schemas`. Every response schema must be listed here. */
 const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
@@ -584,6 +595,15 @@ const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
   StartBaselineRunsResultSchema,
   BaselineFleetItemSchema,
   BaselineFleetSchema,
+  PanelConsoleAvailabilitySchema,
+  PanelConsoleBlockedReasonSchema,
+  PanelConsoleParamSchema,
+  PanelConsoleOperationSchema,
+  PanelConsoleOperationDetailSchema,
+  PanelConsoleCatalogueSchema,
+  PanelConsoleRequestSchema,
+  PanelConsoleResultSchema,
+  PanelConsoleIssuesSchema,
 ];
 
 type Json = Record<string, unknown>;
@@ -766,7 +786,7 @@ export function buildOpenApi(): Json {
       {
         name: 'panel',
         description:
-          'The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server. Snapshots of the panel and the diff between two of them (ADR 0043) are kept masked as well.',
+          "The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server. Snapshots of the panel and the diff between two of them (ADR 0043) are kept masked as well. The API console (ADR 0046) lists every operation of the panel's API and sends the reads among them, never anything else, with every answer masked.",
       },
     ],
     paths,

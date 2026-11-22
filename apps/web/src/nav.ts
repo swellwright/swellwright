@@ -306,7 +306,7 @@ const navigation = (t: TFunction<Namespace[]>): readonly GatedSection[] => [
         name: t('nav:apiConsole'),
         href: ROUTES.DASHBOARD.PANEL.API_CONSOLE,
         icon: IconApi,
-        planned: true,
+        // Every operation of the panel's API, and the reads among them sent safely (ADR 0046).
         permission: 'panel:read',
       },
     ],

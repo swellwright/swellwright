@@ -56,6 +56,8 @@ import { InventoryReader } from './checks/inventory.js';
 import { ChecksMemory } from './checks/memory.js';
 import { ConventionPackService } from './checks/pack.service.js';
 import { PanelClients } from './panel/clients.js';
+import { PanelConsoleController } from './panel/console/console.controller.js';
+import { PanelConsoleService } from './panel/console/console.service.js';
 import { PanelCache } from './panel/panel-cache.js';
 import { PanelController } from './panel/panel.controller.js';
 import { PanelMonitorService } from './panel/panel-monitor.service.js';
@@ -148,6 +150,7 @@ export class AppModule implements OnApplicationShutdown {
         ChecksController,
         PanelSnapshotsController,
         BaselineController,
+        PanelConsoleController,
       ],
       providers: [
         { provide: CONFIG, useValue: config },
@@ -184,6 +187,7 @@ export class AppModule implements OnApplicationShutdown {
         PanelCache,
         PanelService,
         PanelReaderService,
+        PanelConsoleService,
         PanelMonitorService,
         ChecksMemory,
         ConventionPackService,

@@ -202,8 +202,22 @@ const EnvSchema = z.object({
     .default(5),
   /** How many times one user may ask the panel again (`refresh=true`) per minute. */
   SW_PANEL_REFRESH_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(12),
+  /**
+   * How many times one user may read the computed configuration of a profile per minute (ADR 0041, note of ADR 0046). It
+   * is never kept in memory, so every read asks the panel: it has a budget of its own and does not use up the refresh one.
+   */
+  SW_PANEL_COMPUTED_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(30),
   /** How many connection tests and connects one user may start per minute. */
   SW_PANEL_TEST_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(10),
+  /**
+   * The API console (ADR 0046). The operations about the people who use the panel (users, devices, subscriptions,
+   * requests, usage) are refused unless this is on; when it is, they also need `vault:reveal` and a fresh second factor.
+   */
+  SW_PANEL_CONSOLE_USER_DATA: z.preprocess(unsetIfEmpty, z.stringbool().default(false)),
+  /** How many requests one user may send to the panel from the console per minute. */
+  SW_PANEL_CONSOLE_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(30),
+  /** The most of an answer the console returns, in KiB (after masking); the rest is cut and the answer says so. */
+  SW_PANEL_CONSOLE_MAX_BODY_KIB: z.coerce.number().int().min(16).max(16_384).default(1024),
   /**
    * The checks of the panel (ADR 0044). The reconciliation looks names up in DNS: how long one name may take, how many
    * different names one run may look up, how many lookups run at once, how long an answer is kept, which servers to ask
@@ -346,7 +360,15 @@ export interface AppConfig {
     /** 0: no background check. */
     readonly checkIntervalMs: number;
     readonly refreshRateLimitPerMinute: number;
+    /** The computed configuration of a profile has a budget of its own (it is never cached). */
+    readonly computedRateLimitPerMinute: number;
     readonly testRateLimitPerMinute: number;
+    /** The API console (ADR 0046). */
+    readonly console: {
+      readonly userData: boolean;
+      readonly ratePerMinute: number;
+      readonly maxBodyBytes: number;
+    };
     /** Snapshots (ADR 0043): how many are kept at least, the interval of the job (0: off) and the size cap. */
     readonly snapshotKeep: number;
     readonly snapshotIntervalMs: number;
@@ -591,7 +613,13 @@ export function loadConfig(
       cacheTtlMs: e.SW_PANEL_CACHE_TTL_SECONDS * 1000,
       checkIntervalMs: Math.round(e.SW_PANEL_CHECK_INTERVAL_MINUTES * 60_000),
       refreshRateLimitPerMinute: e.SW_PANEL_REFRESH_RATE_LIMIT_PER_MINUTE,
+      computedRateLimitPerMinute: e.SW_PANEL_COMPUTED_RATE_LIMIT_PER_MINUTE,
       testRateLimitPerMinute: e.SW_PANEL_TEST_RATE_LIMIT_PER_MINUTE,
+      console: {
+        userData: e.SW_PANEL_CONSOLE_USER_DATA,
+        ratePerMinute: e.SW_PANEL_CONSOLE_RATE_PER_MINUTE,
+        maxBodyBytes: e.SW_PANEL_CONSOLE_MAX_BODY_KIB * 1024,
+      },
       snapshotKeep: e.SW_PANEL_SNAPSHOT_KEEP,
       snapshotIntervalMs: Math.round(e.SW_PANEL_SNAPSHOT_INTERVAL_HOURS * 3_600_000),
       snapshotMaxBytes: e.SW_PANEL_SNAPSHOT_MAX_MIB * 1024 * 1024,
