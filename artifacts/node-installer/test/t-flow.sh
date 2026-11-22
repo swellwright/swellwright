@@ -43,6 +43,17 @@ t_ssh_user_phase() {
     assert_no_secret "another password here"
 }
 
+# An authorized_keys file written without a final line break (a provider's image, a hand edit) must not swallow the new key.
+t_ssh_user_phase_appends_the_key_to_a_file_without_a_final_line_break() {
+    printf '%s' "$SSHD_DEFAULT" >"$R/etc/ssh/sshd_config"
+    mkdir -p "$R/home/admin/.ssh"
+    printf '%s' "$KEY2" >"$R/home/admin/.ssh/authorized_keys"
+    run_inst ssh SSH_PHASE=user NEW_USER=admin NEW_USER_PUBKEY="$KEY1" NEW_USER_PASSWORD='correct horse battery staple'
+    assert_rc 0
+    assert_line "$R/home/admin/.ssh/authorized_keys" "$KEY1"
+    assert_line "$R/home/admin/.ssh/authorized_keys" "$KEY2"
+}
+
 t_ssh_user_phase_without_password_stops_before_creating_anything() {
     run_inst ssh SSH_PHASE=user NEW_USER=admin NEW_USER_PUBKEY="$KEY1"
     assert_rc 1
@@ -201,6 +212,46 @@ t_rename_step() {
     # Only the names changed: the rest of the HAProxy file is as it was.
     assert_contains "$R/etc/haproxy/haproxy.cfg" "default_backend decoy_default"
     assert_contains "$R/etc/haproxy/haproxy.cfg" "bind 192.0.2.10:443"
+}
+
+# The README promises that a file is never rewritten with the same content and that only a changed file keeps a backup.
+# A second run with the same names must not leave new backups (found on a real server: every run added four).
+t_rename_with_the_same_names_again_changes_and_backs_up_nothing() {
+    a_node
+    run_inst rename NODE_DOMAIN=node2.example.com
+    assert_rc 0
+    rm -f "$R"/etc/nginx/conf.d/*.bak.* "$R"/etc/haproxy/*.bak.* "$R"/etc/hosts.bak.*
+    run_inst rename NODE_DOMAIN=node2.example.com
+    assert_rc 0
+    ls "$R"/etc/nginx/conf.d/*.bak.* "$R"/etc/haproxy/*.bak.* "$R"/etc/hosts.bak.* >/dev/null 2>&1 && fail "a second run left backups of files it did not change"
+    assert_contains "$R/etc/nginx/conf.d/selfsni.conf" "server_name node2.example.com;"
+    assert_line "$R/etc/hosts" "192.0.2.10 node2.example.com node2"
+    [ "$(grep -c 'node2.example.com' "$R/etc/hosts")" = 1 ] || fail "the hosts line was changed or added twice"
+}
+
+# A refused configuration restores what this run changed and nothing else: with nothing changed there is nothing to
+# restore, and an older backup of an earlier rename must not come back.
+t_rename_that_changes_nothing_does_not_bring_an_older_backup_back() {
+    a_node
+    run_inst rename NODE_DOMAIN=node2.example.com RENAME_ALIAS=node1.example.com
+    assert_rc 0
+    run_inst rename NODE_DOMAIN=node2.example.com
+    assert_rc 0
+    fail_on "nginx -t"
+    run_inst rename NODE_DOMAIN=node2.example.com
+    assert_rc 1
+    assert_contains "$R/etc/nginx/conf.d/selfsni.conf" "server_name node2.example.com;"
+    assert_not_contains "$R/etc/nginx/conf.d/selfsni.conf" "node1.example.com"
+    assert_contains "$R/etc/haproxy/haproxy.cfg" "req_ssl_sni -i node2.example.com }"
+}
+
+t_rename_adds_the_hosts_line_after_a_last_line_without_a_line_break() {
+    a_node
+    printf '198.51.100.5	vm-name' >"$R/etc/hosts"
+    run_inst rename NODE_DOMAIN=node2.example.com
+    assert_rc 0
+    assert_line "$R/etc/hosts" "198.51.100.5	vm-name"
+    assert_line "$R/etc/hosts" "192.0.2.10 node2.example.com node2"
 }
 
 t_rename_restores_everything_when_a_configuration_is_refused() {

@@ -100,6 +100,9 @@ export function shellWords(line: string): string[] {
   return words;
 }
 
+/** The home of the login of this stand-in server. */
+const LOGIN_HOME = '/home/deploy';
+
 const iso = (): string => new Date().toISOString().replace(/\.\d{3}Z$/u, 'Z');
 
 export interface StepHostOptions {
@@ -182,7 +185,13 @@ export class StepHost {
         input = stdin.subarray(newline + 1);
       }
     }
-    const words = shellWords(inner);
+    if (command === 'printf %s "$HOME"') {
+      // The SSH layer asks for the home of the login before it cancels or removes a step through sudo (sudo resets `HOME`).
+      reply(LOGIN_HOME, 0);
+      return;
+    }
+    // The remote shell expands `$HOME`: a step started with `"$HOME"/...` and looked at with the absolute path is one step.
+    const words = shellWords(inner).map((word) => word.replaceAll('$HOME', LOGIN_HOME));
     const marker = words.findIndex((word) => (MARKERS as readonly string[]).includes(word));
     if (marker < 0) {
       reply(`sh: 1: ${words[0] ?? ''}: not found\n`, 127);

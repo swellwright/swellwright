@@ -237,6 +237,10 @@ while IFS="$(printf '\t')" read -r _comm _args; do
 done <"$STUB_STATE/processes"
 exit 1
 EOF
+    # fuser (psmisc): the lock files are busy while "$STUB_STATE/locked" exists. Not installed unless a test says `have fuser`.
+    mkstub fuser <<'EOF'
+[ -f "$STUB_STATE/locked" ]
+EOF
     mkstub dpkg <<'EOF'
 [ "${1:-}" = --print-architecture ] && echo amd64
 exit 0
