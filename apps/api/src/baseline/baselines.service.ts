@@ -130,7 +130,9 @@ export class BaselinesService implements OnApplicationBootstrap {
   /**
    * Makes every built-in baseline exist with the document of this build. Idempotent: one that is current is left
    * alone, one whose document changed gets a new version (the old one stays), one that is missing is created. A
-   * baseline of the instance that already uses a built-in name is never touched.
+   * baseline of the instance that already uses a built-in name is never touched. This is the build's content and not
+   * a person's action, and it runs before anyone can sign in, so it writes nothing to the audit chain (the version
+   * keeps its `source`, its hash and the note "Shipped with Swellwright"; a run copies the hash).
    */
   async seedBuiltins(): Promise<{ created: number; updated: number; skipped: string[] }> {
     const result = { created: 0, updated: 0, skipped: [] as string[] };
@@ -161,22 +163,6 @@ export class BaselinesService implements OnApplicationBootstrap {
                 comment: 'Shipped with Swellwright.',
               },
             });
-            await this.audit.record(
-              {
-                action: 'baseline.version.created',
-                outcome: 'success',
-                object: { type: 'baseline', id: profile.id },
-                details: {
-                  baseline: builtin.name,
-                  version: 1,
-                  checks: builtin.parsed.document.checks.length,
-                  sha256: builtin.parsed.sha256,
-                  built_in: true,
-                },
-                meta: { ip: undefined, requestId: undefined },
-              },
-              tx,
-            );
           });
           result.created += 1;
         } catch (error) {
@@ -214,22 +200,6 @@ export class BaselinesService implements OnApplicationBootstrap {
           where: { id: existing.id },
           data: { currentVersion: next, description: builtin.description.slice(0, 300) },
         });
-        await this.audit.record(
-          {
-            action: 'baseline.version.created',
-            outcome: 'success',
-            object: { type: 'baseline', id: existing.id },
-            details: {
-              baseline: builtin.name,
-              version: next,
-              checks: builtin.parsed.document.checks.length,
-              sha256: builtin.parsed.sha256,
-              built_in: true,
-            },
-            meta: { ip: undefined, requestId: undefined },
-          },
-          tx,
-        );
       });
       result.updated += 1;
     }

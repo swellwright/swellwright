@@ -622,8 +622,8 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
     assert.equal(finished[0].details['pass'], 4);
     const versions = await eventsOf(h.instance, 'baseline.version.created');
     assert.ok(
-      versions.some((event) => event.details['built_in'] === true),
-      'the built-ins',
+      versions.every((event) => event.details['built_in'] !== true),
+      'the built-ins, which are the content of the build, are not in the audit chain',
     );
     assert.ok(
       versions.some(
