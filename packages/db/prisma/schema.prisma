@@ -705,3 +705,65 @@ model PanelConnection {
   @@index([tokenSecretId])
   @@map("panel_connections")
 }
+
+/// Where a snapshot of the panel came from (ADR 0043). `before_change` and `imported` are reserved for later phases.
+enum PanelSnapshotKind {
+  manual
+  scheduled
+  before_change
+  imported
+
+  @@map("panel_snapshot_kind")
+}
+
+/// A snapshot of the objects of a Remnawave panel at one moment (ADR 0043): masked, normalised, hashed per object and
+/// as a whole. What it holds is in `PanelSnapshotContent`, so that a list of snapshots does not read the content. It
+/// belongs to a panel by its address and not to a connection: a connection is replaced when its token is rotated, and
+/// the history must survive that, so there is no foreign key and `connectionId` is only a note.
+model PanelSnapshot {
+  id            String            @id @default(uuid(7)) @db.Uuid
+  connectionId  String?           @map("connection_id") @db.Uuid
+  /// The address of the panel it was taken from (normalised, as `PanelConnection.baseUrl`).
+  panelUrl      String            @map("panel_url") @db.VarChar(2048)
+  label         String?           @db.VarChar(100)
+  kind          PanelSnapshotKind
+  createdAt     DateTime          @default(now()) @map("created_at") @db.Timestamptz(3)
+  /// Who took it; null for the background job. No foreign key, like the audit chain; the name is the one at that time.
+  createdById   String?           @map("created_by_id") @db.Uuid
+  createdByName String?           @map("created_by_name") @db.VarChar(64)
+  panelVersion  String?           @map("panel_version") @db.VarChar(64)
+  /// Objects per kind (0 for a kind that is not covered), and per kind whether it was read: `ok`, `denied`, `failed`.
+  counts        Json
+  coverage      Json
+  objectCount   Int               @map("object_count")
+  /// SHA-256 over the (id, hash) pairs of every covered object, and the same per kind.
+  overallHash   String            @map("overall_hash") @db.VarChar(64)
+  kindHashes    Json              @map("kind_hashes")
+  /// A public identifier of the key that made the fingerprints of the masks (see ADR 0043).
+  maskKeyId     String            @map("mask_key_id") @db.VarChar(16)
+  /// The size of the content as JSON and as stored (gzip).
+  rawBytes      Int               @map("raw_bytes")
+  sizeBytes     Int               @map("size_bytes")
+  /// When the panel was last compared with this snapshot (the background job or a comparison with the live panel), and
+  /// how many objects differed then; 0 when the panel was found the same.
+  checkedAt     DateTime?         @map("checked_at") @db.Timestamptz(3)
+  changesSince  Int?              @map("changes_since")
+
+  content PanelSnapshotContent?
+
+  @@index([panelUrl, createdAt(sort: Desc)])
+  @@map("panel_snapshots")
+}
+
+/// The content of a snapshot: the JSON of `{ format, schemaVersion, maskKeyId, kinds }`, gzipped, with the SHA-256 of
+/// the stored bytes so that a corrupted row is found when it is read.
+model PanelSnapshotContent {
+  snapshotId String @id @map("snapshot_id") @db.Uuid
+  encoding   String @db.VarChar(16)
+  data       Bytes
+  sha256     String @db.VarChar(64)
+
+  snapshot PanelSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@map("panel_snapshot_contents")
+}

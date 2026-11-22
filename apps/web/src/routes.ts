@@ -41,6 +41,7 @@ export const ROUTES = {
       TEMPLATES: '/dashboard/panel/templates',
       SNIPPETS: '/dashboard/panel/snippets',
       NODE_PLUGINS: '/dashboard/panel/node-plugins',
+      SNAPSHOTS: '/dashboard/panel/snapshots',
       SUBSCRIPTION_SETTINGS: '/dashboard/panel/subscription-settings',
       INFRA_BILLING: '/dashboard/panel/infra-billing',
       API_CONSOLE: '/dashboard/panel/api-console',

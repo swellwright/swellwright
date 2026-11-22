@@ -33,6 +33,14 @@ export const errors = {
     contractChangedAt:
       'The panel answered in a shape this release does not know: {{endpoint}}, field {{field}}. Its version may have changed the API.',
   },
+  /** Snapshots of the panel (ADR 0043). */
+  snapshot: {
+    otherPanel:
+      'This snapshot is of another panel than the connected one, so it cannot be compared with it.',
+    tooLarge:
+      'The panel holds more than one snapshot may keep. The limit is set by the installation.',
+    corrupt: 'The stored content of this snapshot cannot be read. Delete it and take another one.',
+  },
   ssh: {
     hostKeyNotPinned:
       'No host key is pinned for this server. Scan its host key and confirm the fingerprint first.',

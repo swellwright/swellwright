@@ -172,6 +172,7 @@ describe('step-up authentication on routes', () => {
       'createSecret',
       'createToken',
       'createUser',
+      'deletePanelSnapshot',
       'deleteScript',
       'deleteSecret',
       'deleteUser',

@@ -203,6 +203,17 @@ const EnvSchema = z.object({
   SW_PANEL_REFRESH_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(12),
   /** How many connection tests and connects one user may start per minute. */
   SW_PANEL_TEST_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(10),
+  /** Snapshots of the panel (ADR 0043): how many are kept at least (the newest of each of the last 14 days is kept as well). */
+  SW_PANEL_SNAPSHOT_KEEP: z.coerce.number().int().min(1).max(1000).default(50),
+  /** How often the background job takes a snapshot while a panel is connected and the vault is open, in hours. 0: never. */
+  SW_PANEL_SNAPSHOT_INTERVAL_HOURS: z.coerce
+    .number()
+    .min(0)
+    .max(720)
+    .refine((hours) => hours === 0 || hours >= 0.01, 'must be 0 (off) or at least 0.01')
+    .default(24),
+  /** The most one snapshot may hold before compression, in MiB; a panel that needs more is refused with 413. */
+  SW_PANEL_SNAPSHOT_MAX_MIB: z.coerce.number().int().min(1).max(256).default(32),
 });
 
 export interface AppConfig {
@@ -307,6 +318,10 @@ export interface AppConfig {
     readonly checkIntervalMs: number;
     readonly refreshRateLimitPerMinute: number;
     readonly testRateLimitPerMinute: number;
+    /** Snapshots (ADR 0043): how many are kept at least, the interval of the job (0: off) and the size cap. */
+    readonly snapshotKeep: number;
+    readonly snapshotIntervalMs: number;
+    readonly snapshotMaxBytes: number;
   };
 }
 
@@ -502,6 +517,9 @@ export function loadConfig(
       checkIntervalMs: Math.round(e.SW_PANEL_CHECK_INTERVAL_MINUTES * 60_000),
       refreshRateLimitPerMinute: e.SW_PANEL_REFRESH_RATE_LIMIT_PER_MINUTE,
       testRateLimitPerMinute: e.SW_PANEL_TEST_RATE_LIMIT_PER_MINUTE,
+      snapshotKeep: e.SW_PANEL_SNAPSHOT_KEEP,
+      snapshotIntervalMs: Math.round(e.SW_PANEL_SNAPSHOT_INTERVAL_HOURS * 3_600_000),
+      snapshotMaxBytes: e.SW_PANEL_SNAPSHOT_MAX_MIB * 1024 * 1024,
     },
   };
 }

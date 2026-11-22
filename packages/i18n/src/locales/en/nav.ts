@@ -33,6 +33,7 @@ export const nav = {
   subscriptionSettings: 'Subscription settings',
   infraBilling: 'Infra billing',
   apiConsole: 'API console',
+  snapshots: 'Snapshots',
 
   security: 'Security',
   vault: 'Vault',

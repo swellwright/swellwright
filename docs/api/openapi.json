@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.24.0",
+    "version": "0.25.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -65,7 +65,7 @@
     },
     {
       "name": "panel",
-      "description": "The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server."
+      "description": "The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server. Snapshots of the panel and the diff between two of them (ADR 0043) are kept masked as well."
     }
   ],
   "paths": {
@@ -6007,6 +6007,381 @@
         ],
         "x-sw-permission": "panel:read"
       }
+    },
+    "/panel/snapshots": {
+      "get": {
+        "operationId": "listPanelSnapshots",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The snapshots of the panel",
+        "responses": {
+          "200": {
+            "description": "One page of snapshots.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelSnapshotList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Newest first, without their content. `settings` says how often the background job takes one and how many are kept. Reading does not call the panel, and works while no panel is connected (the snapshots of a panel that was disconnected are kept).",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Snapshots per page, 25 by default.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "How many to skip, newest first.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      },
+      "post": {
+        "operationId": "createPanelSnapshot",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Take a snapshot of the panel now",
+        "responses": {
+          "201": {
+            "description": "The snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelSnapshotSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reads every kind of object the token may read (nodes, hosts, config profiles with their configuration, squads, subscription templates and settings, snippets, node plugins, infrastructure billing) from the panel itself, not from the memory of this server, masks every secret, and keeps the result compressed, with a hash per object and one for the whole. A kind the token cannot read is left out and said so in `coverage`. Counts as one forced read of the panel for the rate limit. Recorded as `panel.snapshot.created` (counts and hashes, never an object). Afterwards the retention policy removes what is beyond `SW_PANEL_SNAPSHOT_KEEP` snapshots, except the newest of each of the last 14 days. 413 `snapshot_too_large` when the content passes the size limit. Reading the live panel can fail with the codes of the panel reads: 409 `panel_not_connected`, 409 `panel_unsupported_version`, 502 `panel_unauthorized`, 502 `panel_forbidden`, 502 `panel_unreachable`, 502 `panel_contract_changed`, 504 `panel_timeout`, 429 `panel_rate_limited`, and 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePanelSnapshotRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:write"
+      }
+    },
+    "/panel/snapshots/{id}": {
+      "get": {
+        "operationId": "getPanelSnapshot",
+        "tags": [
+          "panel"
+        ],
+        "summary": "One snapshot",
+        "responses": {
+          "200": {
+            "description": "The snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelSnapshotSummary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Who took it, when, from which panel version, how many objects of each kind it holds, what the token could not read, and the hashes. The content itself is in the export and in a diff. 404 when there is no such snapshot.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      },
+      "delete": {
+        "operationId": "deletePanelSnapshot",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Delete a snapshot",
+        "responses": {
+          "204": {
+            "description": "Deleted."
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Removes the snapshot and its content from this server; nothing is changed on the panel. Needs a fresh second factor. Recorded as `panel.snapshot.deleted`. 404 when there is no such snapshot.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:write",
+        "x-sw-step-up": true
+      }
+    },
+    "/panel/snapshots/{id}/diff": {
+      "get": {
+        "operationId": "diffPanelSnapshot",
+        "tags": [
+          "panel"
+        ],
+        "summary": "What differs between a snapshot and the live panel or another snapshot",
+        "responses": {
+          "200": {
+            "description": "The differences.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelDiff"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Seen from the snapshot in the path to `against`. Objects are matched by uuid (a snippet by name) and compared field by field; an array of objects is matched by its natural key (`tag`, `uuid`, `name`) where it has one, an array that is a set is compared without regard to order, runtime state and timestamps are left out, and a list of clients is only counted. A secret that was rotated shows as changed with `masked: true`, never as a value. \"No differences\" is a result (`identical: true`). With `against=live` the panel is read through the memory of this server (`refresh=true` asks it again; rate limited per user), and the result is kept on the snapshot as the answer to \"what changed since\". 409 `snapshot_other_panel` when the snapshot is from a panel that is not the connected one. Reading the live panel can fail with the codes of the panel reads: 409 `panel_not_connected`, 409 `panel_unsupported_version`, 502 `panel_unauthorized`, 502 `panel_forbidden`, 502 `panel_unreachable`, 502 `panel_contract_changed`, 504 `panel_timeout`, 429 `panel_rate_limited`, and 423 `vault_sealed` while the vault that holds the token is sealed. 404 when a snapshot does not exist.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "against",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "live"
+                },
+                {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                }
+              ],
+              "description": "What to compare the snapshot with: `live` (the panel as it is now, read through the memory of this server) or the id of another snapshot of the same panel."
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "With `against=live`: true asks the panel again instead of answering from memory. Rate limited per user, like every forced read.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          },
+          {
+            "name": "includeUnchanged",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true lists the objects that did not change as well; the summary counts them either way.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/snapshots/{id}/export": {
+      "get": {
+        "operationId": "exportPanelSnapshot",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Download a snapshot as a JSON file",
+        "responses": {
+          "200": {
+            "description": "The file.",
+            "headers": {
+              "Content-Disposition": {
+                "description": "An attachment named after the date and the id of the snapshot.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The whole snapshot as it is stored: the summary and, per kind, every object with its hash and its masked configuration. No unmasked value exists anywhere in it, so a file like this can be kept in a repository or attached to a ticket; a secret is a keyed fingerprint that says whether it changed. 404 when there is no such snapshot.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
     }
   },
   "components": {
@@ -6049,6 +6424,9 @@
           "panel_contract_changed",
           "panel_unsupported_version",
           "panel_rate_limited",
+          "snapshot_other_panel",
+          "snapshot_too_large",
+          "snapshot_corrupt",
           "internal_error"
         ]
       },
@@ -6721,7 +7099,9 @@
           "panel.connected",
           "panel.disconnected",
           "panel.tested",
-          "panel.state.changed"
+          "panel.state.changed",
+          "panel.snapshot.created",
+          "panel.snapshot.deleted"
         ]
       },
       "AuditOutcome": {
@@ -15131,6 +15511,641 @@
           "fetchedAt"
         ],
         "additionalProperties": false
+      },
+      "PanelSnapshotKind": {
+        "type": "string",
+        "enum": [
+          "manual",
+          "scheduled",
+          "before_change",
+          "imported"
+        ],
+        "description": "`manual`: a person asked for it. `scheduled`: the background job took it. `before_change` and `imported` are reserved: the anchor of a later change, and an import from a file."
+      },
+      "PanelSnapshotObjectKind": {
+        "type": "string",
+        "enum": [
+          "nodes",
+          "hosts",
+          "configProfiles",
+          "internalSquads",
+          "externalSquads",
+          "subscriptionTemplates",
+          "subscriptionSettings",
+          "snippets",
+          "nodePlugins",
+          "infraProviders",
+          "billingNodes"
+        ],
+        "description": "A kind of panel object. `infraProviders` and `billingNodes` are the two halves of the panel billing data; the snapshot does not hold API tokens, users or anything about what runs right now."
+      },
+      "PanelSnapshotCoverage": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "denied",
+          "failed"
+        ],
+        "description": "`ok`: the kind is in the snapshot. `denied`: the token has no scope to read it. `failed`: the panel answered in a shape this release does not know, or the read failed in another way. A kind that is not `ok` is left out of the snapshot and of every comparison."
+      },
+      "PanelSnapshotSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "label": {
+            "description": "The name a person gave it; null when none was given.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "$ref": "#/components/schemas/PanelSnapshotKind"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "The login name at the time."
+                  }
+                },
+                "required": [
+                  "id",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for a scheduled snapshot."
+          },
+          "panelUrl": {
+            "type": "string",
+            "description": "The panel it was taken from."
+          },
+          "panelVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/PanelSnapshotObjectKind"
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "required": [
+              "nodes",
+              "hosts",
+              "configProfiles",
+              "internalSquads",
+              "externalSquads",
+              "subscriptionTemplates",
+              "subscriptionSettings",
+              "snippets",
+              "nodePlugins",
+              "infraProviders",
+              "billingNodes"
+            ],
+            "description": "How many objects of each kind it holds (0 for a kind that is not covered)."
+          },
+          "coverage": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/PanelSnapshotObjectKind"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PanelSnapshotCoverage"
+            },
+            "required": [
+              "nodes",
+              "hosts",
+              "configProfiles",
+              "internalSquads",
+              "externalSquads",
+              "subscriptionTemplates",
+              "subscriptionSettings",
+              "snippets",
+              "nodePlugins",
+              "infraProviders",
+              "billingNodes"
+            ]
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "True when every kind is `ok`."
+          },
+          "objectCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "overallHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 over the (id, hash) pairs of every covered object: two snapshots with the same hash hold the same configuration."
+          },
+          "kindHashes": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/PanelSnapshotObjectKind"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            },
+            "description": "The same per kind, for the covered kinds."
+          },
+          "rawBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "The size of the content before compression."
+          },
+          "sizeBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "The size of the content as it is stored (compressed)."
+          },
+          "checkedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the panel was last compared with this snapshot (the background job, or a comparison with the live panel)."
+          },
+          "changesSince": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "How many objects differed at `checkedAt`: 0 when the panel was found the same, null when it was never compared."
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "createdAt",
+          "createdBy",
+          "panelUrl",
+          "panelVersion",
+          "counts",
+          "coverage",
+          "complete",
+          "objectCount",
+          "overallHash",
+          "kindHashes",
+          "rawBytes",
+          "sizeBytes",
+          "checkedAt",
+          "changesSince"
+        ],
+        "additionalProperties": false,
+        "description": "A snapshot without its content. The content is the masked, normalised configuration of every object; the secrets in it are replaced by keyed fingerprints (ADR 0041)."
+      },
+      "PanelSnapshotSettings": {
+        "type": "object",
+        "properties": {
+          "intervalHours": {
+            "type": "number",
+            "minimum": 0,
+            "description": "How often the background job takes a snapshot; 0 means it is off."
+          },
+          "keep": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many snapshots are kept at least."
+          },
+          "keepDailyDays": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "For this many days the newest snapshot of each day is kept whatever `keep` says."
+          },
+          "scheduling": {
+            "type": "boolean",
+            "description": "True when the background job runs (the interval is on and a database is there)."
+          }
+        },
+        "required": [
+          "intervalHours",
+          "keep",
+          "keepDailyDays",
+          "scheduling"
+        ],
+        "additionalProperties": false
+      },
+      "PanelSnapshotList": {
+        "type": "object",
+        "properties": {
+          "snapshots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelSnapshotSummary"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "settings": {
+            "$ref": "#/components/schemas/PanelSnapshotSettings"
+          }
+        },
+        "required": [
+          "snapshots",
+          "total",
+          "settings"
+        ],
+        "additionalProperties": false
+      },
+      "CreatePanelSnapshotRequest": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "description": "A name for the snapshot (\"before the key rotation\"). Optional.",
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          }
+        },
+        "additionalProperties": false
+      },
+      "PanelDiffObjectStatus": {
+        "type": "string",
+        "enum": [
+          "added",
+          "removed",
+          "changed",
+          "unchanged"
+        ],
+        "description": "Seen from the first side to the second: `added` is in the second only, `removed` in the first only."
+      },
+      "PanelFieldChange": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Where in the object, `config.inbounds[tag=MAIN].port`: keys with a dot, an array element of an object by its natural key (`[tag=...]`, `[uuid=...]`, `[name=...]`) and otherwise by position (`[2]`)."
+          },
+          "op": {
+            "type": "string",
+            "enum": [
+              "added",
+              "removed",
+              "changed"
+            ]
+          },
+          "before": {
+            "description": "The value in the first side (JSON). Absent for `added`. A very large value is replaced by a text that says how large it was."
+          },
+          "after": {
+            "description": "The value in the second side. Absent for `removed`."
+          },
+          "masked": {
+            "description": "True when a value is, or holds, a masked secret. The two sides then differ in the keyed fingerprint (`[masked:1a2b3c4d]` against `[masked:5e6f7a8b]`): the secret was changed, and neither value can be read.",
+            "type": "boolean"
+          },
+          "hidden": {
+            "description": "True for a list of people (clients, users, accounts, peers): only how many items it holds is shown, never what is in them.",
+            "type": "boolean"
+          },
+          "lines": {
+            "description": "For a text of several lines (a YAML template): how many lines went and came; `before` and `after` hold those lines only.",
+            "type": "object",
+            "properties": {
+              "removed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "added": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "removed",
+              "added"
+            ],
+            "additionalProperties": false
+          },
+          "valueTruncated": {
+            "description": "True when `before` or `after` was cut to the size limit.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path",
+          "op"
+        ],
+        "additionalProperties": false
+      },
+      "PanelDiffObject": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/PanelSnapshotObjectKind"
+          },
+          "id": {
+            "type": "string",
+            "description": "The uuid of the object (the name for a snippet)."
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PanelDiffObjectStatus"
+          },
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelFieldChange"
+            },
+            "description": "For `changed`: what differs. For `added` and `removed`: empty, the whole object is the change."
+          },
+          "changeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many field changes there are, also when `changes` was cut."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when `changes` holds fewer entries than `changeCount`."
+          },
+          "fromHash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "toHash": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "id",
+          "name",
+          "status",
+          "changes",
+          "changeCount",
+          "truncated",
+          "fromHash",
+          "toHash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelDiffCounts": {
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "removed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "changed": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unchanged": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "added",
+          "removed",
+          "changed",
+          "unchanged"
+        ],
+        "additionalProperties": false
+      },
+      "PanelDiffNote": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "kind_not_covered",
+              "mask_key_differs",
+              "panel_version_differs",
+              "noise_only",
+              "objects_cut"
+            ]
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelSnapshotObjectKind"
+            }
+          },
+          "count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false,
+        "description": "`kind_not_covered`: a kind is missing on one side (the token cannot read it) and was not compared. `mask_key_differs`: the two sides were masked with different keys, so rotated secrets cannot be told apart and masked values were compared as equal. `panel_version_differs`: the panel was updated between the two. `noise_only`: `count` objects had a different hash but only in fields that are left out of a diff (timestamps). `objects_cut`: the list of objects was cut to the size limit; the counts are complete."
+      },
+      "PanelDiffSide": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "snapshot",
+              "live"
+            ]
+          },
+          "id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The snapshot id; null for the live panel."
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the snapshot was taken, or the live panel was read."
+          },
+          "panelVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overallHash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        },
+        "required": [
+          "type",
+          "id",
+          "label",
+          "at",
+          "panelVersion",
+          "overallHash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelDiff": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/PanelDiffSide"
+          },
+          "to": {
+            "$ref": "#/components/schemas/PanelDiffSide"
+          },
+          "identical": {
+            "type": "boolean",
+            "description": "True when nothing differs in the kinds that were compared: \"no differences\" is a result, not an empty list."
+          },
+          "summary": {
+            "type": "object",
+            "properties": {
+              "objects": {
+                "$ref": "#/components/schemas/PanelDiffCounts"
+              },
+              "byKind": {
+                "type": "object",
+                "propertyNames": {
+                  "$ref": "#/components/schemas/PanelSnapshotObjectKind"
+                },
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/PanelDiffCounts"
+                }
+              },
+              "fieldChanges": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "How many field changes there are in all `changed` objects."
+              }
+            },
+            "required": [
+              "objects",
+              "byKind",
+              "fieldChanges"
+            ],
+            "additionalProperties": false
+          },
+          "objects": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelDiffObject"
+            }
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelDiffNote"
+            }
+          },
+          "labels": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Names for the uuids that appear in the values of the changes (an inbound, a node, a squad), so that a change can be read without a second lookup."
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "identical",
+          "summary",
+          "objects",
+          "notes",
+          "labels"
+        ],
+        "additionalProperties": false,
+        "description": "The differences between two snapshots, or between a snapshot and the live panel, seen from `from` to `to`. Runtime state (online, counters, versions of a node) is not compared; a masked secret is compared by its keyed fingerprint and never shown."
       }
     },
     "securitySchemes": {
