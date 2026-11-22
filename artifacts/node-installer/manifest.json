@@ -1,12 +1,12 @@
 {
   "manifestVersion": 1,
   "name": "node-installer",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Installs and hardens a Remnawave node: firewall, Docker, HAProxy SNI routing, nginx default site, the node container and the checks.",
   "file": "install.sh",
   "interpreter": "sh",
-  "sha256": "3d53287c4b6491d82b4f5101e49b2c2a468a7d0f2e11ade51b13ff6f0e0f72ab",
-  "size": 103415,
+  "sha256": "c165bed63d0c1b59f963972e2c54407bd08d6c7db5a97de32045753e8b913462",
+  "size": 126265,
   "minOs": "debian 12 / ubuntu 22.04",
   "steps": [
     {
@@ -160,6 +160,7 @@
       "params": [
         "NODE_PORT",
         "SECRET_KEY",
+        "SECRET_KEY_FILE",
         "NODE_IMAGE_TAG"
       ],
       "requires": [
@@ -182,7 +183,7 @@
     },
     {
       "id": "ssh",
-      "title": "SSH: administrator account, keys, root login",
+      "title": "SSH: administrator account, keys, root and password login",
       "readOnly": false,
       "needsRoot": true,
       "inFull": false,
@@ -192,6 +193,7 @@
         "NEW_USER_PUBKEY",
         "NEW_USER_PUBKEY2",
         "NEW_USER_PASSWORD",
+        "NEW_USER_PASSWORD_FILE",
         "SSH_DISABLE_ROOT",
         "SSH_DISABLE_PASSWORD"
       ],
@@ -247,11 +249,20 @@
     },
     "SECRET_KEY": {
       "group": "node",
-      "description": "Node secret key from the panel (the SECRET_KEY of the compose file the panel shows for the node). 16 to 8192 characters of letters, digits and + / = _ . : -. Kept only in the compose file, mode 600.",
+      "description": "Node secret key from the panel (the SECRET_KEY of the compose file the panel shows for the node). 16 to 8192 characters of letters, digits and + / = _ . : -. Kept only in the compose file, mode 600. Or give SECRET_KEY_FILE.",
       "required": true,
       "secret": true,
       "pattern": "^[A-Za-z0-9+/=_.:-]{16,}$",
       "default": null
+    },
+    "SECRET_KEY_FILE": {
+      "group": "node",
+      "description": "Path of a file that holds the node secret key instead of SECRET_KEY: a regular file (not a link) owned by root or by the user running the installer, mode 600 or 400, one line, at most 16 KiB. Giving both is refused. Also the option --secret-file SECRET_KEY=PATH.",
+      "required": false,
+      "secret": false,
+      "pattern": "^/[A-Za-z0-9._/@+=,:-]+$",
+      "default": null,
+      "example": "/run/secrets/node-secret-key"
     },
     "PANEL_ALLOW_IP": {
       "group": "node",
@@ -343,7 +354,7 @@
     },
     "SSH_PHASE": {
       "group": "node",
-      "description": "user: create the administrator and its keys. root: close root login (needs an administrator). all: both.",
+      "description": "user: create the administrator and its keys. root: close root login, and password login when asked, once an administrator can really log in (the report of the step shows who counts). all: both.",
       "required": false,
       "secret": false,
       "enum": [
@@ -382,15 +393,24 @@
     },
     "NEW_USER_PASSWORD": {
       "group": "node",
-      "description": "Password of a newly created administrator (sudo needs it). Required without a terminal. Only through the environment or an env file, never logged.",
+      "description": "Password of a newly created administrator (sudo needs it). Required without a terminal. Only through the environment, an env file or NEW_USER_PASSWORD_FILE, never logged.",
       "required": false,
       "secret": true,
       "pattern": "^[ -~]{8,128}$",
       "default": null
     },
+    "NEW_USER_PASSWORD_FILE": {
+      "group": "node",
+      "description": "Path of a file that holds the password of the new administrator instead of NEW_USER_PASSWORD: same rules as SECRET_KEY_FILE. Giving both is refused. Also the option --secret-file NEW_USER_PASSWORD=PATH.",
+      "required": false,
+      "secret": false,
+      "pattern": "^/[A-Za-z0-9._/@+=,:-]+$",
+      "default": null,
+      "example": "/run/secrets/admin-password"
+    },
     "SSH_DISABLE_ROOT": {
       "group": "node",
-      "description": "Close root login over SSH (only when an administrator exists).",
+      "description": "Close root login over SSH (only when an administrator can really log in: see the README, section SSH).",
       "required": false,
       "secret": false,
       "enum": [
@@ -401,7 +421,7 @@
     },
     "SSH_DISABLE_PASSWORD": {
       "group": "node",
-      "description": "Close password login over SSH (only when an administrator has a key). Check the key login in another window first.",
+      "description": "Close password login over SSH (only when an administrator can really log in with a key). Check the key login in another window first.",
       "required": false,
       "secret": false,
       "enum": [

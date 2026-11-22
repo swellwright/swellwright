@@ -6,9 +6,7 @@ PasswordAuthentication yes
 
 # admin_exists: an administrator with a key, as the user phase leaves it.
 admin_exists() {
-    echo admin >>"$STATE/users"; echo admin >>"$STATE/sudo_members"; echo admin >>"$STATE/haspw"
-    mkdir -p "$R/home/admin/.ssh"
-    printf '%s\n' "$KEY1" >"$R/home/admin/.ssh/authorized_keys"
+    add_admin admin
     printf '%s' "$SSHD_DEFAULT" >"$R/etc/ssh/sshd_config"
 }
 
@@ -29,9 +27,9 @@ t_ssh_user_phase() {
     assert_line "$STATE/chpasswd.in" "admin:correct horse battery staple"
     assert_no_secret "correct horse battery staple"
     assert_no_secret "battery"
-    # sudo itself is installed when it is missing; nothing of sshd is touched in this phase.
+    # sudo itself is installed when it is missing; sshd is only asked (sshd -T), its configuration is not touched in this phase.
     assert_called_like 'install -y .* sudo$'
-    assert_not_called_like '^sshd'
+    assert_not_called_like '^sshd -t'
     assert_not_called_like '^systemctl (restart|reload) ssh'
     assert_contains "$R/etc/ssh/sshd_config" "#PermitRootLogin prohibit-password"
     # Again: the keys are not duplicated, the account is not created again and the password is not reset.
