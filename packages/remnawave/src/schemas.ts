@@ -325,6 +325,7 @@ export const ExternalSquadsResponse = envelope(
 export const SubscriptionTemplatesResponse = envelope(
   z.object({ total: z.number().optional(), templates: z.array(SubscriptionTemplateDto) }),
 );
+export const SubscriptionTemplateResponse = envelope(SubscriptionTemplateDto);
 export const SubscriptionSettingsResponse = envelope(SubscriptionSettingsDto);
 export const SnippetsResponse = envelope(
   z.object({ total: z.number().optional(), snippets: z.array(SnippetDto) }),
@@ -332,6 +333,7 @@ export const SnippetsResponse = envelope(
 export const NodePluginsResponse = envelope(
   z.object({ total: z.number().optional(), nodePlugins: z.array(NodePluginDto) }),
 );
+export const NodePluginResponse = envelope(NodePluginDto);
 export const InfraProvidersResponse = envelope(
   z.object({ total: z.number().optional(), providers: z.array(InfraProviderDto) }),
 );

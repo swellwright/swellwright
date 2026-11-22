@@ -366,7 +366,7 @@ describe('inbounds added, removed, renamed and changed', () => {
     assert.ok(report.notes.some((n) => n.code === 'inbounds_renamed'));
   });
 
-  it('introduces a port clash when the new inbound reuses a port, and flags it as an error', () => {
+  it('does not call a new inbound on a used port a clash while no node has it active: Xray runs only the active ones', () => {
     const c = config(fleet);
     c.inbounds.push({
       tag: 'CLASH',
@@ -375,12 +375,11 @@ describe('inbounds added, removed, renamed and changed', () => {
       streamSettings: { network: 'raw', security: 'reality' },
     });
     const report = calculate(model, 'configProfile', fleet.profileOne.uuid, { config: c });
+    assert.deepEqual(report.inbounds?.added, ['CLASH']);
     assert.ok(
-      report.findings.introduced.some(
-        (f) => f.ruleId === 'profile.inbound-port-clash' && f.severity === 'error',
-      ),
+      report.findings.introduced.every((f) => f.ruleId !== 'profile.inbound-port-clash'),
+      'it clashes only once a node runs it together with MAIN',
     );
-    assert.equal(report.risk.level, 'high');
   });
 
   it('introduces a missing snippet when the configuration names one that does not exist, and fixes one that does', () => {
@@ -617,6 +616,43 @@ describe('nodes', () => {
       byTag.restarts.map((r) => r.rule),
       ['node.active-inbounds-changed'],
     );
+  });
+
+  it('introduces a port clash when a node is made to run two inbounds that share a port, and not before', () => {
+    // SECOND listens on 443 like MAIN, but no node runs both: nothing clashes until node 1 is made to.
+    const clashing: PanelModel = {
+      ...model,
+      profiles: model.profiles.map((p) =>
+        p.uuid === fleet.profileOne.uuid
+          ? {
+              ...p,
+              inbounds: p.inbounds.map((i) =>
+                i.uuid === fleet.inboundSecond.uuid ? { ...i, port: 443 } : i,
+              ),
+            }
+          : p,
+      ),
+    };
+    const report = calculate(clashing, 'node', node1.uuid, {
+      configProfile: {
+        activeConfigProfileUuid: fleet.profileOne.uuid,
+        activeInbounds: ['MAIN', 'SECOND'],
+      },
+    });
+    const clash = report.findings.introduced.filter(
+      (f) => f.ruleId === 'profile.inbound-port-clash',
+    );
+    assert.equal(clash.length, 1);
+    assert.equal(at(clash, 0).severity, 'error');
+    assert.equal(at(clash, 0).params['nodes'], 'Node 1');
+    // A node that keeps running MAIN alone introduces nothing.
+    const alone = calculate(clashing, 'node', node1.uuid, {
+      configProfile: {
+        activeConfigProfileUuid: fleet.profileOne.uuid,
+        activeInbounds: ['MAIN'],
+      },
+    });
+    assert.ok(alone.findings.introduced.every((f) => f.ruleId !== 'profile.inbound-port-clash'));
   });
 
   it('refuses a profile that does not exist and an active inbound that is not in the profile', () => {

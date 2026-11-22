@@ -381,9 +381,26 @@ export function maskedYaml(
   }
 }
 
+/** Whether a body is in a response: a JSON body, or a YAML text with something in it. */
+function carriesBody(dto: SubscriptionTemplateDtoType): boolean {
+  return (
+    (dto.templateJson !== undefined && dto.templateJson !== null) ||
+    (dto.encodedTemplateYaml !== undefined &&
+      dto.encodedTemplateYaml !== null &&
+      dto.encodedTemplateYaml.trim() !== '')
+  );
+}
+
+/**
+ * A subscription template. `fromDetail` says that the response is the answer to the detail request, which carries the
+ * body (the list of 3.4 does not: `templateJson` and `encodedTemplateYaml` are null there for every template). A body
+ * that is null in an answer that is not a detail says nothing about the template, so such a view has `bodyLoaded`
+ * false. The flag describes how the view was read, not the template, and is not part of the hash.
+ */
 export function adaptSubscriptionTemplate(
   dto: SubscriptionTemplateDtoType,
   context: AdaptContext,
+  fromDetail = false,
 ): PanelSubscriptionTemplateView {
   const templateJson =
     dto.templateJson === undefined || dto.templateJson === null
@@ -398,8 +415,9 @@ export function adaptSubscriptionTemplate(
     templateType: dto.templateType,
     templateJson,
     templateYaml,
+    bodyLoaded: fromDetail || carriesBody(dto),
   };
-  return withHash(view, view);
+  return withHash(view, without(view, ['bodyLoaded']));
 }
 
 export function adaptSubscriptionSettings(
@@ -430,21 +448,25 @@ export function adaptSnippet(dto: SnippetDtoType, context: AdaptContext): PanelS
   return withHash(view, view);
 }
 
+/**
+ * A node plugin. `fromDetail` as for `adaptSubscriptionTemplate`: a configuration that is null in the list may only be
+ * left out there, so such a view has `configLoaded` false (not part of the hash).
+ */
 export function adaptNodePlugin(
   dto: NodePluginDtoType,
   context: AdaptContext,
+  fromDetail = false,
 ): PanelNodePluginView {
+  const present = dto.pluginConfig !== undefined && dto.pluginConfig !== null;
   const view = {
     uuid: dto.uuid,
     name: dto.name,
     viewPosition: dto.viewPosition ?? 0,
     tags: dto.tags ?? [],
-    pluginConfig:
-      dto.pluginConfig === undefined || dto.pluginConfig === null
-        ? null
-        : maskSecrets(dto.pluginConfig, context).value,
+    pluginConfig: present ? maskSecrets(dto.pluginConfig, context).value : null,
+    configLoaded: fromDetail || present,
   };
-  return withHash(view, view);
+  return withHash(view, without(view, ['configLoaded']));
 }
 
 // ---- billing ----------------------------------------------------------------------------------------------------

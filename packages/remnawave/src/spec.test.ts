@@ -14,12 +14,14 @@ import {
   GetInfraProvidersCommand,
   GetInternalSquadsCommand,
   GetMetadataCommand,
+  GetNodePluginCommand,
   GetNodePluginsCommand,
   GetNodesCommand,
   GetRemnawaveHealthCommand,
   GetSnippetsCommand,
   GetStatsCommand,
   GetSubscriptionSettingsCommand,
+  GetSubscriptionTemplateCommand,
   GetSubscriptionTemplatesCommand,
 } from '@remnawave/backend-contract';
 
@@ -73,6 +75,24 @@ describe('the frozen API description of the panel', () => {
       new Set(endpoints.map((e) => e.id)).size,
       endpoints.length,
       'endpoint ids are unique',
+    );
+  });
+
+  it('has the detail requests that carry what the lists leave out, and says the list of templates has no content', () => {
+    // 3.4.11 calls the list "without content"; the body is in the detail only, so the client asks for it there.
+    const summary = SPEC.paths['/api/subscription-templates']?.['get']?.['summary'];
+    assert.match(String(summary), /content/u);
+    for (const [endpoint, listPath] of [
+      [PANEL_ENDPOINTS.subscriptionTemplate, PANEL_ENDPOINTS.subscriptionTemplates.path],
+      [PANEL_ENDPOINTS.nodePlugin, PANEL_ENDPOINTS.nodePlugins.path],
+    ] as const) {
+      assert.equal(endpoint.method, 'GET');
+      assert.equal(endpoint.path, `${listPath}/{uuid}`);
+      assert.ok(SPEC.paths[endpoint.path]?.['get'], endpoint.id);
+    }
+    assert.equal(
+      pathFor(PANEL_ENDPOINTS.subscriptionTemplate, { uuid: fakeUuid(7) }),
+      `/api/subscription-templates/${fakeUuid(7)}`,
     );
   });
 
@@ -272,6 +292,8 @@ describe('the fake panel and the contract package of the panel', () => {
       GetSubscriptionSettingsCommand,
       { response: fixtures.subscriptionSettings },
     ],
+    ['template (detail)', GetSubscriptionTemplateCommand, { response: first(fixtures.templates) }],
+    ['node plugin (detail)', GetNodePluginCommand, { response: first(fixtures.nodePlugins) }],
     ['snippets', GetSnippetsCommand, { response: { total: 2, snippets: fixtures.snippets } }],
     [
       'node plugins',
@@ -337,6 +359,10 @@ describe('the fake panel and the contract package of the panel', () => {
     for (const [ours, theirs] of urls) {
       assert.equal(ours, bare(theirs));
     }
+    const template = GetSubscriptionTemplateCommand.url;
+    assert.equal(PANEL_ENDPOINTS.subscriptionTemplate.path, bare(template('{uuid}')));
+    const plugin = GetNodePluginCommand.url;
+    assert.equal(PANEL_ENDPOINTS.nodePlugin.path, bare(plugin('{uuid}')));
     const byUuid = GetConfigProfileByUuidCommand.url;
     assert.equal(PANEL_ENDPOINTS.configProfile.path, bare(byUuid('{uuid}')));
     const computed = GetComputedConfigProfileByUuidCommand.url;

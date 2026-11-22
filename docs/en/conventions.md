@@ -73,7 +73,7 @@ Refused, with the character position: back-references, lookahead and lookbehind,
 | Rule | Object | Default | What it finds | Parameters |
 |---|---|---|---|---|
 | `host.address-policy` | host | warning | the address is empty, or is not what the policy wants | `policy`: `any`, `ip`, `domain` |
-| `host.sni-explicit` | host | warning | a host without an SNI | |
+| `host.sni-explicit` | host | warning | a host without an SNI (not one that takes the security of an inbound that has none) | |
 | `host.remark-unique` | host | warning | an empty remark, or one that two hosts share | `caseSensitive` |
 | `host.remark-pattern` | host | warning | a remark that does not match the pattern | `pattern` (required) |
 | `host.inbound-exists` | host | error | a host bound to no inbound, a missing profile or inbound, or an inbound of another profile | |
@@ -89,7 +89,7 @@ Refused, with the character position: back-references, lookahead and lookbehind,
 | `node.plugin-exists` | node | error | a node that uses a plugin the panel does not have | |
 | `node.name-pattern` | node | warning | a name that does not match the pattern | `pattern` (required) |
 | `profile.inbound-tag-unique` | profile | error | an inbound tag used twice, in one profile or across profiles (tags are global in the panel) | |
-| `profile.inbound-port-clash` | profile | error | two inbounds of one profile on the same port | |
+| `profile.inbound-port-clash` | profile | error | two inbounds that one node has **active** together on the same port (a warning, `possible_clash`, over all inbounds when no node has any active) | |
 | `profile.snippet-exists` | profile | error | a configuration that uses a snippet the panel does not have | |
 | `profile.name-pattern` | profile | warning | a name that does not match the pattern | `pattern` (required) |
 | `profile.unused` | profile | info | a profile no node uses, or one with no inbounds | |
@@ -99,8 +99,8 @@ Refused, with the character position: back-references, lookahead and lookbehind,
 | `squad.name-pattern` | squad | warning | a name that does not match the pattern | `pattern` (required), `kinds` |
 | `squad.external-template-exists` | external squad | error | a squad that points at a missing template, or one of the wrong type | |
 | `template.name-pattern` | template | warning | a name that does not match the pattern | `pattern` (required) |
-| `template.body-present` | template | error | a template whose body cannot be read | `types` |
-| `template.unused` | template | info | a template no external squad and no host uses | |
+| `template.body-present` | template | error | a template whose body was read and is empty or cannot be parsed (a body that was not read is `not_loaded`, information) | `types` |
+| `template.unused` | template | info | a template no external squad and no host uses (not the `Default` template of a type) | `ignoreNames` |
 | `panel.token-expiry` | panel | warning | the token Swellwright uses expires within `warnDays` days, or has expired | `warnDays` |
 
 A rule needs some kinds of object to be read (`needs`). If the token of the connection cannot read one of them, the rule is **skipped and listed as skipped** with what it was missing; the rest of the run is not affected. A rule that throws is isolated and listed as failed, and the other rules still run. A run lists at most 5000 findings and says when it was cut.
@@ -108,6 +108,22 @@ A rule needs some kinds of object to be read (`needs`). If the token of the conn
 ### Findings are about the panel, not about secrets
 
 The checks read the panel through masked views: a private key, a short id or a subscription URL never reaches a rule, a finding, the audit log or a log line. A finding about a secret says only that it is there or that it changed.
+
+## Real shapes: what a real Remnawave 3.4.11 fleet looks like
+
+The first fake panel was tidy: bodies in every list, one inbound for each profile, one host for each node. A real fleet is not, and a rule written against the tidy one gives false results (ADR 0044, note of 2026-11-22). These are the facts about **Remnawave panel 3.4.11** that a rule author needs. They come from running the checks read-only against a real panel; the fixture `realLayout()` in `packages/conventions/src/test-model.ts` has this shape, and a rule that is not tested against it is not finished.
+
+| Fact | What it means for a rule |
+|---|---|
+| **A list is not the detail.** The list of subscription templates is documented "without content": `templateJson` and `encodedTemplateYaml` are `null` for every template, and the body is in `GET /api/subscription-templates/{uuid}` only. The list of node plugins may leave `pluginConfig` out the same way. | Never read "null" in a list as "empty". A view says whether it was read (`bodyLoaded`, `configLoaded`); judge only what was read. The linter, the calculator and the snapshots are handed views that were read with the detail; a rule that gets one that was not says "not read" (information), not "missing". |
+| **A profile holds one inbound for each node.** The common layout is one config profile with an inbound for every node (twelve inbounds, every one on port 443, a tag for each), and two profiles with one inbound each. | Inbounds that are never active together on one node do not clash. Compare per node. |
+| **Every node activates exactly one inbound** (`node.configProfile.activeInbounds` has one entry on each). Xray runs only the active inbounds of a node. | "The nodes that use a profile" is not "the nodes that serve an inbound": use `ModelIndex.nodesServing` and `servingNodes` (active inbounds), not the list of inbounds of the profile. Editing the profile restarts all its nodes (twelve); editing a squad's inbound restarts the nodes that have it active (one). |
+| **A node has a host for each subscription template.** Hosts come in pairs (a "global" and a "selective" entry of one node) with the same address, port, SNI and inbound, and differ in the remark, the position, the uuid and `xrayJsonTemplateUuid`. | Equal address, port, SNI and inbound is not a duplicate. A duplicate is equal in everything that selects what a client gets (see `host.duplicate` below). |
+| **Each type has a template named `Default`** (the panel's own UI treats that name as the mark of the default and does not let it be deleted), which the panel uses on its own for every squad and host that names none. A real panel has the five types (`XRAY_JSON`, `MIHOMO`, `STASH`, `CLASH`, `SINGBOX`) and other templates besides. | "No squad and no host names it" does not make a `Default` template unused. |
+| **A host with no SNI is not always wrong**: a host that takes the security of an inbound that has none (plain) needs no SNI. | Look at the inbound before asking for an SNI. |
+| **Test objects are in the panel too** (hosts and templates made to try a client). | A scope by tag (`excludeTags`) is how a pack leaves them out; do not assume that every host is production. |
+
+Two further habits. A rule must be correct for the layout it has not seen, so it asks the model for **relations** (which nodes serve this inbound, which hosts use this template) rather than counting objects. And a finding that is true but expected on the common layout (`profile.shared`, a profile used by twelve nodes) is **information**, never a warning.
 
 ## Reconciliation
 
@@ -129,7 +145,7 @@ The checks, each of which a pack can switch off (`reconciliation.checks.<id>.ena
 | `host.sni` | the host's SNI with the node's address |
 | `host.port` | the host's port with the port of its inbound |
 | `host.node` | the nodes a host is assigned to exist and serve its inbound |
-| `host.duplicate` | two hosts that give the same address, port and SNI for the same inbound |
+| `host.duplicate` | two enabled hosts that give a client the **same entry**: equal in address, port, SNI, host header, path, ALPN, fingerprint, security layer, inbound, nodes, subscription template, route id, options, squad filter, tags and description. The remark, the position and the uuid are not part of the key, so a "global" and a "selective" host of one node are not duplicates. Status `drift`, for an exact duplicate only |
 | `node.dns` | the node's name resolves (to an IP, within the TTL the pack allows) |
 | `node.disabled-resolving` | a disabled node whose name still resolves |
 | `node.duplicate` | two nodes with one address |

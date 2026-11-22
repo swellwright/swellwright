@@ -835,15 +835,30 @@ describe('profile.inbound-tag-unique', () => {
 describe('profile.inbound-port-clash', () => {
   const rule = 'profile.inbound-port-clash';
   const p = uid(5);
-  it('reports two inbounds on one port', () => {
+  // None of these profiles has a node, so nothing is active and a clash is only possible (real layouts: real-shapes.test.ts).
+  it('reports two inbounds on one port as a possible clash while no node has them active', () => {
     const model = {
       ...healthyFleet(),
       profiles: [profile(5, 'P', [inbound(1, p, 'A', 443), inbound(2, p, 'B', 443)])],
     };
     const found = find(model, rule);
-    assert.deepEqual(codes(found), ['clash']);
+    assert.deepEqual(codes(found), ['possible_clash']);
+    assert.equal(at(found, 0).severity, 'warning');
     assert.equal(at(found, 0).related.length, 2);
     assert.equal(at(found, 0).params['port'], 443);
+  });
+  it('reports two inbounds on one port as an error when one node has them both active', () => {
+    const a = inbound(1, p, 'A', 443);
+    const b = inbound(2, p, 'B', 443);
+    const model = {
+      ...healthyFleet(),
+      profiles: [profile(5, 'P', [a, b])],
+      nodes: [node(1, 'N', { uuid: p, inbounds: [a, b] })],
+    };
+    const found = find(model, rule);
+    assert.deepEqual(codes(found), ['clash']);
+    assert.equal(at(found, 0).severity, 'error');
+    assert.equal(at(found, 0).params['nodes'], 'N');
   });
   it('keeps a TCP port apart from a UDP one, and ignores inbounds with no port', () => {
     const model = {
@@ -866,7 +881,7 @@ describe('profile.inbound-port-clash', () => {
     const c = inbound(3, p, 'C', 443, { raw: { tag: 'C', listen: '0.0.0.0' } });
     assert.deepEqual(
       codes(find({ ...healthyFleet(), profiles: [profile(5, 'P', [a, c])] }, rule)),
-      ['clash'],
+      ['possible_clash'],
     );
   });
 });

@@ -1013,7 +1013,11 @@ function templateChange(
     (yamlReadable && canonicalJson(currentYaml) !== canonicalJson(yamlValue)) ||
     !yamlReadable;
   const metaChanged = proposal.name !== template.name || !deepEqual(proposal.tags, template.tags);
-  if (bodyChanged || metaChanged) {
+  if (!template.bodyLoaded) {
+    // The current body was never read (the list of the panel has none): what is compared with the proposal is nothing.
+    account.notes.push(msg('notes', 'template_body_not_loaded'));
+  }
+  if (bodyChanged || metaChanged || !template.bodyLoaded) {
     account.use('template.edit');
   } else {
     account.unchanged = true;
@@ -1035,6 +1039,7 @@ function templateChange(
     tags: proposal.tags,
     templateJson: proposal.templateJson ?? null,
     templateYaml: yamlReadable ? proposal.templateYaml : null,
+    bodyLoaded: true,
   };
   return {
     ...model,

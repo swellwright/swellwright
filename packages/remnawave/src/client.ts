@@ -29,7 +29,7 @@ import {
   adaptSubscriptionTemplate,
 } from './adapters.js';
 import { type PanelEndpoint, PANEL_ENDPOINTS, pathFor } from './endpoints.js';
-import { type ContractIssue, PanelContractError } from './errors.js';
+import { type ContractIssue, PanelContractError, PanelNotFoundError } from './errors.js';
 import { PanelHttp, type PanelHttpOptions } from './http.js';
 
 export interface PanelClientOptions extends PanelHttpOptions {
@@ -84,10 +84,26 @@ export interface PanelReader {
   computedConfig(uuid: string): Promise<PanelConfigProfileView>;
   internalSquads(): Promise<PanelInternalSquadView[]>;
   externalSquads(): Promise<PanelExternalSquadView[]>;
+  /**
+   * The templates as the list reports them. The list of the 3.4 line has no bodies (`bodyLoaded` is false for each
+   * template unless the list carries one): enough for names and counts, not for what a template says.
+   */
   subscriptionTemplates(): Promise<PanelSubscriptionTemplateView[]>;
+  /** One template with its body (the detail request). */
+  subscriptionTemplate(uuid: string): Promise<PanelSubscriptionTemplateView>;
+  /**
+   * Every template with its body: the list, then the detail of each template whose body the list did not carry, at
+   * most as many at a time as the client allows requests. A template that vanished in between is left out.
+   */
+  subscriptionTemplatesWithBodies(): Promise<PanelSubscriptionTemplateView[]>;
   subscriptionSettings(): Promise<PanelSubscriptionSettingsView>;
   snippets(): Promise<PanelSnippetView[]>;
+  /** The node plugins as the list reports them; `configLoaded` is false where the list left the configuration out. */
   nodePlugins(): Promise<PanelNodePluginView[]>;
+  /** One node plugin with its configuration. */
+  nodePlugin(uuid: string): Promise<PanelNodePluginView>;
+  /** Every node plugin with its configuration, read the way `subscriptionTemplatesWithBodies` reads templates. */
+  nodePluginsWithConfigs(): Promise<PanelNodePluginView[]>;
   infra(): Promise<PanelInfraView>;
   apiTokens(): Promise<PanelApiTokenView[]>;
   /** The newest billing records, paged through the panel's own paging, at most `maxRecords`. */
@@ -150,6 +166,36 @@ export class PanelClient implements PanelReader {
 
   close(): void {
     this.http.close();
+  }
+
+  /**
+   * The views of a list with the detail read for each one whose content the list did not carry. The requests go
+   * through the one gate of the HTTP layer, so no more than `concurrency` are in flight at a time, and each has the
+   * timeout, the size cap and the retry (GET only) of every other request. An object that vanished between the list and
+   * its detail (404) is left out; any other failure is the failure of the read, as for the profiles of a snapshot.
+   */
+  private async withDetails<V extends { readonly uuid: string }>(
+    views: readonly V[],
+    loaded: (view: V) => boolean,
+    detail: (uuid: string) => Promise<V>,
+  ): Promise<V[]> {
+    // Each answer is boxed: `await` of a bare type parameter is typed `Awaited<V>`, which TypeScript cannot take for `V`.
+    const boxes = await Promise.all(
+      views.map(async (view): Promise<{ readonly view: V | null }> => {
+        if (loaded(view)) {
+          return { view };
+        }
+        try {
+          return { view: await detail(view.uuid) };
+        } catch (error) {
+          if (error instanceof PanelNotFoundError) {
+            return { view: null };
+          }
+          throw error;
+        }
+      }),
+    );
+    return boxes.flatMap((box) => (box.view === null ? [] : [box.view]));
   }
 
   /** One GET, checked against the schema of its endpoint. */
@@ -253,6 +299,19 @@ export class PanelClient implements PanelReader {
     return response.templates.map((template) => adaptSubscriptionTemplate(template, context));
   }
 
+  async subscriptionTemplate(uuid: string): Promise<PanelSubscriptionTemplateView> {
+    const { response } = await this.call(PANEL_ENDPOINTS.subscriptionTemplate, { uuid });
+    return adaptSubscriptionTemplate(response, this.context(), true);
+  }
+
+  async subscriptionTemplatesWithBodies(): Promise<PanelSubscriptionTemplateView[]> {
+    return this.withDetails(
+      await this.subscriptionTemplates(),
+      (view) => view.bodyLoaded,
+      (uuid) => this.subscriptionTemplate(uuid),
+    );
+  }
+
   async subscriptionSettings(): Promise<PanelSubscriptionSettingsView> {
     const { response } = await this.call(PANEL_ENDPOINTS.subscriptionSettings);
     return adaptSubscriptionSettings(response, this.context());
@@ -268,6 +327,19 @@ export class PanelClient implements PanelReader {
     const { response } = await this.call(PANEL_ENDPOINTS.nodePlugins);
     const context = this.context();
     return response.nodePlugins.map((plugin) => adaptNodePlugin(plugin, context));
+  }
+
+  async nodePlugin(uuid: string): Promise<PanelNodePluginView> {
+    const { response } = await this.call(PANEL_ENDPOINTS.nodePlugin, { uuid });
+    return adaptNodePlugin(response, this.context(), true);
+  }
+
+  async nodePluginsWithConfigs(): Promise<PanelNodePluginView[]> {
+    return this.withDetails(
+      await this.nodePlugins(),
+      (view) => view.configLoaded,
+      (uuid) => this.nodePlugin(uuid),
+    );
   }
 
   async infra(): Promise<PanelInfraView> {

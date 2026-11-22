@@ -6,6 +6,17 @@ interface Entry {
 }
 
 /**
+ * The key a read is kept under. Subscription templates and node plugins have two reads: the list alone (counts and
+ * names: the first probe and the overview make it) and the list with the detail of each (what the pages and the
+ * checks need, with the bodies). They must not share a key, or the memory of one answers for the other with views
+ * that say nothing of the bodies (the panel's list has none).
+ */
+export const cacheKeyOf = (kind: string, withDetails: boolean): string =>
+  withDetails || (kind !== 'subscriptionTemplates' && kind !== 'nodePlugins')
+    ? kind
+    : `${kind}:list`;
+
+/**
  * A short memory of what was read from the panel (ADR 0041): per kind of object, for the connection that is current,
  * with the requests that are running now so that a second caller joins one instead of asking again. It holds what the
  * adapters returned, which is masked, and never the token: the token is read from the vault for one piece of work and
