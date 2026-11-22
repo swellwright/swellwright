@@ -1,5 +1,7 @@
 # Architecture
 
+This page includes the target architecture. See [project status](project-status.md) for implemented features; the general worker/engine and full workflow lifecycle remain planned.
+
 ## Stack (aligned with Remnawave 3.4.x)
 
 | Layer | Choice |

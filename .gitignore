@@ -38,6 +38,9 @@ tmp/
 .cache/
 
 # editors and OS
+# Per-user agent preferences; shared AGENTS.md and skills are versioned.
+CLAUDE.local.md
+.claude/settings.local.json
 .idea/
 .vscode/*
 !.vscode/extensions.json

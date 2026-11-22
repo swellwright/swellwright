@@ -1,5 +1,7 @@
 # 10. Testing and quality
 
+> This document describes the target test strategy. Current commands and actually available CI gates are in [development.md](../development.md); the existing TypeScript suites use `node:test`.
+
 > English translation of the [Russian design document](../../ru/design/10-testing.md).
 
 Without a clean lab there is nowhere to verify rollback and deployment: typical install failures (a locked package manager, an unreachable repository) show up only when running on a real server. The lab and fault injection are part of the plan, not a "later" item.

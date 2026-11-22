@@ -1,6 +1,6 @@
 # Swellwright: overview
 
-Swellwright is a self-hosted service for deploying and operating Remnawave fleets. It is **in the design phase**; these documents describe what will be built.
+Swellwright is a self-hosted service for deploying and operating Remnawave fleets. It is a **pre-alpha implementation with phases 1–3 complete**. These documents include future goals; see [current status](project-status.md) and [development setup](development.md) to distinguish implemented behavior from the target design.
 
 ## Goals
 

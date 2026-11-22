@@ -1,5 +1,9 @@
 # packages/db
 
+The schema now also supports the phase-2 and phase-3 features listed in
+[current project status](../../docs/en/project-status.md). The introductory model list below is historical;
+`prisma/schema.prisma` and its migrations are authoritative for the current models.
+
 The Prisma schema, the SQL migrations and the database client shared by the API and the worker. Decisions: [ADR 0013](../../docs/adr/0013-prisma-for-the-data-layer.md). Data model design: `docs/en/design/02-data-model.md`.
 
 Status: `User`, `Credential` (password hash, sealed TOTP secret, lockout counters), `RecoveryCode`, `Session` (with `elevated_until` for step-up, [ADR 0017](../../docs/adr/0017-step-up-authentication.md)), `Invitation` (the one open invitation of a user, [ADR 0016](../../docs/adr/0016-users-invitations-and-credential-reset.md)) and `AuditEvent` (the append-only audit chain; its migration installs triggers that refuse update, delete and truncate, [ADR 0015](../../docs/adr/0015-permissions-and-the-audit-chain.md)). `VaultMeta` and `Secret` (the vault, [ADR 0018](../../docs/adr/0018-the-vault-key-hierarchy-and-its-first-slice.md); only ciphertext and wrapped keys are stored). Raw SQL in a test must name the schema of the isolated database (`isolated.schema`): the client qualifies its own queries, raw SQL is not.
