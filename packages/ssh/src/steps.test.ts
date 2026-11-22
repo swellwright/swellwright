@@ -7,12 +7,12 @@ import { spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { SshConnection } from './connection.js';
 import { SshStepError } from './errors.js';
 import { defineStepScenarios } from './step-scenarios.js';
-import { STATUS_SCRIPT } from './step-scripts.js';
+import { STATUS_SCRIPT, WRAPPER_SCRIPT } from './step-scripts.js';
 import { getStepStatus, startDetachedStep } from './steps.js';
 import {
   installFakeSudo,
@@ -244,3 +244,25 @@ describe(
     });
   },
 );
+
+// A step must never run twice. The launcher already attaches a second caller instead of starting again; this is the
+// last line of defence: whatever starts the wrapper a second time, it ends without running the script.
+describe('the step wrapper', { skip: TOOLS_MISSING }, () => {
+  it('runs the script once, however many times it is started', () => {
+    const base = tempDir();
+    try {
+      const dir = join(base.path, 'once');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'script.sh'), 'echo ran >> "$SWELLWRIGHT_STEP_DIR/counter"\n');
+      writeFileSync(join(dir, 'run.sh'), WRAPPER_SCRIPT);
+      const first = spawnSync('/bin/sh', [join(dir, 'run.sh'), dir], { encoding: 'utf8' });
+      const second = spawnSync('/bin/sh', [join(dir, 'run.sh'), dir], { encoding: 'utf8' });
+      assert.equal(first.status, 0);
+      assert.equal(second.status, 0, 'a second wrapper ends quietly');
+      assert.equal(readFileSync(join(dir, 'counter'), 'utf8'), 'ran\n');
+      assert.match(readFileSync(join(dir, 'exit'), 'utf8'), /^0\n/u);
+    } finally {
+      base.cleanup();
+    }
+  });
+});
