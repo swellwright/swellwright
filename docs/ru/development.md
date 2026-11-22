@@ -1,8 +1,9 @@
 # Разработка с Codex и Claude Code
 
-Общие инструкции находятся в корневом `AGENTS.md`. Claude Code импортирует их через
-`CLAUDE.md`. Оба агента используют один UI-навык из `.agents/skills/swellwright-ui`;
-файл в `.claude/skills` — точка входа, а не отдельный набор правил.
+Общие инструкции находятся в корневом `AGENTS.md`; отдельного файла инструкций для
+Claude Code в репозитории нет, он читает этот файл напрямую. Оба агента используют
+один UI-навык из `.agents/skills/swellwright-ui`; файл в `.claude/skills` — точка
+входа, а не отдельный набор правил.
 
 Каноническая подробная инструкция: [English development guide](../en/development.md).
 Текущее состояние: [project-status.md](project-status.md).

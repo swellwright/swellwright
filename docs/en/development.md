@@ -1,13 +1,13 @@
 # Development with Codex and Claude Code
 
-Both agents use `AGENTS.md`. Claude Code imports it from `CLAUDE.md`; its UI skill
-entry point reads `.agents/skills/swellwright-ui/SKILL.md`, the canonical Codex skill.
-Keep changes to shared instructions there, rather than maintaining two different policies.
+Both agents use `AGENTS.md` directly; this repository keeps no separate per-tool
+instructions file. Claude Code's UI skill entry point reads
+`.agents/skills/swellwright-ui/SKILL.md`, the canonical Codex skill. Keep changes
+to shared instructions there, rather than maintaining two different policies.
 Project status is in [project-status.md](project-status.md); accepted decisions are in `../adr/`.
-The `@AGENTS.md` import also supports Claude versions that do not load AGENTS.md
-directly; see [Claude's shared-file guidance](https://code.claude.com/docs/en/memory#share-one-file-with-other-coding-tools).
 Codex discovery is documented in [AGENTS.md](https://learn.chatgpt.com/docs/agent-configuration/agents-md)
-and [skills](https://learn.chatgpt.com/docs/build-skills).
+and [skills](https://learn.chatgpt.com/docs/build-skills); point a Claude Code session
+at this file through its own project configuration, outside this repository.
 
 ## Clean setup
 

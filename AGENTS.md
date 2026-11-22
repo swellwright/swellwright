@@ -1,8 +1,9 @@
 # Swellwright contributor instructions
 
-These rules are shared by Codex and Claude Code. `CLAUDE.md` imports this file.
-Read `CONTRIBUTING.md` and `docs/en/development.md` for setup and validation, and
-`docs/en/project-status.md` for implemented features and known follow-ups.
+These rules are shared by Codex and Claude Code; this repository has no separate
+per-tool instructions file, so load this one directly. Read `CONTRIBUTING.md` and
+`docs/en/development.md` for setup and validation, and `docs/en/project-status.md`
+for implemented features and known follow-ups.
 
 ## Scope and sources
 
