@@ -178,7 +178,7 @@ describe('masking for the API console', () => {
     ]) {
       assert.ok(!out.includes(secret), `${secret} in ${out}`);
     }
-    assert.ok(out.includes('node.example.com:443'), 'the host stays readable');
+    assert.match(out, /node\.example\.com:443/u, 'the host stays readable');
   });
 
   it('masks a pair whose name is one of the access names, and a token or a key in text', () => {
