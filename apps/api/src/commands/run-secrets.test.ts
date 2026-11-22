@@ -20,6 +20,7 @@ import {
   standardPrograms,
   sleep,
   targetOf,
+  until,
 } from './commands-test-support.js';
 import { VaultService } from '../vault/vault.service.js';
 import type { Gate, Program } from './step-host.js';
@@ -579,6 +580,53 @@ describe('a vault secret handed to a run', { skip: !databaseUrl }, () => {
       for (const command of host.commands) {
         assert.ok(!VALUES.some((value) => command.includes(value.trim())));
       }
+    });
+  });
+
+  describe('a step that was lost', () => {
+    it('has its secrets swept through sudo when it runs as root, because the login user cannot remove them', async () => {
+      const gate = createGate();
+      gates.hold = gate;
+      const host = await h.host(secretPrograms(gates));
+      const server = await h.server(host);
+      const secret = { name: 'NODE_KEY', secretId: nodeKey };
+      const made = await h.createRun(
+        h.owner,
+        withSecrets([server], '# fake:hold\n', [secret], { sudo: true }),
+      );
+      const going = await h.waitFor(made.id, 'the script to run', (r) =>
+        targetOf(r).stdout.tail.startsWith('have=true'),
+      );
+      const stepId = `sw-${targetOf(going).id}`;
+      host.lose(stepId);
+      const done = await h.finished(made.id);
+      assert.equal(targetOf(done).state, 'lost');
+      await until('the sweep', () => host.swept.includes(stepId));
+      for (const step of host.steps.values()) {
+        assert.equal(step.secrets.size, 0, 'the secrets of a lost root step are gone');
+      }
+      assert.equal(host.steps.size, 1, 'the record stays: it is the only trace of what happened');
+    });
+
+    it('needs no sweep when the step ran as the login user: the status read removes its secrets', async () => {
+      const gate = createGate();
+      gates.hold = gate;
+      const host = await h.host(secretPrograms(gates));
+      const server = await h.server(host);
+      const made = await h.createRun(
+        h.owner,
+        withSecrets([server], '# fake:hold\n', [{ name: 'NODE_KEY', secretId: nodeKey }]),
+      );
+      const going = await h.waitFor(made.id, 'the script to run', (r) =>
+        targetOf(r).stdout.tail.startsWith('have=true'),
+      );
+      host.lose(`sw-${targetOf(going).id}`);
+      const done = await h.finished(made.id);
+      assert.equal(targetOf(done).state, 'lost');
+      for (const step of host.steps.values()) {
+        assert.equal(step.secrets.size, 0);
+      }
+      assert.deepEqual(host.swept, []);
     });
   });
 

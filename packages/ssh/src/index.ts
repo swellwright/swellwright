@@ -62,6 +62,7 @@ export {
   getStepStatus,
   readStepOutput,
   removeStep,
+  removeStepSecrets,
   startDetachedStep,
   waitForStep,
 } from './steps.js';
@@ -70,6 +71,7 @@ export type {
   ReadStepOutputOptions,
   ReadStepOutputResult,
   RemoveStepOptions,
+  RemoveStepSecretsOptions,
   WaitForStepOptions,
 } from './steps.js';
 

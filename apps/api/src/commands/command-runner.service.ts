@@ -23,6 +23,7 @@ import {
   getStepStatus,
   readStepOutput,
   removeStep,
+  removeStepSecrets,
   type StepStatus,
   SshStepError,
   startDetachedStep,
@@ -923,8 +924,42 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
       row.accessId !== null;
     if (mayRemove) {
       await this.removeRecord(row, info);
+    } else if (ended.count === 1 && state === 'lost' && info !== undefined) {
+      await this.sweepSecrets(row, info);
     }
     return 'done';
+  }
+
+  /**
+   * A step that was lost (its wrapper was killed, so nothing removed its secrets) and that runs as root: the status read
+   * could remove only what the login user owns, and root owns these. Remove them through sudo; the record, which is the
+   * only trace of what happened, stays (ADR 0042). Best effort, like the removal of a record.
+   */
+  private async sweepSecrets(
+    row: TargetRow,
+    info: Awaited<ReturnType<ServersService['connectionInfo']>>,
+  ): Promise<void> {
+    const entry = info.access.find((candidate) => candidate.id === row.accessId);
+    if (!entry || this.stopping || !row.launched || !row.run.sudo || row.run.secrets.length === 0) {
+      return;
+    }
+    try {
+      await this.ssh.withAccess(
+        { address: info.address, port: info.port, hostKeyTypes: info.hostKeyTypes },
+        info.fingerprints,
+        entry,
+        async ({ connection, sudoPassword }) => {
+          await removeStepSecrets(connection, row.stepId, {
+            sudo: sudoPassword === undefined ? {} : { password: sudoPassword },
+          });
+        },
+        { allowExpired: true },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `could not remove the secrets of the lost target ${row.id} from its server: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
   }
 
   /** Best effort: the output is stored, so a record that stays on the server is only untidy. */

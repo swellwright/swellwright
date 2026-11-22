@@ -48,6 +48,10 @@ interface EmulatedStep {
   /** The files of `<step dir>/secrets`: delivered with the launch, gone when the program ends by any route. */
   readonly secrets: Map<string, Buffer>;
   readonly abort: AbortController;
+  /** The step runs as root: its secret files belong to root, so the login user's status read cannot remove them. */
+  readonly root: boolean;
+  /** The wrapper was killed: the program is gone and nothing recorded an end. */
+  lost: boolean;
   stdout: Buffer;
   stderr: Buffer;
   exit: number | undefined;
@@ -61,6 +65,7 @@ const MARKERS = [
   'swellwright-read',
   'swellwright-cancel',
   'swellwright-remove',
+  'swellwright-rmsecrets',
 ] as const;
 
 /** The words of a command line as the remote `sh` would see them: single and double quotes, and `\'` between them. */
@@ -125,6 +130,8 @@ export class StepHost {
   readonly removed: string[] = [];
   /** How many launches created a step, and how many found it there. */
   readonly launches = { created: 0, attached: 0 };
+  /** The ids of the steps whose secrets were removed through the dedicated command (the sweep after a lost wrapper). */
+  readonly swept: string[] = [];
   /** Every command line that arrived, in order: a value of a secret must never be in one. */
   readonly commands: string[] = [];
   /** The highest number of programs that ran at the same moment. */
@@ -218,6 +225,9 @@ export class StepHost {
       case 'swellwright-cancel':
         await this.cancel(args, reply);
         return;
+      case 'swellwright-rmsecrets':
+        this.sweep(args, reply);
+        return;
       default:
         this.remove(args, reply);
     }
@@ -298,6 +308,8 @@ export class StepHost {
       script,
       env,
       secrets,
+      root: useSudo === '1',
+      lost: false,
       abort: new AbortController(),
       stdout: Buffer.alloc(0),
       stderr: Buffer.alloc(0),
@@ -385,10 +397,13 @@ export class StepHost {
       }
     } finally {
       this.running -= 1;
-      // The wrapper removes the secrets the moment the script ends, whatever the way (exit, kill, timeout, cancel).
-      step.secrets.clear();
+      // The wrapper removes the secrets the moment the script ends, whatever the way (exit, kill, timeout, cancel). A
+      // wrapper that was killed removes nothing.
+      if (!step.lost) {
+        step.secrets.clear();
+      }
     }
-    if (step.exit === undefined) {
+    if (step.exit === undefined && !step.lost) {
       step.exit = step.abort.signal.aborted && code === 0 ? 143 : code;
       step.finished = iso();
     }
@@ -401,8 +416,12 @@ export class StepHost {
       reply('state=notfound\n');
       return;
     }
+    if (step.lost && !step.root) {
+      // The login user's status read removes what it owns.
+      step.secrets.clear();
+    }
     reply(
-      `state=${step.exit === undefined ? 'running' : 'exited'}\ncode=${step.exit === undefined ? '' : String(step.exit)}\nstarted=${step.started}\nfinished=${step.finished ?? ''}\nsha=${step.sha}\nout=${String(step.stdout.length)}\nerr=${String(step.stderr.length)}\n`,
+      `state=${step.lost ? 'lost' : step.exit === undefined ? 'running' : 'exited'}\ncode=${step.exit === undefined ? '' : String(step.exit)}\nstarted=${step.started}\nfinished=${step.finished ?? ''}\nsha=${step.sha}\nout=${String(step.stdout.length)}\nerr=${String(step.stderr.length)}\n`,
     );
   }
 
@@ -466,6 +485,28 @@ export class StepHost {
     step.secrets.clear();
     this.steps.delete(key);
     this.removed.push(id);
+    reply('SWRESULT removed\n');
+  }
+
+  /** The wrapper of a step is killed: the program stops, nothing records an end, and the status says `lost`. */
+  lose(id: string): void {
+    for (const [key, step] of this.steps) {
+      if (key.endsWith(`/${id}`)) {
+        step.lost = true;
+        step.abort.abort();
+      }
+    }
+  }
+
+  private sweep(args: string[], reply: (text: string) => void): void {
+    const [base = '', id = ''] = args;
+    const step = this.steps.get(`${base}/${id}`);
+    if (!step) {
+      reply('SWRESULT notfound\n');
+      return;
+    }
+    step.secrets.clear();
+    this.swept.push(id);
     reply('SWRESULT removed\n');
   }
 

@@ -18,6 +18,7 @@ import {
   getStepStatus,
   readStepOutput,
   removeStep,
+  removeStepSecrets,
   startDetachedStep,
   waitForStep,
 } from './steps.js';
@@ -819,22 +820,64 @@ export function defineStepScenarios(
         }
       });
 
-      it('delivers secrets to a step that runs as root, and removes them', async (context) => {
+      it('delivers secrets to a step that runs as root, owned by root, and removes them', async (context) => {
         if (env.sudo === undefined) {
           context.skip('no sudo in this environment');
           return;
         }
         const value = 's3cret-for-root-steps';
-        const result = await run('sha256sum < "$MYSECRET_FILE" | cut -d" " -f1\n', {
-          sudo: env.sudo.options,
-          secrets: { MYSECRET: value },
-        });
+        const result = await run(
+          'stat -c "%U %a" "$MYSECRET_FILE"\nsha256sum < "$MYSECRET_FILE" | cut -d" " -f1\n',
+          { sudo: env.sudo.options, secrets: { MYSECRET: value } },
+        );
         assert.equal(result.status.exitCode, 0);
-        assert.equal(text(result.chunks, 'stdout'), `${sha256(value)}\n`);
+        // The step runs as the user sudo elevates to, and its secret belongs to that user (a program handed the file may
+        // insist on it): root on a real server, the caller where the stand-in sudo does not elevate.
+        assert.equal(
+          text(result.chunks, 'stdout'),
+          `${env.sudo.elevatesTo} 600\n${sha256(value)}\n`,
+        );
         const left = await conn.exec(
           `test -e ${shellQuote(`${baseDir}/${result.id}/secrets`)}; echo $?`,
         );
         assert.equal(left.stdout.trim(), '1', 'removed after the script ended');
+      });
+
+      it('removes the secrets of a step that runs as root after its wrapper was killed, and leaves its record', async (context) => {
+        if (env.sudo === undefined) {
+          context.skip('no sudo in this environment');
+          return;
+        }
+        const id = nextId('secrets-root-lost');
+        await startDetachedStep(conn, {
+          id,
+          script: 'sleep 60\n',
+          baseDir,
+          sudo: env.sudo.options,
+          secrets: { MYSECRET: 's3cret-for-lost-root-steps' },
+        });
+        await sleep(600);
+        const dir = shellQuote(`${baseDir}/${id}`);
+        // The wrapper runs as root: killing it takes root.
+        const killed = await conn.exec(`kill -s KILL "$(cat ${dir}/pid)"`, {
+          sudo: env.sudo.options,
+        });
+        assert.equal(killed.code, 0, killed.stderr);
+        await sleep(300);
+        assert.equal((await getStepStatus(conn, id, baseDir)).state, 'lost');
+        // The login user's status read removes what it owns; what root owns needs sudo.
+        assert.equal(await removeStepSecrets(conn, id, { baseDir, sudo: env.sudo.options }), true);
+        const left = await conn.exec(`test -e ${dir}/secrets; echo $?`);
+        assert.equal(left.stdout.trim(), '1', 'the secrets are gone');
+        assert.equal(
+          (await getStepStatus(conn, id, baseDir)).state,
+          'lost',
+          'and the record stays',
+        );
+        assert.equal(await removeStepSecrets(conn, 'no-such-step', { baseDir }), false);
+        await conn.exec(`kill -s KILL -- "-$(cat ${dir}/pid)" 2>/dev/null; true`, {
+          sudo: env.sudo.options,
+        });
       });
 
       it('hands the sudo password to nothing but sudo: the step never sees it', async (context) => {

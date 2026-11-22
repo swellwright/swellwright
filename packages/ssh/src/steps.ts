@@ -24,6 +24,7 @@ import {
   LAUNCH_SCRIPT,
   READ_SCRIPT,
   REMOVE_SCRIPT,
+  SECRETS_REMOVE_SCRIPT,
   STATUS_SCRIPT,
   WRAPPER_SCRIPT,
 } from './step-scripts.js';
@@ -490,6 +491,40 @@ export async function removeStep(
     throw new SshStepError(
       'ssh_step_failed',
       `Step "${id}" could not be removed: ${snippet(result.stderr, [options.sudo?.password])}`,
+    );
+  }
+  return outcome === 'removed';
+}
+
+export interface RemoveStepSecretsOptions {
+  baseDir?: string;
+  /** Needed to remove the secrets of a step that runs as root when the SSH user is not root. */
+  sudo?: SudoOptions;
+}
+
+/**
+ * Removes the secrets of a step (ADR 0042) and nothing else: the record of the step, its output and its exit marker stay.
+ * For a step whose wrapper was killed, so that nothing removed them: the status read removes what the login user may,
+ * and this removes the rest through sudo. Returns whether the step exists.
+ */
+export async function removeStepSecrets(
+  connection: SshConnection,
+  id: string,
+  options: RemoveStepSecretsOptions = {},
+): Promise<boolean> {
+  assertStepId(id);
+  const base = stepBaseDir(connection, options.baseDir);
+  const baseWord = await sudoBaseWord(connection, base, options.sudo);
+  const command = `sh -c ${shellQuote(SECRETS_REMOVE_SCRIPT)} swellwright-rmsecrets ${baseWord} ${shellQuote(id)}`;
+  const result = await connection.exec(command, {
+    timeoutMs: CONTROL_EXEC_TIMEOUT_MS,
+    ...(options.sudo === undefined ? {} : { sudo: options.sudo }),
+  });
+  const outcome = resultOf(result.stdout);
+  if (result.code !== 0 || outcome === undefined) {
+    throw new SshStepError(
+      'ssh_step_failed',
+      `The secrets of step "${id}" could not be removed: ${snippet(result.stderr, [options.sudo?.password])}`,
     );
   }
   return outcome === 'removed';

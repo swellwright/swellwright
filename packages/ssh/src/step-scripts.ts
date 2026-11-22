@@ -8,7 +8,8 @@
 //   stdin           optional, the step's standard input (0600)
 //   env             optional, `export NAME='value'` lines the wrapper sources (0600)
 //   secrets/NAME    optional, one file per secret (the directory 0700, the files 0600), for the length of the script:
-//                   the wrapper removes the directory when the script ends, whatever the way (ADR 0042)
+//                   written by the launch as the login user, owned by root when the step runs as root (the wrapper
+//                   does that), removed by the wrapper when the script ends, whatever the way (ADR 0042)
 //   run.sh          the wrapper (0700): becomes the leader of a new session, records pid and start, runs the
 //                   script, records the exit code
 //   out, err        the script's standard output and standard error (0600, appended to)
@@ -54,6 +55,9 @@ cd "$D" || exit 70
 mkdir .claimed 2>/dev/null || exit 0
 trap '' HUP
 trap : TERM INT
+# A step that runs as root owns its secrets as root: the launch wrote them as the login user, and a program that is handed
+# a secret file may insist that it belongs to the user that runs it (the node installer does). They stay 0600 and 0700.
+if [ -d ./secrets ] && [ "$(id -u)" = 0 ]; then chown -R 0:0 ./secrets 2>/dev/null; fi
 umask 022
 printf '%s\\n' "$$" > pid.tmp && mv -f pid.tmp pid
 date -u '+%Y-%m-%dT%H:%M:%SZ' > started.tmp && mv -f started.tmp started
@@ -174,7 +178,8 @@ else
   state=unknown
 fi
 # A step that is over has no use for its secrets: the wrapper removes them first, this is for a wrapper that was killed.
-case $state in exited|lost) [ -d "$D/secrets" ] && rm -rf "$D/secrets";; esac
+# (Secrets that belong to root are out of reach of the login user: for those \`removeStepSecrets\` runs through sudo.)
+case $state in exited|lost) [ -d "$D/secrets" ] && rm -rf "$D/secrets" 2>/dev/null;; esac
 printf 'state=%s\\ncode=%s\\nstarted=%s\\nfinished=%s\\nsha=%s\\nout=%s\\nerr=%s\\n' "$state" "$code" "$st" "$fin" "$sha" "$so" "$se"
 exit 0
 `;
@@ -248,6 +253,19 @@ pid=
 [ -f "$D/pid" ] && pid=$(cat "$D/pid")
 if [ ! -f "$D/exit" ] && [ -n "$pid" ] && alive "$pid" "$2" && [ "$3" != 1 ]; then echo "SWRESULT running"; exit 0; fi
 rm -rf "$D"
+echo "SWRESULT removed"
+exit 0
+`;
+
+/**
+ * Removes only the secrets of a step, whatever state it is in. Positional parameters: base directory, step id. Run as
+ * root (through the sudo wrapper) for a step that runs as root, whose secrets the login user cannot remove. Prints
+ * `SWRESULT removed|notfound`.
+ */
+export const SECRETS_REMOVE_SCRIPT = `
+D=$1/$2
+if [ ! -d "$D" ]; then echo "SWRESULT notfound"; exit 0; fi
+rm -rf "$D/secrets"
 echo "SWRESULT removed"
 exit 0
 `;
