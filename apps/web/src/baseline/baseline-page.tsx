@@ -42,7 +42,7 @@ import {
 import { getBaselineFleet, listBaselines, listServers, startServerBaselineRun } from '../api.js';
 import { describeError } from '../auth/messages.js';
 import { useStepUp } from '../auth/step-up.js';
-import { useDateTime, useNumber } from '../format.js';
+import { useDateTime, useFullDate, useNumber, useTimeOfDay } from '../format.js';
 import { useCountries } from '../fleet/countries.js';
 import { QueryErrorCard } from '../security/query-error.js';
 import { notifyFailure } from '../security/notify-failure.js';
@@ -66,6 +66,8 @@ export function BaselinePage({ permissions }: { permissions: readonly Permission
   const { t } = useTranslation(['baseline', 'common', 'servers']);
   const queryClient = useQueryClient();
   const formatTime = useDateTime();
+  const formatTimeOfDay = useTimeOfDay();
+  const formatDate = useFullDate();
   const formatNumber = useNumber();
   const step = useStepUp();
   const { nameOf } = useCountries();
@@ -326,11 +328,18 @@ export function BaselinePage({ permissions }: { permissions: readonly Permission
       icon: totals !== undefined && totals.unreachable > 0 ? PiPlugsDuotone : PiClockDuotone,
       color: totals !== undefined && totals.unreachable > 0 ? 'violet' : 'cyan',
       title: t('baseline:metrics.lastRun'),
-      value: totals?.lastRunAt ? formatTime(totals.lastRunAt) : t('baseline:metrics.never'),
+      value: totals?.lastRunAt ? formatTimeOfDay(totals.lastRunAt) : t('baseline:metrics.never'),
       subtitle:
-        totals !== undefined && totals.unreachable > 0
-          ? `${t('baseline:metrics.unreachable')}: ${formatNumber(totals.unreachable)}`
-          : undefined,
+        totals === undefined
+          ? undefined
+          : [
+              totals.lastRunAt ? formatDate(totals.lastRunAt) : undefined,
+              totals.unreachable > 0
+                ? `${t('baseline:metrics.unreachable')}: ${formatNumber(totals.unreachable)}`
+                : undefined,
+            ]
+              .filter((part) => part !== undefined)
+              .join(' · ') || undefined,
     },
   ];
 

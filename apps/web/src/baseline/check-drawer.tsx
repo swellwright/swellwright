@@ -1,6 +1,6 @@
-// The drawer follows the panel's detail drawers (a 700 px `Drawer` on the right, full screen on a phone, a soft icon and
-// the name in the title, grouped `SectionCard`s, the sticky `DrawerFooter`). The panel has no check to show: the
-// results are an `Accordion` per category with a chip on every check, as its Mantine accordions are drawn.
+// Adapted from the Remnawave panel frontend 3.4.11 (AGPL-3.0-only): its detail drawers (a 700 px `Drawer` on the right,
+// `OverlayHeader`, grouped `SectionCard`s, the sticky `DrawerFooter`) and the accordions of its settings pages. Changes: the
+// panel has no check to show; the results are an `Accordion` per category with a status chip on every check.
 import {
   Accordion,
   Badge,

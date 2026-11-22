@@ -1,6 +1,6 @@
-// The drawer follows the panel's detail drawers (a wide `Drawer` on the right, `OverlayHeader`, grouped `SectionCard`s, the
-// sticky `DrawerFooter`). The panel edits a configuration profile in its code editor with a validation under it; the
-// baseline document is edited the same way (Monaco, the problems underlined, a line that says whether the text is valid).
+// Adapted from the Remnawave panel frontend 3.4.11 (AGPL-3.0-only): its edit drawers (a wide `Drawer` on the right,
+// `OverlayHeader`, grouped `SectionCard`s, the sticky `DrawerFooter`) and the Monaco editor of its config profiles with a
+// validation under it. Changes: the document is YAML, checked by the server, and its problems are underlined by line.
 import {
   Accordion,
   Badge,
@@ -64,6 +64,11 @@ checks:
 `;
 
 type View = { kind: 'list' } | { kind: 'edit'; id: string } | { kind: 'new'; source: string };
+
+/** A long note kept short enough for a version picker. */
+function shorten(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit).trimEnd()}…` : text;
+}
 
 /** The problems of a text as the editor underlines them, and a line that says whether it is valid. */
 function useValidation(source: string, enabled: boolean) {
@@ -537,7 +542,7 @@ function Editor({
                   allowDeselect={false}
                   data={data.versions.map((entry) => ({
                     value: String(entry.version),
-                    label: `${t('baseline:baselines.version', { version: entry.version })} · ${formatTime(entry.createdAt)}${entry.comment ? ` · ${entry.comment}` : ''}`,
+                    label: `${t('baseline:baselines.version', { version: entry.version })} · ${formatTime(entry.createdAt)}${entry.comment ? ` · ${shorten(entry.comment, 18)}` : ''}`,
                   }))}
                   onChange={(value) => {
                     setVersion(value === null ? undefined : Number(value));

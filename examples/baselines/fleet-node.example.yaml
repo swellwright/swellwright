@@ -1,0 +1,104 @@
+# A baseline for a fleet of your own (docs/en/baselines.md, ADR 0045): the node baseline of Swellwright with the values of
+# an installation that is NOT the installer's defaults. Every name, port and path below is a placeholder (the container is
+# called `my-node`, the node API port is 62099, the certificate lives under /srv/tls); replace them with yours.
+#
+# To use it: Fleet > Baseline > Baselines > New baseline, paste the text, read what the editor says, save. Then assign it to
+# the servers or to a tag (for example `node`). Or start from the built-in "node-selfsteal": open it, choose Copy and change
+# the copy.
+schema: 1
+description: Nodes of the example fleet - the general checks and the node itself, with our own names and ports.
+checks:
+  - id: updates.security-pending
+    title: No security updates are waiting
+    category: updates
+    severity: high
+    observe: { kind: updates.pending, field: security }
+    expect: { atMost: 0 }
+    remediationHint: Install the pending updates and reboot if asked to.
+
+  - id: updates.reboot-pending
+    title: No reboot is waiting
+    category: updates
+    severity: medium
+    observe: { kind: kernel, field: rebootRequired }
+    expect: { equals: false }
+    remediationHint: Reboot in a quiet hour.
+
+  - id: time.synchronized
+    title: The clock is synchronised
+    category: time
+    severity: medium
+    observe: { kind: time.sync, field: synchronized }
+    expect: { equals: true }
+
+  - id: resources.disk-root
+    title: The root filesystem is not nearly full
+    category: resources
+    severity: high
+    observe: { kind: disk.usage, params: { path: / }, field: usedPercent }
+    expect: { atMost: 85 }
+
+  - id: ssh.password-login
+    title: SSH password login is closed
+    category: ssh
+    severity: high
+    observe: { kind: sshd.effective, field: passwordauthentication }
+    expect: { equals: "no" }
+    remediationHint: Authorize a key, verify a key login, then set PasswordAuthentication no.
+
+  - id: ssh.only-our-ports
+    title: Only SSH, HTTP and HTTPS listen on a public address (and the node API port)
+    category: network
+    severity: high
+    observe: { kind: ports.public, field: ports }
+    expect: { in: [tcp/22, tcp/80, tcp/443, tcp/62099] }
+    remediationHint: Find what listens (ss -ltnp) and stop it, or add it here if it belongs.
+
+  - id: node.container-running
+    title: The node container is running
+    category: node
+    severity: high
+    observe: { kind: docker.container, params: { name: my-node }, field: state }
+    expect: { equals: running }
+
+  - id: node.container-image
+    title: The node runs the version we pinned
+    category: node
+    severity: medium
+    observe: { kind: docker.container, params: { name: my-node }, field: tag }
+    expect: { equals: "3.4.6" }
+    remediationHint: Update the compose file and the image to the version we decided on.
+
+  - id: node.container-secret-key
+    title: The node container has its secret key
+    category: node
+    severity: high
+    observe: { kind: docker.container, params: { name: my-node }, field: envNames }
+    expect: { contains: SECRET_KEY }
+
+  - id: node.api-port-private
+    title: The node API port is dropped for everybody but the panel
+    category: firewall
+    severity: high
+    observe: { kind: iptables.chain, params: { chain: DOCKER-USER }, field: text }
+    expect: { matches: "--ctorigdstport 62099 .*-j DROP" }
+
+  - id: node.certificate-days
+    title: The certificate has at least 21 days left
+    category: tls
+    severity: high
+    observe: { kind: cert.file, params: { path: /srv/tls/fullchain.pem }, field: daysLeft }
+    expect: { atLeast: 21 }
+    remediationHint: Renew the certificate and deliver it again.
+
+  - id: node.foreign-sni
+    title: HTTPS with a foreign SNI gets the default site (404)
+    category: web
+    severity: high
+    observe:
+      {
+        kind: http.local,
+        params: { port: 443, scheme: https, target: self, sni: probe.example.com },
+        field: status,
+      }
+    expect: { equals: 404 }

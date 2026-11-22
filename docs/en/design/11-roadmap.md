@@ -21,7 +21,7 @@ Order principle: first the foundation and security, then **reading** (panel, ser
 **After the phase:** running commands and collecting facts on fleet servers is available from the UI and the API.
 
 ## Phase 3. Panel integration (3-4 weeks)
-**Contents:** panel connection wizard (tokens with scopes, the JWT is discarded), typed client and adapters, read access to all objects, snapshots and diff, **convention linter** and reconciliation of hosts with nodes, **impact calculator**, API console (read), baseline checks of a node over SSH (read-only), dashboard v1, token expiry calculation.
+**Contents:** panel connection wizard (tokens with scopes, the JWT is discarded), typed client and adapters, read access to all objects, snapshots and diff, **convention linter** and reconciliation of hosts with nodes, **impact calculator**, API console (read), baseline checks of a node over SSH (read-only; built, ADR 0045), dashboard v1, token expiry calculation.
 **Acceptance:** the panel is connected, objects are visible, a dry run of a profile edit shows the impact "restarts N nodes", reconciliation finds `address` drift, snapshot and diff work, a token without permissions cannot write.
 **After the phase:** checking the consistency of hosts and node addresses ("check only" mode) and a fleet audit are available.
 

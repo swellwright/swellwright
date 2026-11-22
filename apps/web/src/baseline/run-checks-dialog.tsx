@@ -1,5 +1,5 @@
-// The dialog follows the panel's modals (a titled `Modal`, `OverlayHeader`, the sticky `ModalFooter` with a teal soft
-// primary button). Starting a check has no counterpart in the panel; the inputs are the panel's.
+// Adapted from the Remnawave panel frontend 3.4.11 (AGPL-3.0-only): its modals (a titled `Modal`, `OverlayHeader`, the sticky
+// `ModalFooter` with a teal soft primary button). Changes: starting a check has no counterpart in the panel; the inputs are the panel's.
 import {
   Button,
   Group,

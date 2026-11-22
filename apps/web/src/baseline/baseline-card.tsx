@@ -1,5 +1,5 @@
-// The card of a server's drawer that shows how the server did in its newest baseline check. It follows the other cards of
-// that drawer (a `SectionCard` with a soft icon and a title on top); the results themselves are in `CheckDrawer`.
+// Adapted from the Remnawave panel frontend 3.4.11 (AGPL-3.0-only): its settings cards (a soft icon, a title, a description and
+// the content). Changes: the card shows how a server did in its newest baseline check and opens the results.
 import { Button, Group, Stack, Text, ThemeIcon } from '@mantine/core';
 import { IconChecklist } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';

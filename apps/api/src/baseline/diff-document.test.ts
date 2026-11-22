@@ -219,6 +219,22 @@ describe('the built-in baselines', () => {
   });
 });
 
+describe('the example baselines', () => {
+  it('are valid, and hold no address or name of an installation', () => {
+    const text = readFileSync(
+      new URL('../../../../examples/baselines/fleet-node.example.yaml', import.meta.url),
+      'utf8',
+    );
+    const verdict = validateBaselineSource(text);
+    assert.deepEqual(verdict.issues, []);
+    assert.equal(verdict.valid, true);
+    assert.ok(verdict.checkCount >= 10);
+    for (const address of text.match(/\b\d{1,3}(?:\.\d{1,3}){3}\b/gu) ?? []) {
+      assert.ok(address.startsWith('192.0.2.') || address === '1.1.1.1', address);
+    }
+  });
+});
+
 describe('the repository holds no instance data in what ships', () => {
   const dir = new URL('./', import.meta.url);
   const files = [

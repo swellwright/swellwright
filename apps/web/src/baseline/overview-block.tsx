@@ -1,6 +1,5 @@
-// The Fleet block of the Overview: how many servers fail or warn against their baselines, from the newest checks. It is a
-// titled `MetricSection` with a metric card, as the panel's Home sections are; the numbers come from this server's own
-// records of the checks, never from the servers themselves.
+// Adapted from the Remnawave panel frontend 3.4.11 (AGPL-3.0-only): src/pages/dashboard/home/components/home.page.tsx (a titled
+// `MetricSection` with metric cards). Changes: the numbers come from this server's own records of the baseline checks.
 import { Box } from '@mantine/core';
 import { useQuery } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
