@@ -225,6 +225,8 @@ model Secret {
   /// Both relations restrict: a secret in use cannot be deleted (ADR 0034).
   serverAccess     ServerAccess[] @relation("ServerAccessSecret")
   serverSudoAccess ServerAccess[] @relation("ServerAccessSudoSecret")
+  /// The connections to a panel that use this secret as their token. Restricts too (ADR 0041).
+  panelConnections PanelConnection[] @relation("PanelConnectionToken")
 
   @@index([type])
   @@map("secrets")
@@ -661,4 +663,45 @@ model ServerArtifact {
 
   @@unique([serverId, name, version])
   @@map("server_artifacts")
+}
+
+/// What the last check of a panel connection found (ADR 0041). There is no `unconfigured` here: that is a missing row.
+enum PanelConnectionState {
+  connected
+  degraded
+  unreachable
+  unauthorized
+  unsupported
+
+  @@map("panel_connection_state")
+}
+
+/// The connection to a Remnawave panel: where it is, which vault secret holds its API token, and what the last check
+/// found (ADR 0041). One row is used for now; nothing in the shape prevents several. The token is never stored here.
+model PanelConnection {
+  id               String               @id @default(uuid(7)) @db.Uuid
+  /// `https://host[:port][/prefix]`, normalised, no credentials, query or fragment.
+  baseUrl          String               @map("base_url") @db.VarChar(2048)
+  /// The vault secret (kind `panel_token`). Restricts on delete: the secret cannot be removed while this uses it.
+  tokenSecretId    String               @map("token_secret_id") @db.Uuid
+  state            PanelConnectionState
+  panelVersion     String?              @map("panel_version") @db.VarChar(64)
+  /// What the token can read, found by the last check: `{ checkedAt, resources: { nodes: "ok", ... } }`.
+  capabilities     Json?
+  /// PEM text of an authority to trust for this panel (public material).
+  trustedCa        String?              @map("trusted_ca") @db.VarChar(20000)
+  /// When the token expires, read from the token itself when it carries an expiry claim.
+  tokenExpiresAt   DateTime?            @map("token_expires_at") @db.Timestamptz(3)
+  lastCheckedAt    DateTime?            @map("last_checked_at") @db.Timestamptz(3)
+  lastErrorCode    String?              @map("last_error_code") @db.VarChar(64)
+  lastErrorMessage String?              @map("last_error_message") @db.VarChar(500)
+  /// The user who connected it. No foreign key, like the audit chain.
+  createdById      String?              @map("created_by_id") @db.Uuid
+  createdAt        DateTime             @default(now()) @map("created_at") @db.Timestamptz(3)
+  updatedAt        DateTime             @updatedAt @map("updated_at") @db.Timestamptz(3)
+
+  tokenSecret Secret @relation("PanelConnectionToken", fields: [tokenSecretId], references: [id], onDelete: Restrict)
+
+  @@index([tokenSecretId])
+  @@map("panel_connections")
 }

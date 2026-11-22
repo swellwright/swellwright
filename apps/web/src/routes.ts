@@ -33,7 +33,16 @@ export const ROUTES = {
     },
     PANEL: {
       ROOT: '/dashboard/panel',
+      CONNECTION: '/dashboard/panel/connection',
       PROFILES: '/dashboard/panel/profiles',
+      HOSTS: '/dashboard/panel/hosts',
+      INTERNAL_SQUADS: '/dashboard/panel/internal-squads',
+      EXTERNAL_SQUADS: '/dashboard/panel/external-squads',
+      TEMPLATES: '/dashboard/panel/templates',
+      SNIPPETS: '/dashboard/panel/snippets',
+      NODE_PLUGINS: '/dashboard/panel/node-plugins',
+      SUBSCRIPTION_SETTINGS: '/dashboard/panel/subscription-settings',
+      INFRA_BILLING: '/dashboard/panel/infra-billing',
       API_CONSOLE: '/dashboard/panel/api-console',
     },
     SECURITY: {

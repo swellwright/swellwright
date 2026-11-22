@@ -2,20 +2,36 @@
   "name": "@swellwright/remnawave",
   "version": "0.0.0",
   "private": true,
-  "description": "Typed Remnawave client, version adapters and the impact calculator",
+  "description": "Typed read-only Remnawave client, normalising adapters, secret masking and the fake panel for tests",
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./test-support": {
+      "types": "./dist/test-support/index.d.ts",
+      "default": "./dist/test-support/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"dist/**/*.test.js\"",
+    "fake-panel": "node dist/test-support/fake-panel-cli.js"
+  },
+  "dependencies": {
+    "@swellwright/contracts": "workspace:*",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@remnawave/backend-contract": "3.4.11",
+    "@types/node": "26.6.6"
   }
 }

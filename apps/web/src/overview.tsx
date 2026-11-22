@@ -1,5 +1,6 @@
 // Adapted from the Remnawave panel frontend 3.4.11 (AGPL-3.0-only): src/pages/dashboard/home/components/home.page.tsx.
-// Changes: the sections and cards show the console's own state (the API, its dependencies), not the panel's load.
+// Changes: the sections and cards show the console's own state (the API, its dependencies), not the panel's load; when
+// a Remnawave panel is connected, its block of metric cards comes first (`panel/overview-block.tsx`).
 import { Stack } from '@mantine/core';
 import { IconDatabaseOff } from '@tabler/icons-react';
 import { useQuery } from '@tanstack/react-query';
@@ -22,6 +23,7 @@ import {
 } from '@swellwright/ui';
 
 import { ApiUnreachableError, loadSystemStatus } from './api.js';
+import { PanelOverviewBlock } from './panel/overview-block.js';
 import { QueryErrorCard } from './security/query-error.js';
 
 /**
@@ -59,6 +61,8 @@ export function Overview() {
 
   return (
     <Stack gap="sm">
+      <PanelOverviewBlock />
+
       <MetricSection
         actions={
           <>

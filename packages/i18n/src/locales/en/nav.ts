@@ -22,7 +22,16 @@ export const nav = {
   reports: 'Reports',
 
   panel: 'Panel',
+  connection: 'Connection',
   profiles: 'Profiles',
+  hosts: 'Hosts',
+  internalSquads: 'Internal squads',
+  externalSquads: 'External squads',
+  templates: 'Templates',
+  snippets: 'Snippets',
+  nodePlugins: 'Node plugins',
+  subscriptionSettings: 'Subscription settings',
+  infraBilling: 'Infra billing',
   apiConsole: 'API console',
 
   security: 'Security',
