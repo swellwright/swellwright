@@ -3,7 +3,39 @@ export const overview = {
   title: 'Overview',
 
   sections: {
-    status: 'Status',
+    panel: 'Remnawave panel',
+    fleet: 'Fleet',
+    checks: 'Checks',
+    snapshots: 'Snapshots',
+    system: 'System',
+  },
+
+  /** The Fleet section: the servers of the inventory by their health (the numbers of `GET /dashboard/fleet`). */
+  fleet: {
+    servers: 'Servers',
+    serversOk: 'In order: {{ok}}',
+    serversNone: 'The inventory is empty',
+    critical: 'Critical',
+    warning: 'With warnings',
+    unknown: 'Not known yet',
+    none: 'No server',
+    seeTable: 'See the table below',
+  },
+
+  /** The Checks section: the last reconciliation of the panel with the inventory. */
+  reconciliation: {
+    title: 'Reconciliation',
+    notYet: 'Not run yet',
+    notYetHint: 'Run it on the Checks page',
+    clean: 'The panel and the inventory agree',
+    breakdown: 'Drifting: {{drift}}, missing: {{missing}}, extra: {{extra}}',
+  },
+
+  /** The Snapshots section. */
+  snapshots: {
+    changes: 'Changes since the snapshot',
+    changesNone: 'None',
+    changesUnknown: 'Not known',
   },
 
   stats: {

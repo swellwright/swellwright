@@ -176,7 +176,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     title: (p) =>
       `${String(p['count'])} vault ${plural(p['count'], 'secret has', 'secrets have')} expired`,
     detail: (p) =>
-      `An expired secret is refused by everything that would use it: ${String(p['names'])}. Renew or replace it.`,
+      `An expired secret is refused by everything that would use it: ${listed(p)}. Renew or replace it.`,
   },
   'vault.secrets_expiring': {
     source: 'vault',
@@ -185,7 +185,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     title: (p) =>
       `${String(p['count'])} vault ${plural(p['count'], 'secret expires', 'secrets expire')} soon`,
     detail: (p) =>
-      `The first one expires in ${String(p['soonestDays'])} ${plural(p['soonestDays'], 'day', 'days')}: ${String(p['names'])}.`,
+      `The first one expires in ${String(p['soonestDays'])} ${plural(p['soonestDays'], 'day', 'days')}: ${listed(p)}.`,
   },
   'vault.sealed': {
     source: 'vault',
@@ -324,7 +324,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     title: (p) =>
       `The host key of ${String(p['count'])} ${plural(p['count'], 'server', 'servers')} changed`,
     detail: (p) =>
-      `The check refused to log in: ${String(p['names'])}. Find out why before you pin the new key.`,
+      `The check refused to log in: ${listed(p)}. Find out why before you pin the new key.`,
   },
   'baseline.failing': {
     source: 'baseline',
@@ -332,7 +332,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     link: '/dashboard/fleet/baseline',
     title: (p) =>
       `${String(p['servers'])} ${plural(p['servers'], 'server fails', 'servers fail')} its baseline`,
-    detail: (p) => `${String(p['checks'])} checks failed: ${String(p['names'])}.`,
+    detail: (p) => `${String(p['checks'])} checks failed: ${listed(p)}.`,
   },
   'baseline.unreachable': {
     source: 'baseline',
@@ -340,7 +340,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     link: '/dashboard/fleet/baseline',
     title: (p) =>
       `${String(p['count'])} ${plural(p['count'], 'server', 'servers')} could not be checked`,
-    detail: (p) => `The last check could not observe ${String(p['names'])}.`,
+    detail: (p) => `The last check could not observe ${listed(p)}.`,
   },
   'baseline.stale': {
     source: 'baseline',
@@ -348,8 +348,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     link: '/dashboard/fleet/baseline',
     title: (p) =>
       `${String(p['count'])} ${plural(p['count'], 'server', 'servers')} not checked for ${String(p['days'])} days`,
-    detail: (p) =>
-      `The newest check is older than ${String(p['days'])} days: ${String(p['names'])}.`,
+    detail: (p) => `The newest check is older than ${String(p['days'])} days: ${listed(p)}.`,
   },
   'baseline.warnings': {
     source: 'baseline',
@@ -357,7 +356,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     link: '/dashboard/fleet/baseline',
     title: (p) =>
       `${String(p['servers'])} ${plural(p['servers'], 'server has', 'servers have')} baseline warnings`,
-    detail: (p) => `${String(p['checks'])} checks warn: ${String(p['names'])}.`,
+    detail: (p) => `${String(p['checks'])} checks warn: ${listed(p)}.`,
   },
   'baseline.never_checked': {
     source: 'baseline',
@@ -365,7 +364,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     link: '/dashboard/fleet/baseline',
     title: (p) =>
       `${String(p['count'])} ${plural(p['count'], 'server has', 'servers have')} never been checked`,
-    detail: (p) => `A baseline applies but no check has finished: ${String(p['names'])}.`,
+    detail: (p) => `A baseline applies but no check has finished: ${listed(p)}.`,
   },
   'servers.not_ready': {
     source: 'servers',
@@ -374,7 +373,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     title: (p) =>
       `${String(p['count'])} ${plural(p['count'], 'server is', 'servers are')} not ready to be managed`,
     detail: (p) =>
-      `${String(p['noKey'])} without a pinned host key, ${String(p['noAccess'])} without an access entry: ${String(p['names'])}.`,
+      `${String(p['noKey'])} without a pinned host key, ${String(p['noAccess'])} without an access entry: ${listed(p)}.`,
   },
   'servers.facts_stale': {
     source: 'servers',
@@ -383,7 +382,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     title: (p) =>
       `The facts of ${String(p['count'])} ${plural(p['count'], 'server are', 'servers are')} old or missing`,
     detail: (p) =>
-      `${String(p['stale'])} older than ${String(p['days'])} days, ${String(p['missing'])} never collected: ${String(p['names'])}.`,
+      `${String(p['stale'])} older than ${String(p['days'])} days, ${String(p['missing'])} never collected: ${listed(p)}.`,
   },
   'runs.failed': {
     source: 'runs',
@@ -418,7 +417,7 @@ const KINDS: Record<AttentionKind, KindInfo> = {
     title: (p) =>
       `${String(p['count'])} ${plural(p['count'], 'plugin was', 'plugins were')} switched off`,
     detail: (p) =>
-      `Their files are gone, unusable or changed since they were approved: ${String(p['names'])}. Review and enable them again.`,
+      `Their files are gone, unusable or changed since they were approved: ${listed(p)}. Review and enable them again.`,
   },
   'updates.available': {
     source: 'updates',
@@ -461,12 +460,19 @@ function make(
   };
 }
 
-/** The first few names, comma separated, and how many more there are. */
-function listNames(names: readonly string[]): string {
+/** The first few names in order, comma separated, and how many more there are: `names` and `more` of an item. */
+function namesOf(names: readonly string[]): { names: string; more: number } {
   const sorted = [...names].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
-  const shown = sorted.slice(0, NAMES_SHOWN).join(', ');
-  const more = sorted.length - NAMES_SHOWN;
-  return more > 0 ? `${shown} and ${String(more)} more` : shown;
+  return {
+    names: sorted.slice(0, NAMES_SHOWN).join(', '),
+    more: Math.max(0, sorted.length - NAMES_SHOWN),
+  };
+}
+
+/** The names of an item as English text (the console composes its own, in the language of the user). */
+function listed(params: Params): string {
+  const more = typeof params['more'] === 'number' ? params['more'] : 0;
+  return more > 0 ? `${String(params['names'])} and ${String(more)} more` : String(params['names']);
 }
 
 const oldest = (dates: readonly Date[]): Date | null =>
@@ -531,7 +537,7 @@ function vaultItems(
     items.push(
       make(
         'vault.secrets_expired',
-        { count: expired.length, names: listNames(expired.map((secret) => secret.name)) },
+        { count: expired.length, ...namesOf(expired.map((secret) => secret.name)) },
         oldest(expired.map((secret) => secret.expiresAt)),
       ),
     );
@@ -543,7 +549,7 @@ function vaultItems(
         {
           count: soon.length,
           soonestDays: Math.min(...soon.map((secret) => secret.days)),
-          names: listNames(soon.map((secret) => secret.name)),
+          ...namesOf(soon.map((secret) => secret.name)),
         },
         null,
       ),
@@ -687,7 +693,7 @@ function baselineItems(
     items.push(
       make(
         'baseline.host_key_mismatch',
-        { count: mismatch.length, names: listNames(mismatch.map((server) => server.name)) },
+        { count: mismatch.length, ...namesOf(mismatch.map((server) => server.name)) },
         at(mismatch),
       ),
     );
@@ -699,7 +705,7 @@ function baselineItems(
         {
           servers: failing.length,
           checks: failing.reduce((sum, server) => sum + (server.last?.fail ?? 0), 0),
-          names: listNames(failing.map((server) => server.name)),
+          ...namesOf(failing.map((server) => server.name)),
         },
         at(failing),
       ),
@@ -709,7 +715,7 @@ function baselineItems(
     items.push(
       make(
         'baseline.unreachable',
-        { count: unreachable.length, names: listNames(unreachable.map((server) => server.name)) },
+        { count: unreachable.length, ...namesOf(unreachable.map((server) => server.name)) },
         at(unreachable),
       ),
     );
@@ -721,7 +727,7 @@ function baselineItems(
         {
           count: stale.length,
           days: thresholds.baselineStaleDays,
-          names: listNames(stale.map((server) => server.name)),
+          ...namesOf(stale.map((server) => server.name)),
         },
         oldest(stale.flatMap((server) => (server.last === null ? [] : [server.last.at]))),
       ),
@@ -737,7 +743,7 @@ function baselineItems(
             (sum, server) => sum + (server.last?.warn ?? 0) + (server.last?.error ?? 0),
             0,
           ),
-          names: listNames(warning.map((server) => server.name)),
+          ...namesOf(warning.map((server) => server.name)),
         },
         at(warning),
       ),
@@ -747,7 +753,7 @@ function baselineItems(
     items.push(
       make(
         'baseline.never_checked',
-        { count: never.length, names: listNames(never.map((server) => server.name)) },
+        { count: never.length, ...namesOf(never.map((server) => server.name)) },
         null,
       ),
     );
@@ -777,7 +783,7 @@ function serverItems(
           count: subjects.length,
           noKey: subjects.filter((server) => server.hostKeyCount === 0).length,
           noAccess: subjects.filter((server) => server.accessCount === 0).length,
-          names: listNames(subjects.map((server) => server.name)),
+          ...namesOf(subjects.map((server) => server.name)),
         },
         null,
         operational.length > 0 ? 'warning' : 'info',
@@ -803,7 +809,7 @@ function serverItems(
             stale: stale.length,
             missing: missing.length,
             days: thresholds.factsStaleDays,
-            names: listNames([...missing, ...stale].map((server) => server.name)),
+            ...namesOf([...missing, ...stale].map((server) => server.name)),
           },
           null,
         ),
@@ -865,7 +871,7 @@ function pluginItems(facts: PluginFacts): AttentionItem[] {
       'plugins.switched_off',
       {
         count: facts.switchedOff.length,
-        names: listNames(facts.switchedOff.map((plugin) => plugin.id)),
+        ...namesOf(facts.switchedOff.map((plugin) => plugin.id)),
       },
       newest(facts.switchedOff.map((plugin) => plugin.at)),
     ),

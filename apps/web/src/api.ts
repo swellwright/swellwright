@@ -1,4 +1,9 @@
 import {
+  type AttentionFeed,
+  AttentionFeedSchema,
+  type FleetHealth,
+  type FleetHealthQuery,
+  FleetHealthSchema,
   type BaselineFleet,
   BaselineFleetSchema,
   type BaselineList,
@@ -910,6 +915,14 @@ export const setBaselineAssignments = (
 /** The state of the fleet against its baselines: every server with its baseline and newest finished run. */
 export const getBaselineFleet = (): Promise<BaselineFleet> =>
   send('GET', '/baseline-fleet', undefined, BaselineFleetSchema);
+
+/** What needs attention (ADR 0047): from the sources the role may read, built from the server's own records. */
+export const getDashboardAttention = (): Promise<AttentionFeed> =>
+  send('GET', '/dashboard/attention', undefined, AttentionFeedSchema);
+
+/** The health of the fleet, one row per server (`servers:read`), paged and filtered by the server. */
+export const getDashboardFleet = (query: FleetHealthQuery = {}): Promise<FleetHealth> =>
+  send('GET', `/dashboard/fleet${queryString(query)}`, undefined, FleetHealthSchema);
 
 /** Queues a check of one server (`servers:exec`, needs a fresh code) and answers at once. */
 export const startServerBaselineRun = (

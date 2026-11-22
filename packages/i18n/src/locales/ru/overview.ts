@@ -3,7 +3,39 @@ export const overview = {
   title: 'Обзор',
 
   sections: {
-    status: 'Состояние',
+    panel: 'Панель Remnawave',
+    fleet: 'Парк',
+    checks: 'Проверки',
+    snapshots: 'Снимки',
+    system: 'Система',
+  },
+
+  /** Раздел «Парк»: серверы учёта по здоровью (числа `GET /dashboard/fleet`). */
+  fleet: {
+    servers: 'Серверы',
+    serversOk: 'В порядке: {{ok}}',
+    serversNone: 'Учёт пуст',
+    critical: 'Критично',
+    warning: 'С предупреждениями',
+    unknown: 'Пока неизвестно',
+    none: 'Нет серверов',
+    seeTable: 'Смотрите таблицу ниже',
+  },
+
+  /** Раздел «Проверки»: последняя сверка панели с учётом. */
+  reconciliation: {
+    title: 'Сверка',
+    notYet: 'Ещё не запускалась',
+    notYetHint: 'Запустите её на странице «Проверки»',
+    clean: 'Панель и учёт совпадают',
+    breakdown: 'Расходится: {{drift}}, нет пары: {{missing}}, лишних: {{extra}}',
+  },
+
+  /** Раздел «Снимки». */
+  snapshots: {
+    changes: 'Изменения со снимка',
+    changesNone: 'Нет',
+    changesUnknown: 'Неизвестно',
   },
 
   stats: {
