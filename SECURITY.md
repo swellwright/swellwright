@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-There are no releases yet (pre-alpha, design phase). Once released, the latest minor version receives security fixes.
+There are no releases yet (pre-alpha implementation). Once released, the latest minor version receives security fixes.
 
 ## Reporting a vulnerability
 

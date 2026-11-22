@@ -28,7 +28,8 @@
     "openapi:check": "turbo run build --filter=@swellwright/contracts && node scripts/openapi.mjs --check",
     "artifacts:build": "node scripts/artifact-manifest.mjs build",
     "artifacts:check": "node scripts/artifact-manifest.mjs --check",
-    "artifacts:test": "sh artifacts/node-installer/test/run-tests.sh"
+    "artifacts:test": "sh artifacts/node-installer/test/run-tests.sh",
+    "doctor": "node scripts/check-environment.mjs"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

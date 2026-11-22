@@ -1,5 +1,7 @@
 # Roadmap
 
+As of `phase-3-complete` (2026-11-22), phases 0–3 are implemented. Phase 4 is next; see [current status and follow-ups](project-status.md). The original estimates below are planning estimates, not remaining-time forecasts.
+
 Rough estimates (plus or minus 50%) for a single full-time maintainer: **42 to 53 weeks** to 1.0. A usable deploy-and-rollback slice appears after phase 4.
 
 | Phase | Weeks | Contents | Acceptance |

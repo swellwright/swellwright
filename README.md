@@ -27,7 +27,7 @@
 <br>
 
 > [!WARNING]
-> **Pre-alpha, design phase.** There is no runnable code yet. This repository holds the design, the architecture decisions and the project skeleton; interfaces, names and scope will change until the first release.
+> **Pre-alpha, phases 1–3 implemented.** The console, security foundation, inventory/SSH and read-only panel integration are implemented. The general workflow engine and full deploy/rollback flows are still planned. See [current status](docs/en/project-status.md) and [development setup](docs/en/development.md); interfaces may change before the first release.
 
 > [!NOTE]
 > Swellwright is an independent community project. It is **not affiliated with or endorsed by Remnawave**.

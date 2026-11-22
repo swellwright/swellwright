@@ -21,11 +21,13 @@ This adds a `Signed-off-by: Your Name <you@example.com>` line. Use an address yo
 
 ## Development setup
 
+Codex and Claude Code share [AGENTS.md](AGENTS.md). See [development and validation](docs/en/development.md) and [current project status](docs/en/project-status.md).
+
 You need Node.js 26 (see `.nvmrc`) and pnpm 10 (the exact version is in the `packageManager` field of `package.json`). Corepack is not bundled with Node.js 25 and later, so install pnpm explicitly (for example with `npm install --global pnpm@10.34.9`).
 
 ```bash
 pnpm install --frozen-lockfile --ignore-scripts
-pnpm run check      # format, lint, typecheck and build every package
+pnpm run check      # format, lint, typecheck, build and test every package
 python scripts/check-hygiene.py
 ```
 
@@ -63,7 +65,7 @@ No real domains, IP addresses, node names, tokens, passwords, SSH keys, `.env` f
 ## Code and docs
 
 - TypeScript (strict), ESLint, Prettier; Zod schemas are the single source for types and OpenAPI.
-- Every public API change updates the OpenAPI document and keeps `oasdiff` green.
+- Every public API change updates the OpenAPI document and reviews the `oasdiff` compatibility report (currently informational in CI).
 - Documentation is English first (`docs/en/`); Russian translations are welcome in `docs/ru/`.
 - Tests are required, including failure and rollback cases for anything that changes a server or the panel.
 
