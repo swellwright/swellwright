@@ -4,7 +4,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { buildFixtures, FAKE_TOKEN, type FixtureOptions, type PanelFixtures } from './fixtures.js';
 
-// A panel that lives in the process (ADR 0040). It answers the read endpoints of the Remnawave API 3.4 from synthetic
+// A panel that lives in the process (ADR 0041). It answers the read endpoints of the Remnawave API 3.4 from synthetic
 // fixtures, checks the Bearer token, and can be told to misbehave: refuse, throttle, fail with a 5xx, answer slowly,
 // hang, hang up, answer with a page instead of JSON, redirect, send more than allowed, or answer in another shape.
 // It speaks plain http on a loopback port: the client under test is configured to allow that explicitly.

@@ -11,7 +11,7 @@ import { CONFIG, DATABASE } from '../tokens.js';
 import { PanelService } from './panel.service.js';
 
 /**
- * Looks at the connected panel from time to time (ADR 0040): is it there, does the token still work, can the token
+ * Looks at the connected panel from time to time (ADR 0041): is it there, does the token still work, can the token
  * still read what it could, has the version changed. It changes the state of the connection and says so in the audit
  * chain only when the state changed. It does nothing while no panel is connected or the vault is sealed.
  * `SW_PANEL_CHECK_INTERVAL_MINUTES=0` switches it off.

@@ -27,7 +27,7 @@ import { PANEL_ENDPOINTS, type PanelEndpoint, pathFor } from './endpoints.js';
 import { buildFixtures, fakeUuid } from './test-support/index.js';
 
 // The frozen description of the panel's API (3.4.11) is the reference for what this client may ask and what it may
-// expect (ADR 0040). These tests fail the build when the client asks for something the description does not have,
+// expect (ADR 0041). These tests fail the build when the client asks for something the description does not have,
 // when its schemas expect a field the description does not guarantee, when they reject a response the description
 // allows, or when the fake panel strays from the panel's own contract package.
 

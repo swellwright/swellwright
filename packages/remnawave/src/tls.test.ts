@@ -9,7 +9,7 @@ import { after, before, describe, it } from 'node:test';
 import { PanelClient } from './client.js';
 import { PanelUnavailableError } from './errors.js';
 
-// TLS is verified unless somebody turns it off by name (ADR 0040). The certificates are made by the openssl command
+// TLS is verified unless somebody turns it off by name (ADR 0041). The certificates are made by the openssl command
 // line tool when it is there; without it these tests are skipped and say so.
 
 interface Material {

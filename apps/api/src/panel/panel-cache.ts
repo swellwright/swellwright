@@ -6,7 +6,7 @@ interface Entry {
 }
 
 /**
- * A short memory of what was read from the panel (ADR 0040): per kind of object, for the connection that is current,
+ * A short memory of what was read from the panel (ADR 0041): per kind of object, for the connection that is current,
  * with the requests that are running now so that a second caller joins one instead of asking again. It holds what the
  * adapters returned, which is masked, and never the token: the token is read from the vault for one piece of work and
  * dropped. A new or removed connection empties it.

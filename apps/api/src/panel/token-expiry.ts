@@ -1,7 +1,7 @@
 /**
  * When a panel token expires, read from the token itself. The API tokens of a panel are signed tokens (JWT) with the
  * usual `exp` claim, and the list of API tokens cannot be read with an API token, so the claim is the only way to know
- * the day. The signature is NOT checked: this is only to show a date to the person who holds the token (ADR 0040); the
+ * the day. The signature is NOT checked: this is only to show a date to the person who holds the token (ADR 0041); the
  * panel decides whether a token works. A token without a readable expiry gives null, and nothing is guessed.
  */
 export function tokenExpiry(token: string): Date | null {

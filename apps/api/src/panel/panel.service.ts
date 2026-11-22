@@ -52,7 +52,7 @@ const BACKGROUND_META: Pick<RequestMeta, 'ip' | 'requestId'> = {
 };
 
 /**
- * The connection to a Remnawave panel (ADR 0040): connecting with a token that is in the vault or one that is not yet,
+ * The connection to a Remnawave panel (ADR 0041): connecting with a token that is in the vault or one that is not yet,
  * testing it, removing it, and keeping the state current. The panel is asked first and nothing is stored when it
  * refuses. The token is read from the vault for one piece of work, never returned, never logged, never cached. Every
  * change is recorded in the audit chain in the same transaction.

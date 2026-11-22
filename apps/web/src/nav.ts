@@ -24,8 +24,21 @@ import {
 import type { TFunction } from 'i18next';
 import type { ElementType } from 'react';
 import { HiServer } from 'react-icons/hi';
-import { PiUsers } from 'react-icons/pi';
-import { TbCookie, TbStar } from 'react-icons/tb';
+import { PiListChecks, PiUsers } from 'react-icons/pi';
+import {
+  TbBraces,
+  TbCirclesRelation,
+  TbCode,
+  TbCookie,
+  TbCreditCard,
+  TbFolder,
+  TbHexagon,
+  TbPackage,
+  TbPlugConnected,
+  TbServerCog,
+  TbStar,
+  TbWebhook,
+} from 'react-icons/tb';
 
 import type { Permission } from '@swellwright/contracts';
 import type { Namespace } from '@swellwright/i18n';
@@ -83,9 +96,9 @@ const navigation = (t: TFunction<Namespace[]>): readonly GatedSection[] => [
         id: 'nodes',
         name: t('nav:nodes'),
         href: ROUTES.DASHBOARD.FLEET.NODES,
-        icon: IconHexagon,
-        planned: true,
-        permission: 'servers:read',
+        icon: TbServerCog,
+        // The nodes of the connected Remnawave panel (ADR 0041); the servers they run on are on the Servers page.
+        permission: 'panel:read',
       },
       {
         id: 'chains',
@@ -192,10 +205,74 @@ const navigation = (t: TFunction<Namespace[]>): readonly GatedSection[] => [
     icon: IconHexagon,
     items: [
       {
+        id: 'connection',
+        name: t('nav:connection'),
+        href: ROUTES.DASHBOARD.PANEL.CONNECTION,
+        icon: TbPlugConnected,
+        permission: 'panel:read',
+      },
+      {
         id: 'profiles',
         name: t('nav:profiles'),
         href: ROUTES.DASHBOARD.PANEL.PROFILES,
-        icon: IconHexagon,
+        icon: TbBraces,
+        permission: 'panel:read',
+      },
+      {
+        id: 'hosts',
+        name: t('nav:hosts'),
+        href: ROUTES.DASHBOARD.PANEL.HOSTS,
+        icon: PiListChecks,
+        permission: 'panel:read',
+      },
+      {
+        id: 'internal-squads',
+        name: t('nav:internalSquads'),
+        href: ROUTES.DASHBOARD.PANEL.INTERNAL_SQUADS,
+        icon: TbCirclesRelation,
+        permission: 'panel:read',
+      },
+      {
+        id: 'external-squads',
+        name: t('nav:externalSquads'),
+        href: ROUTES.DASHBOARD.PANEL.EXTERNAL_SQUADS,
+        icon: TbWebhook,
+        permission: 'panel:read',
+      },
+      {
+        id: 'templates',
+        name: t('nav:templates'),
+        href: ROUTES.DASHBOARD.PANEL.TEMPLATES,
+        icon: TbFolder,
+        permission: 'panel:read',
+      },
+      {
+        id: 'snippets',
+        name: t('nav:snippets'),
+        href: ROUTES.DASHBOARD.PANEL.SNIPPETS,
+        icon: TbCode,
+        permission: 'panel:read',
+      },
+      {
+        id: 'node-plugins',
+        name: t('nav:nodePlugins'),
+        href: ROUTES.DASHBOARD.PANEL.NODE_PLUGINS,
+        icon: TbPackage,
+        permission: 'panel:read',
+      },
+      {
+        id: 'subscription-settings',
+        name: t('nav:subscriptionSettings'),
+        href: ROUTES.DASHBOARD.PANEL.SUBSCRIPTION_SETTINGS,
+        icon: TbHexagon,
+        planned: true,
+        permission: 'panel:read',
+      },
+      {
+        id: 'infra-billing',
+        name: t('nav:infraBilling'),
+        href: ROUTES.DASHBOARD.PANEL.INFRA_BILLING,
+        icon: TbCreditCard,
         planned: true,
         permission: 'panel:read',
       },

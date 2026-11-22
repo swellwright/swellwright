@@ -20,7 +20,7 @@ export interface MapOptions {
 }
 
 /**
- * What an error of the panel client means for the API (ADR 0040). The messages come from the client, which never puts
+ * What an error of the panel client means for the API (ADR 0041). The messages come from the client, which never puts
  * the token, a header or a value from a response in one. A panel that is slow, refuses us or answers in a shape this
  * release does not know is a failure of the panel out there, so it is a 5xx with its own code; only a missing
  * object, a refused address or an unsupported version are the caller's.

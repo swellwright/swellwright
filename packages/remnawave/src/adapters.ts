@@ -35,7 +35,7 @@ import type {
   SubscriptionTemplateDtoType,
 } from './schemas.js';
 
-// The adapters turn what the panel sends into the views of `@swellwright/contracts` (ADR 0040). A view is what the
+// The adapters turn what the panel sends into the views of `@swellwright/contracts` (ADR 0041). A view is what the
 // rest of Swellwright and the console know about a panel object; a change of the panel moves these functions and
 // nothing else. Every opaque JSON part and every URL goes through the masking before it is put into a view, and each
 // view carries the hash of its configuration so that two reads can be compared without comparing the objects.

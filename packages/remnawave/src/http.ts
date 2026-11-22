@@ -139,7 +139,7 @@ const UNAVAILABLE: Readonly<Record<string, { reason: UnavailableReason; text: st
 };
 
 /**
- * GET requests to one panel, with the limits of ADR 0040: a deadline per attempt, a cap on the response, a bounded
+ * GET requests to one panel, with the limits of ADR 0041: a deadline per attempt, a cap on the response, a bounded
  * number of requests at the same time, retries only for GET and only for failures that may pass (a network error,
  * 429, 5xx), `Retry-After` obeyed, and no redirect that leaves the origin. Nothing here knows what an endpoint
  * means; `PanelClient` does. The token appears in one header and nowhere else, not even in an error.

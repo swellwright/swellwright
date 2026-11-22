@@ -19,7 +19,7 @@ export interface PanelTarget {
 }
 
 /**
- * Where clients of the panel come from (ADR 0040): configured once from the settings of this installation, so that no
+ * Where clients of the panel come from (ADR 0041): configured once from the settings of this installation, so that no
  * caller can build one that skips the address policy, the TLS check or the limits. A client is made for one piece of
  * work and closed after it, so the token lives only as long as that work and is never kept in a cache.
  */

@@ -225,7 +225,7 @@ model Secret {
   /// Both relations restrict: a secret in use cannot be deleted (ADR 0034).
   serverAccess     ServerAccess[] @relation("ServerAccessSecret")
   serverSudoAccess ServerAccess[] @relation("ServerAccessSudoSecret")
-  /// The connections to a panel that use this secret as their token. Restricts too (ADR 0040).
+  /// The connections to a panel that use this secret as their token. Restricts too (ADR 0041).
   panelConnections PanelConnection[] @relation("PanelConnectionToken")
 
   @@index([type])
@@ -665,7 +665,7 @@ model ServerArtifact {
   @@map("server_artifacts")
 }
 
-/// What the last check of a panel connection found (ADR 0040). There is no `unconfigured` here: that is a missing row.
+/// What the last check of a panel connection found (ADR 0041). There is no `unconfigured` here: that is a missing row.
 enum PanelConnectionState {
   connected
   degraded
@@ -677,7 +677,7 @@ enum PanelConnectionState {
 }
 
 /// The connection to a Remnawave panel: where it is, which vault secret holds its API token, and what the last check
-/// found (ADR 0040). One row is used for now; nothing in the shape prevents several. The token is never stored here.
+/// found (ADR 0041). One row is used for now; nothing in the shape prevents several. The token is never stored here.
 model PanelConnection {
   id               String               @id @default(uuid(7)) @db.Uuid
   /// `https://host[:port][/prefix]`, normalised, no credentials, query or fragment.

@@ -79,7 +79,7 @@ interface Reading {
 }
 
 /**
- * Asks the panel what it is and what the token can read (ADR 0040): the version first (this is also the check that the
+ * Asks the panel what it is and what the token can read (ADR 0041): the version first (this is also the check that the
  * token works at all), then, for a supported version, each kind of object once. A resource the token has no scope for
  * is `denied`; one that failed in another way is `failed` with its code. The version and the token decide whether the
  * panel can be used (`fatal`); a missing scope only limits it. Never throws for a panel error.

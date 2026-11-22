@@ -1,6 +1,6 @@
 import { ActionIcon, Group, Tooltip } from '@mantine/core';
 import { IconAlertTriangle, IconRefresh } from '@tabler/icons-react';
-import type { ElementType } from 'react';
+import type { ElementType, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { ErrorMessageBlock, OverlayHeader, SectionCard } from '@swellwright/ui';
@@ -14,11 +14,14 @@ export function QueryErrorCard({
   message,
   icon = IconAlertTriangle,
   onRetry,
+  action,
 }: {
   title: string;
   message: string;
   icon?: ElementType<{ size?: number }>;
   onRetry?: () => void;
+  /** Something the person can do about it (a link to where it is fixed), under the text of the error. */
+  action?: ReactNode;
 }) {
   const { t } = useTranslation('common');
   return (
@@ -38,6 +41,7 @@ export function QueryErrorCard({
       <SectionCard.Section>
         <ErrorMessageBlock copiedLabel={t('copied')} copyLabel={t('copy')} message={message} />
       </SectionCard.Section>
+      {action ? <SectionCard.Section>{action}</SectionCard.Section> : null}
     </SectionCard.Root>
   );
 }

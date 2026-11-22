@@ -6,7 +6,7 @@ import { PanelClient, type PanelReader } from './client.js';
 import { type PanelEndpoint, PANEL_ENDPOINTS } from './endpoints.js';
 import { FakePanel } from './test-support/index.js';
 
-// The client of this slice reads and never writes (ADR 0040). Three independent checks say so: the type has no write
+// The client of this slice reads and never writes (ADR 0041). Three independent checks say so: the type has no write
 // method, the sources contain no verb but GET, and a client that is used for everything it can do never makes the
 // panel see another method.
 

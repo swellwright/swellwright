@@ -175,7 +175,7 @@ const EnvSchema = z.object({
   /** How many pushes, checks and removals of artifacts one user may start per minute. */
   SW_ARTIFACT_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(10),
   /**
-   * The Remnawave panel (ADR 0040). The panel's address is validated like an SSH target: loopback is the host
+   * The Remnawave panel (ADR 0041). The panel's address is validated like an SSH target: loopback is the host
    * Swellwright itself runs on and is refused by default, private ranges and host names are allowed, link-local and
    * cloud metadata addresses never are. Plain http only for a loopback or private address, and only when allowed.
    */
@@ -289,7 +289,7 @@ export interface AppConfig {
     readonly maxBytes: number;
     readonly rateLimitPerMinute: number;
   };
-  /** The connection to a Remnawave panel (ADR 0040). */
+  /** The connection to a Remnawave panel (ADR 0041). */
   readonly panel: {
     /** The outbound address policy: applied to the address in the URL and to every address a name resolves to. */
     readonly policy: {

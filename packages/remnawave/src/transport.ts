@@ -7,7 +7,7 @@ import zlib from 'node:zlib';
 
 import { isLocalAddress } from './url.js';
 
-// The one place that opens a connection to a panel (ADR 0040). It speaks GET and nothing else, checks every address
+// The one place that opens a connection to a panel (ADR 0041). It speaks GET and nothing else, checks every address
 // the name resolves to before connecting to one of them (so a name cannot be pointed at an internal service after the
 // check), verifies TLS unless told otherwise, never follows a redirect on its own, and stops reading a response that
 // is larger than allowed. `node:https` is used instead of `fetch` because fetch cannot take a CA, a connect-time

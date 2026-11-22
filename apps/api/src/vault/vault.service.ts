@@ -280,7 +280,7 @@ export class VaultService implements OnApplicationShutdown {
   /**
    * Creates a secret and lets the caller do more in the same transaction: the connection to a panel that was just
    * tried with this token is saved together with it, so there is never a token without its connection or the other
-   * way round (ADR 0040). If `inside` throws, the secret is not created.
+   * way round (ADR 0041). If `inside` throws, the secret is not created.
    */
   createWithin(
     actor: Actor,
@@ -545,7 +545,7 @@ export class VaultService implements OnApplicationShutdown {
   }
 
   /**
-   * The API token of a panel for the connection to it (ADR 0040). Not a reveal: no person asked, and the connection
+   * The API token of a panel for the connection to it (ADR 0041). Not a reveal: no person asked, and the connection
    * records its own checks (`panel.connected`, `panel.tested`). The secret must be of kind `panel_token`.
    */
   readForPanel(id: string): Promise<string> {

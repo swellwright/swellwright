@@ -1,6 +1,6 @@
 import { createHash, createHmac } from 'node:crypto';
 
-// Masking of secrets in what a panel returns (ADR 0040, docs/en/design/05-security.md). One function does it for
+// Masking of secrets in what a panel returns (ADR 0041, docs/en/design/05-security.md). One function does it for
 // every view that leaves the API: a config profile, an inbound, a host's opaque parameters, a subscription template,
 // a snippet, a node plugin, a URL with credentials in it. It is a deny-list (a key whose name says it is a secret, the
 // ids of the clients of an inbound, a PEM private key, credentials in a URL, a token) because the Xray configuration is

@@ -1,4 +1,4 @@
-// The errors of the panel client (ADR 0040). Each has a stable `code`, which callers branch on, and a message that
+// The errors of the panel client (ADR 0041). Each has a stable `code`, which callers branch on, and a message that
 // is safe to show and to log: it names the endpoint and, for a contract error, the path of the field, and it never
 // contains the token, a header, or a value that came out of a response body.
 

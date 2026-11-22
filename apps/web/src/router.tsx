@@ -48,6 +48,34 @@ const ArtifactsPage = lazy(() =>
 const PluginsPage = lazy(() =>
   import('./settings/plugins-page.js').then((m) => ({ default: m.PluginsPage })),
 );
+// The pages of the connected Remnawave panel (ADR 0041).
+const ConnectionPage = lazy(() =>
+  import('./panel/connection-page.js').then((m) => ({ default: m.ConnectionPage })),
+);
+const PanelNodesPage = lazy(() =>
+  import('./panel/nodes-page.js').then((m) => ({ default: m.PanelNodesPage })),
+);
+const PanelHostsPage = lazy(() =>
+  import('./panel/hosts-page.js').then((m) => ({ default: m.PanelHostsPage })),
+);
+const ProfilesPage = lazy(() =>
+  import('./panel/profiles-page.js').then((m) => ({ default: m.ProfilesPage })),
+);
+const InternalSquadsPage = lazy(() =>
+  import('./panel/internal-squads-page.js').then((m) => ({ default: m.InternalSquadsPage })),
+);
+const ExternalSquadsPage = lazy(() =>
+  import('./panel/external-squads-page.js').then((m) => ({ default: m.ExternalSquadsPage })),
+);
+const TemplatesPage = lazy(() =>
+  import('./panel/templates-page.js').then((m) => ({ default: m.TemplatesPage })),
+);
+const NodePluginsPage = lazy(() =>
+  import('./panel/node-plugins-page.js').then((m) => ({ default: m.NodePluginsPage })),
+);
+const SnippetsPage = lazy(() =>
+  import('./panel/snippets-page.js').then((m) => ({ default: m.SnippetsPage })),
+);
 
 /** A page for people whose role allows it; everyone else sees why they cannot. */
 function Guarded({
@@ -203,6 +231,66 @@ function ArtifactsRoute() {
   );
 }
 
+/** A page of the connected panel: it reads it, so `panel:read` opens it; what changes the connection asks for more. */
+function PanelRoute({ title, page }: { title: string; page: ReactNode }) {
+  return (
+    <Guarded permission="panel:read" title={title}>
+      {page}
+    </Guarded>
+  );
+}
+
+function ConnectionRoute() {
+  const { t } = useTranslation('nav');
+  const { session } = useConsole();
+  return (
+    <PanelRoute
+      page={<ConnectionPage permissions={session.permissions} />}
+      title={t('connection')}
+    />
+  );
+}
+
+function PanelNodesRoute() {
+  const { t } = useTranslation('nav');
+  return <PanelRoute page={<PanelNodesPage />} title={t('nodes')} />;
+}
+
+function PanelHostsRoute() {
+  const { t } = useTranslation('nav');
+  return <PanelRoute page={<PanelHostsPage />} title={t('hosts')} />;
+}
+
+function ProfilesRoute() {
+  const { t } = useTranslation('nav');
+  return <PanelRoute page={<ProfilesPage />} title={t('profiles')} />;
+}
+
+function InternalSquadsRoute() {
+  const { t } = useTranslation('nav');
+  return <PanelRoute page={<InternalSquadsPage />} title={t('internalSquads')} />;
+}
+
+function ExternalSquadsRoute() {
+  const { t } = useTranslation('nav');
+  return <PanelRoute page={<ExternalSquadsPage />} title={t('externalSquads')} />;
+}
+
+function TemplatesRoute() {
+  const { t } = useTranslation('nav');
+  return <PanelRoute page={<TemplatesPage />} title={t('templates')} />;
+}
+
+function NodePluginsRoute() {
+  const { t } = useTranslation('nav');
+  return <PanelRoute page={<NodePluginsPage />} title={t('nodePlugins')} />;
+}
+
+function SnippetsRoute() {
+  const { t } = useTranslation('nav');
+  return <PanelRoute page={<SnippetsPage />} title={t('snippets')} />;
+}
+
 const D = ROUTES.DASHBOARD;
 
 /** The paths of a child are relative to the layout route `/dashboard`. */
@@ -223,10 +311,20 @@ export const routes: RouteObject[] = [
           { path: relative(D.HOME), element: <OverviewRoute /> },
           { path: relative(D.FLEET.ROOT), element: <AreaIndex area="fleet" /> },
           { path: relative(D.FLEET.SERVERS), element: <ServersRoute /> },
+          { path: relative(D.FLEET.NODES), element: <PanelNodesRoute /> },
           { path: relative(D.OPERATIONS.ROOT), element: <AreaIndex area="operations" /> },
           { path: relative(D.OPERATIONS.RUNS), element: <RunsRoute /> },
           { path: relative(D.OPERATIONS.SCRIPTS), element: <ScriptsRoute /> },
           { path: relative(D.OPERATIONS.ARTIFACTS), element: <ArtifactsRoute /> },
+          { path: relative(D.PANEL.ROOT), element: <AreaIndex area="panel" /> },
+          { path: relative(D.PANEL.CONNECTION), element: <ConnectionRoute /> },
+          { path: relative(D.PANEL.PROFILES), element: <ProfilesRoute /> },
+          { path: relative(D.PANEL.HOSTS), element: <PanelHostsRoute /> },
+          { path: relative(D.PANEL.INTERNAL_SQUADS), element: <InternalSquadsRoute /> },
+          { path: relative(D.PANEL.EXTERNAL_SQUADS), element: <ExternalSquadsRoute /> },
+          { path: relative(D.PANEL.TEMPLATES), element: <TemplatesRoute /> },
+          { path: relative(D.PANEL.SNIPPETS), element: <SnippetsRoute /> },
+          { path: relative(D.PANEL.NODE_PLUGINS), element: <NodePluginsRoute /> },
           { path: relative(D.SECURITY.ROOT), element: <AreaIndex area="security" /> },
           { path: relative(D.SECURITY.VAULT), element: <VaultRoute /> },
           { path: relative(D.SECURITY.USERS), element: <UsersRoute /> },

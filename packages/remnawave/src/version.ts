@@ -1,7 +1,7 @@
 import type { PanelVersionSupport } from '@swellwright/contracts';
 
 /**
- * The lines of the panel this release is built and tested against (ADR 0040): the frozen API description is the one of
+ * The lines of the panel this release is built and tested against (ADR 0041): the frozen API description is the one of
  * 3.4.11, and every patch release of the 3.4 line is expected to keep it. A newer or older minor is reported as
  * unsupported with the reason instead of being read in the hope that it matches. When a new minor appears, it is added
  * here after the API descriptions have been compared (`oasdiff`), and the oldest line leaves the window.

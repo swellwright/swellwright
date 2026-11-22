@@ -10,7 +10,7 @@ import { FAKE_SECRETS } from '@swellwright/remnawave/test-support';
 
 import { auditEvents, type Client, type Instance, type Reply } from '../test-support.js';
 
-/** Helpers shared by the tests of the panel connection (ADR 0040). */
+/** Helpers shared by the tests of the panel connection (ADR 0041). */
 
 export const PASSPHRASE = 'a long passphrase for the vault, used in tests';
 

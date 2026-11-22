@@ -1,4 +1,4 @@
-// Synthetic panel objects for the fake panel and the tests (ADR 0040). Everything here is made up: documentation
+// Synthetic panel objects for the fake panel and the tests (ADR 0041). Everything here is made up: documentation
 // names (`example.com`), documentation addresses (`192.0.2.x`, `198.51.100.x`), identifiers from a counter, and
 // secrets that say they are fake. No value comes from any real panel.
 

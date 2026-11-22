@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-// The connection to a Remnawave panel and what is read from it (ADR 0040). Everything here is a normalised view
+// The connection to a Remnawave panel and what is read from it (ADR 0041). Everything here is a normalised view
 // that Swellwright owns: it does not repeat the panel's DTOs, so a change of the panel moves one adapter and not the
 // console. Nothing in a view can be a secret: the adapters of `@swellwright/remnawave` mask keys, short ids, passwords
 // and credentials in URLs before a value gets here, and every object carries a hash of its masked content.
 
-/** The versions of the panel that this release is built and tested against (ADR 0040): the 3.4 line. */
+/** The versions of the panel that this release is built and tested against (ADR 0041): the 3.4 line. */
 export const PANEL_SUPPORTED_RANGE = '3.4.x';
 
 export const PANEL_CONNECTION_STATES = [

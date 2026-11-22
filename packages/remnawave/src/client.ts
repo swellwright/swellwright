@@ -68,7 +68,7 @@ export interface PanelUserCounts {
 
 /**
  * What can be read from a panel, and nothing else. The type has no method that writes, and no way to build a request
- * that is not a GET: this is the read-only client of ADR 0040. Writes come in later phases through a separate type
+ * that is not a GET: this is the read-only client of ADR 0041. Writes come in later phases through a separate type
  * that has to be asked for by name and goes through approval.
  */
 export interface PanelReader {

@@ -32,7 +32,7 @@ export interface Assessment {
 }
 
 /**
- * What a probe says about the connection (ADR 0040). The panel is `unauthorized` when it refuses the token (or the
+ * What a probe says about the connection (ADR 0041). The panel is `unauthorized` when it refuses the token (or the
  * token has no scope for even its version), `unsupported` when its version is outside the window or it answers in a
  * shape this release does not know, `unreachable` when it does not answer. Otherwise it is usable: `degraded` when the
  * token cannot read some resource or one failed, `connected` when everything can be read. The list of API tokens is

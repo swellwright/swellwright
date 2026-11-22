@@ -52,7 +52,7 @@ interface Options {
 }
 
 /**
- * The reads of the panel (ADR 0040): from the short memory of this server when it has the answer, from the panel
+ * The reads of the panel (ADR 0041): from the short memory of this server when it has the answer, from the panel
  * when not or when asked, with one request in flight per kind however many callers want it, and a limit on how often
  * a person may force a new read. The token is taken from the vault for one request and dropped. Failures come out as
  * the API errors of `panel-errors.ts`, and the ones that say the panel is down or refuses us update the state of the

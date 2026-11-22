@@ -24,7 +24,7 @@ import {
 
 /**
  * Every request this client can make. The method is the literal `'GET'`: there is no way to declare an endpoint that
- * writes, so there is no way for the client to send one (ADR 0040). A test checks that each path and method exists in
+ * writes, so there is no way for the client to send one (ADR 0041). A test checks that each path and method exists in
  * the frozen OpenAPI document of the panel.
  */
 export interface PanelEndpoint<S extends z.ZodType = z.ZodType> {

@@ -1,4 +1,4 @@
-# ADR 0040: The connection to a Remnawave panel and the read model of its objects
+# ADR 0041: The connection to a Remnawave panel and the read model of its objects
 
 Status: accepted
 
@@ -67,7 +67,7 @@ Per kind, for the current connection, for `SW_PANEL_CACHE_TTL_SECONDS` (15; 0 ke
 `panel.connected` (strict, same transaction; outcome `success`, or `failure` as a note for a refusal; address, version, state, secret id, whether it replaced one, whether it has its own authority), `panel.disconnected`, `panel.tested` (outcome, state, code, latency) and `panel.state.changed`. Reading is not audited per call: that is noise, and what was read can be read again. No record holds a token, an object from the panel or a masked value; tests scan every response, every record and the log for the fake panel's secrets and the tokens.
 
 ### The console
-The Panel section of the navigation is enabled for what this slice delivers (see the pages in `docs/en/design/07-ui-ux.md`); the rest stays disabled. The pages are the panel's own pages for the same objects, built from the ported components (ADR 0032, 0033), read only: inputs disabled, no footers.
+The Panel section of the navigation is enabled for what this slice delivers: **Connection** (the wizard and the status card), **Profiles**, **Hosts**, **Squads** (internal and external), **Templates**, **Snippets** and **Node plugins**, with **Nodes** under Fleet; subscription settings, infra billing and the API console stay disabled (`planned`). Each page is the read-only counterpart of the panel's own page for the same objects, built from the ported components and the panel's source (ADR 0032, 0033): inputs disabled, no footers, the Hosts and Nodes datatables with the panel's columns and filters, the profile and template viewers in the bundled Monaco (read only, the masked JSON as it is: the console never tries to unmask). The Overview page gets a block of metric cards (version, nodes up, problem nodes, health, hosts, profiles, users as counts, token expiry), or a card that links to the wizard when nothing is connected. Every panel page shows the panel's empty state with a button to the wizard while nothing is connected, and the failed-load card with the text of the error code (and a link to test the connection) when a read fails. The wizard hides nothing a role cannot do but disables it with the reason: `panel:write` for connecting, testing and disconnecting, `vault:manage` and a code for pasting a token.
 
 ## Consequences
 - A panel can be connected from the console, with its token in the vault, and every object this release knows can be read without a secret leaving. A change of the panel's API inside the 3.4 line degrades one resource, with the endpoint and the field named, instead of the whole view.

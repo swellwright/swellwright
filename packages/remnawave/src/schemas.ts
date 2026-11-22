@@ -1,11 +1,11 @@
 import { z } from 'zod';
 
-// What this release reads from a panel of the 3.4 line, as Zod schemas (ADR 0040). They describe the parts of each
+// What this release reads from a panel of the 3.4 line, as Zod schemas (ADR 0041). They describe the parts of each
 // response that the adapters use, taken from the frozen OpenAPI document of 3.4.11 (`spec/`), and are deliberately
 // tolerant: an object drops the fields it does not know (a later patch release may add some; they are ignored and never kept in memory),
 // a field the adapters can do without is optional, and an enumeration is a string. What a field must be when it is
 // there is checked, so a panel that changes the type of something we read fails with a named endpoint and field path
-// instead of being half understood. `@remnawave/backend-contract` is not used at run time (ADR 0040 says why); the
+// instead of being half understood. `@remnawave/backend-contract` is not used at run time (ADR 0041 says why); the
 // tests feed its schemas and these ones the same responses.
 
 const Uuid = z.uuid();

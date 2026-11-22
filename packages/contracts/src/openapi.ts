@@ -573,7 +573,7 @@ export function buildOpenApi(): Json {
       {
         name: 'panel',
         description:
-          'The connection to a Remnawave panel and read-only views of its objects (ADR 0040): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server.',
+          'The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server.',
       },
     ],
     paths,
