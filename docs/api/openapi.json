@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.30.0",
+    "version": "0.31.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -66,6 +66,10 @@
     {
       "name": "baselines",
       "description": "Baseline checks of servers over SSH (ADR 0045): documents that say what a healthy server looks like, the closed catalogue of read-only observations they use, runs that compare a server with its baseline, the drift between two runs and the state of the fleet. Starting a run needs `servers:exec` and a fresh authenticator code; editing a baseline needs `servers:write` and one; reading needs `servers:read`. A run changes nothing on a server."
+    },
+    {
+      "name": "dashboard",
+      "description": "The dashboard (ADR 0047): what needs attention and the health of the fleet, built only from the records and the memory of this server. Nothing here calls the panel or a server."
     },
     {
       "name": "panel",
@@ -7666,6 +7670,223 @@
           }
         },
         "description": "Every server with the baseline that applies to it, the newest finished run and whether it got better or worse, and the totals.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "servers:read"
+      }
+    },
+    "/dashboard/attention": {
+      "get": {
+        "operationId": "getDashboardAttention",
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "What needs attention",
+        "responses": {
+          "200": {
+            "description": "The feed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttentionFeed"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "A ranked list of what a person should look at, from the sources the caller may read: the vault (sealed, secrets expired or about to), the panel connection (state, token expiry, unsupported version), the last convention run and reconciliation, the snapshots of the panel, the baseline checks and the inventory of servers, failed runs of commands, the audit chain, plugins that were switched off and the update check. A source the role may not read is left out and reported as `not_permitted`; a source that failed is reported as `failed` and the others are still returned. Cheap by design: it reads database rows and the memory of this server (a few seconds of it is cached) and NEVER calls the panel or a server. Open to every signed-in user and every API token; what is in it depends on the permissions.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/dashboard/fleet": {
+      "get": {
+        "operationId": "getDashboardFleet",
+        "tags": [
+          "dashboard"
+        ],
+        "summary": "The health of the fleet",
+        "responses": {
+          "200": {
+            "description": "One page of servers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetHealth"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "One row per server of the inventory with the time of its last facts, the newest baseline check, whether a host key is pinned, the state of its access entries, the node of the panel that the last reconciliation matched (name and state at that time) and flags, rolled up into a health. Paged and filterable; stored data only, no connection to a server or the panel.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Servers per page, 25 by default.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Servers to skip.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Servers whose name or a tag contains this text, ignoring case.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "enum": [
+                "draft",
+                "provisioning",
+                "active",
+                "draining",
+                "retired"
+              ]
+            }
+          },
+          {
+            "name": "tag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Only servers that carry this tag.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            }
+          },
+          {
+            "name": "health",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "enum": [
+                "critical",
+                "warning",
+                "ok",
+                "unknown"
+              ]
+            }
+          },
+          {
+            "name": "flag",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Only servers that have this flag.",
+              "type": "string",
+              "enum": [
+                "no_host_key",
+                "no_access",
+                "access_expired",
+                "access_failed",
+                "facts_missing",
+                "facts_stale",
+                "baseline_failing",
+                "baseline_warning",
+                "baseline_unreachable",
+                "baseline_stale",
+                "baseline_never_checked",
+                "host_key_mismatch",
+                "node_offline",
+                "check_running"
+              ]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "`health` (default): the worst first, then by name. `name`. `lastCheck`: the longest without a finished check first (never checked on top).",
+              "type": "string",
+              "enum": [
+                "health",
+                "name",
+                "lastCheck"
+              ]
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "Reverses the sort.",
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            }
+          }
+        ],
         "security": [
           {
             "session": []
@@ -22762,6 +22983,745 @@
         ],
         "additionalProperties": false,
         "description": "What to ask the panel. Never a URL or a header: the target is the connected panel, the path is the catalogue path with the checked values filled in."
+      },
+      "AttentionSeverity": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "warning",
+          "info"
+        ],
+        "description": "`critical`: something stopped working or an integrity check failed, act now. `warning`: look at it soon. `info`: good to know."
+      },
+      "AttentionSource": {
+        "type": "string",
+        "enum": [
+          "vault",
+          "panel",
+          "conventions",
+          "reconciliation",
+          "snapshots",
+          "baseline",
+          "servers",
+          "runs",
+          "audit",
+          "plugins",
+          "updates"
+        ]
+      },
+      "AttentionKind": {
+        "type": "string",
+        "enum": [
+          "vault.secrets_expired",
+          "panel.unauthorized",
+          "panel.token_expired",
+          "baseline.host_key_mismatch",
+          "audit.chain_failed",
+          "vault.sealed",
+          "panel.unreachable",
+          "panel.unsupported",
+          "panel.degraded",
+          "panel.token_expiring",
+          "vault.secrets_expiring",
+          "baseline.failing",
+          "baseline.unreachable",
+          "baseline.stale",
+          "servers.not_ready",
+          "runs.failed",
+          "conventions.errors",
+          "reconciliation.drift",
+          "snapshots.stale",
+          "plugins.switched_off",
+          "vault.uninitialized",
+          "panel.not_connected",
+          "conventions.not_run",
+          "conventions.warnings",
+          "reconciliation.undecided",
+          "snapshots.none",
+          "snapshots.changed",
+          "baseline.warnings",
+          "baseline.never_checked",
+          "servers.facts_stale",
+          "audit.verify_overdue",
+          "updates.available"
+        ]
+      },
+      "AttentionLink": {
+        "type": "string",
+        "enum": [
+          "/dashboard/security/vault",
+          "/dashboard/security/audit",
+          "/dashboard/panel/connection",
+          "/dashboard/panel/checks",
+          "/dashboard/panel/snapshots",
+          "/dashboard/fleet/servers",
+          "/dashboard/fleet/baseline",
+          "/dashboard/operations/runs",
+          "/dashboard/settings/plugins"
+        ]
+      },
+      "AttentionItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 80,
+            "description": "Stable: the same condition has the same id on every call, so a console can remember that it was hidden."
+          },
+          "fingerprint": {
+            "type": "string",
+            "maxLength": 16,
+            "description": "Changes when the facts behind the item change (a count, a name, a state). A console that hid the item shows it again when this is not what it hid."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/AttentionSeverity"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AttentionKind"
+          },
+          "source": {
+            "$ref": "#/components/schemas/AttentionSource"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "English text. The console shows `dashboard:attention.<kind>.title` in the language of the user."
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "English text. The console shows `dashboard:attention.<kind>.detail`; `params` fill its placeholders."
+          },
+          "params": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 300
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Numbers, flags and short names (of a secret, a server, a plugin: what the caller may read anyway). Never a secret, an address or a person."
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the condition began or was last seen, as the source records it; null when the source does not say."
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AttentionLink"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The page of the console that deals with it."
+          }
+        },
+        "required": [
+          "id",
+          "fingerprint",
+          "severity",
+          "kind",
+          "source",
+          "title",
+          "detail",
+          "params",
+          "since",
+          "link"
+        ],
+        "additionalProperties": false
+      },
+      "AttentionSourceState": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "$ref": "#/components/schemas/AttentionSource"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "ok",
+              "not_permitted",
+              "failed"
+            ],
+            "description": "`ok`: read, and its items (if any) are in the list. `not_permitted`: the role may not read it. `failed`: reading it failed, the others are still here."
+          }
+        },
+        "required": [
+          "source",
+          "state"
+        ],
+        "additionalProperties": false
+      },
+      "AttentionFeed": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttentionItem"
+            },
+            "description": "Most severe first, then by the order of the kinds, then oldest first."
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "critical": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "warning": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "info": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "critical",
+              "warning",
+              "info"
+            ],
+            "additionalProperties": false
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AttentionSourceState"
+            }
+          }
+        },
+        "required": [
+          "generatedAt",
+          "items",
+          "counts",
+          "sources"
+        ],
+        "additionalProperties": false,
+        "description": "What needs attention, from the sources the caller may read. Built from this server's own records and memory; it never calls the panel or a server."
+      },
+      "FleetHealthState": {
+        "type": "string",
+        "enum": [
+          "critical",
+          "warning",
+          "ok",
+          "unknown"
+        ],
+        "description": "The worst thing known about the server: `critical` (a host key mismatch, an expired secret on every login, a failing check), `warning`, `ok`, or `unknown` (nothing checked yet)."
+      },
+      "FleetFlag": {
+        "type": "string",
+        "enum": [
+          "no_host_key",
+          "no_access",
+          "access_expired",
+          "access_failed",
+          "facts_missing",
+          "facts_stale",
+          "baseline_failing",
+          "baseline_warning",
+          "baseline_unreachable",
+          "baseline_stale",
+          "baseline_never_checked",
+          "host_key_mismatch",
+          "node_offline",
+          "check_running"
+        ]
+      },
+      "FleetHealthRow": {
+        "type": "object",
+        "properties": {
+          "server": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "name": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "provisioning",
+                  "active",
+                  "draining",
+                  "retired"
+                ]
+              },
+              "country": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "state",
+              "country",
+              "tags"
+            ],
+            "additionalProperties": false
+          },
+          "health": {
+            "$ref": "#/components/schemas/FleetHealthState"
+          },
+          "flags": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetFlag"
+            }
+          },
+          "facts": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "collectedAt": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  "stale": {
+                    "type": "boolean"
+                  },
+                  "os": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "kernel": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "collectedAt",
+                  "stale",
+                  "os",
+                  "kernel"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null until facts are collected."
+          },
+          "baseline": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "pass",
+                  "warn",
+                  "fail",
+                  "unreachable",
+                  "never",
+                  "unassigned"
+                ]
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "version": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastRunAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "When the newest finished run ended."
+              },
+              "counts": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "pass": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "warn": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "fail": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "error": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "skipped": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "pass",
+                      "warn",
+                      "fail",
+                      "error",
+                      "skipped"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Of the newest finished run that observed the server; null when it could not."
+              },
+              "errorCode": {
+                "description": "Why the newest run could not observe the server.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "trend": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "better",
+                      "worse",
+                      "same"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "running": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "status",
+              "name",
+              "version",
+              "lastRunAt",
+              "counts",
+              "errorCode",
+              "trend",
+              "running"
+            ],
+            "additionalProperties": false
+          },
+          "hostKey": {
+            "type": "object",
+            "properties": {
+              "pinned": {
+                "type": "boolean"
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "pinned",
+              "count"
+            ],
+            "additionalProperties": false
+          },
+          "access": {
+            "type": "object",
+            "properties": {
+              "entries": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "usable": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Entries whose secrets have not expired."
+              },
+              "expired": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Entries with an expired secret."
+              },
+              "lastVerifiedAt": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The newest time an entry was tried."
+              },
+              "lastVerifyOk": {
+                "description": "What the newest try found; null when none was tried.",
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "entries",
+              "usable",
+              "expired",
+              "lastVerifiedAt",
+              "lastVerifyOk"
+            ],
+            "additionalProperties": false
+          },
+          "panelNode": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "online",
+                      "offline",
+                      "connecting",
+                      "disabled"
+                    ]
+                  },
+                  "asOf": {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+                    "description": "When the reconciliation that matched it ran."
+                  }
+                },
+                "required": [
+                  "name",
+                  "state",
+                  "asOf"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The node of the panel that the last reconciliation matched with this server. Null without it, or for a role that may not read the panel."
+          }
+        },
+        "required": [
+          "server",
+          "health",
+          "flags",
+          "facts",
+          "baseline",
+          "hostKey",
+          "access",
+          "panelNode"
+        ],
+        "additionalProperties": false
+      },
+      "FleetHealth": {
+        "type": "object",
+        "properties": {
+          "generatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetHealthRow"
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Servers that match the filters, whatever `limit` and `offset` say."
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "servers": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "critical": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "warning": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "ok": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "unknown": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "servers",
+              "critical",
+              "warning",
+              "ok",
+              "unknown"
+            ],
+            "additionalProperties": false,
+            "description": "Over the whole inventory, not the filters: the strip above the table."
+          },
+          "panel": {
+            "type": "object",
+            "properties": {
+              "matched": {
+                "type": "boolean",
+                "description": "A reconciliation has matched servers with nodes since this server started."
+              },
+              "asOf": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "matched",
+              "asOf"
+            ],
+            "additionalProperties": false
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "baselineStaleDays": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "factsStaleDays": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "baselineStaleDays",
+              "factsStaleDays"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "generatedAt",
+          "rows",
+          "total",
+          "totals",
+          "panel",
+          "settings"
+        ],
+        "additionalProperties": false,
+        "description": "One row per server of the inventory, from stored data only: facts, the newest baseline check, the host key, the access entries and the node the last reconciliation matched."
       },
       "PanelConsoleResult": {
         "type": "object",

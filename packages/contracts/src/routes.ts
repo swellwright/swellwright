@@ -96,6 +96,7 @@ import {
   SaveConventionPackRequestSchema,
   ValidateConventionPackRequestSchema,
 } from './checks.js';
+import { AttentionFeedSchema, FleetHealthQuerySchema, FleetHealthSchema } from './dashboard.js';
 import { ApiErrorSchema } from './errors.js';
 import {
   ConnectPanelRequestSchema,
@@ -2097,10 +2098,39 @@ export const exportPanelSnapshotRoute = defineRoute({
   },
 });
 
+// ---- The dashboard (ADR 0047) ----
+
+export const getDashboardAttentionRoute = defineRoute({
+  operationId: 'getDashboardAttention',
+  method: 'get',
+  path: '/dashboard/attention',
+  tags: ['dashboard'],
+  summary: 'What needs attention',
+  description:
+    'A ranked list of what a person should look at, from the sources the caller may read: the vault (sealed, secrets expired or about to), the panel connection (state, token expiry, unsupported version), the last convention run and reconciliation, the snapshots of the panel, the baseline checks and the inventory of servers, failed runs of commands, the audit chain, plugins that were switched off and the update check. A source the role may not read is left out and reported as `not_permitted`; a source that failed is reported as `failed` and the others are still returned. Cheap by design: it reads database rows and the memory of this server (a few seconds of it is cached) and NEVER calls the panel or a server. Open to every signed-in user and every API token; what is in it depends on the permissions.',
+  auth: 'any',
+  responses: { 200: { description: 'The feed.', schema: AttentionFeedSchema } },
+});
+
+export const getDashboardFleetRoute = defineRoute({
+  operationId: 'getDashboardFleet',
+  method: 'get',
+  path: '/dashboard/fleet',
+  tags: ['dashboard'],
+  summary: 'The health of the fleet',
+  description:
+    'One row per server of the inventory with the time of its last facts, the newest baseline check, whether a host key is pinned, the state of its access entries, the node of the panel that the last reconciliation matched (name and state at that time) and flags, rolled up into a health. Paged and filterable; stored data only, no connection to a server or the panel.',
+  auth: 'any',
+  permission: 'servers:read',
+  request: { query: FleetHealthQuerySchema },
+  responses: { 200: { description: 'One page of servers.', schema: FleetHealthSchema } },
+});
+
 /** Routes any signed-in user may call without a permission. Everything else under `session` names one. */
 export const ROUTES_OPEN_TO_ANY_SESSION: readonly string[] = [
   'getMe',
   'getUpdates',
+  'getDashboardAttention',
   'changePassword',
   'stepUp',
   'listMySessions',
@@ -2507,6 +2537,8 @@ export const routes = [
   getBaselineRunRoute,
   diffBaselineRunRoute,
   getBaselineFleetRoute,
+  getDashboardAttentionRoute,
+  getDashboardFleetRoute,
   listPanelConsoleOperationsRoute,
   getPanelConsoleOperationRoute,
   sendPanelConsoleRequestRoute,

@@ -141,9 +141,11 @@ describe('route permissions', () => {
       assert.ok(ids.includes(id), id);
     }
     // Your own account only: who you are, your password, your code, your sessions and your tokens; and the
-    // update information, which is public data about the project and carries nothing of the instance.
+    // update information, which is public data about the project and carries nothing of the instance; and the
+    // attention feed of the dashboard, which leaves out every source the caller may not read (ADR 0047).
     assert.ok(ROUTES_OPEN_TO_ANY_SESSION.includes('getUpdates'));
-    assert.ok(ROUTES_OPEN_TO_ANY_SESSION.length <= 10);
+    assert.ok(ROUTES_OPEN_TO_ANY_SESSION.includes('getDashboardAttention'));
+    assert.ok(ROUTES_OPEN_TO_ANY_SESSION.length <= 11);
   });
 
   it('puts the permission into the OpenAPI description', () => {

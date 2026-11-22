@@ -110,6 +110,14 @@ export class UpdatesService implements OnApplicationShutdown {
     return this.view(true);
   }
 
+  /**
+   * What is known now, without starting a check and without waiting: the dashboard reads only what this server already
+   * holds (ADR 0047). Nothing is known until some caller of `current()` has had the first check done.
+   */
+  peek(): UpdatesResponse {
+    return this.view(this.config.updateCheck.enabled);
+  }
+
   onApplicationShutdown(): void {
     this.shutdown.abort();
   }

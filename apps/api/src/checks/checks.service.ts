@@ -35,7 +35,7 @@ import { PanelService } from '../panel/panel.service.js';
 import { CONFIG, DNS_QUERY } from '../tokens.js';
 import type { Actor } from '../vault/vault.service.js';
 import { InventoryReader } from './inventory.js';
-import { ChecksMemory } from './memory.js';
+import { ChecksMemory, type MatchedNode } from './memory.js';
 import { ConventionPackService } from './pack.service.js';
 import { toModel } from './panel-model.js';
 
@@ -182,9 +182,36 @@ export class ChecksService {
       inventory,
     });
     const { reconciliation: settings } = pack;
+    const ranAt = new Date().toISOString();
+    // What the dashboard may say later without asking again: the counts, and which node answers for which server.
+    const nodeOf = new Map(model.nodes.map((node) => [node.uuid, node]));
+    const matched = new Map<string, MatchedNode>();
+    for (const row of result.rows) {
+      const server = row.counterpart;
+      const node = row.subject.uuid === null ? undefined : nodeOf.get(row.subject.uuid);
+      if (
+        row.check === 'node.server' &&
+        row.status === 'ok' &&
+        server?.kind === 'server' &&
+        server.uuid !== null &&
+        node !== undefined
+      ) {
+        matched.set(server.uuid, { name: node.name, state: node.state });
+      }
+    }
+    this.memory.rememberReconciliation({
+      connectionId: read.connectionId,
+      ranAt,
+      drift: result.summary.drift,
+      missing: result.summary.missing,
+      extra: result.summary.extra,
+      unknown: result.summary.unknown,
+      inventoryCompared: inventory !== null,
+      nodes: matched,
+    });
     return {
       pack: pack.ref,
-      ranAt: new Date().toISOString(),
+      ranAt,
       fetchedAt: read.fetchedAt,
       summary: result.summary,
       rows: result.rows,
