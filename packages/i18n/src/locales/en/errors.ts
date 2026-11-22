@@ -12,6 +12,27 @@ export const errors = {
   validation: 'Some of the values are not valid.',
   server: 'Something went wrong on the server. Try again.',
   generic: 'Something went wrong. Try again.',
+  addressNotAllowed: 'The address is not allowed by the policy of this installation.',
+
+  /** The Remnawave panel (ADR 0041): what a read or a connection says when the panel is the problem. */
+  panel: {
+    notConnected: 'No panel is connected. Connect one on the Connection page.',
+    unauthorized: 'The panel rejected the token: it may be expired, revoked or mistyped.',
+    forbidden:
+      'The token has no scope for this. Give it the scope in the panel, or connect with a token that has more.',
+    unreachable:
+      'The panel did not answer. Check its address, its certificate and the network between this server and the panel.',
+    timeout: 'The panel did not answer in time.',
+    unsupportedVersion:
+      'The connected panel runs a version this release does not support. The Connection page says which.',
+    rateLimited_one: 'The panel asks to slow down. Try again in {{count}} second.',
+    rateLimited_other: 'The panel asks to slow down. Try again in {{count}} seconds.',
+    rateLimitedShort: 'The panel asks to slow down. Try again in a moment.',
+    contractChanged:
+      'The panel answered in a shape this release does not know. Its version may have changed the API.',
+    contractChangedAt:
+      'The panel answered in a shape this release does not know: {{endpoint}}, field {{field}}. Its version may have changed the API.',
+  },
   ssh: {
     hostKeyNotPinned:
       'No host key is pinned for this server. Scan its host key and confirm the fingerprint first.',

@@ -6,6 +6,7 @@ import { common } from './common.js';
 import { errors } from './errors.js';
 import { nav } from './nav.js';
 import { overview } from './overview.js';
+import { panel } from './panel.js';
 import { plugins } from './plugins.js';
 import { roles } from './roles.js';
 import { servers } from './servers.js';
@@ -33,4 +34,5 @@ export const en = {
   servers,
   commands,
   artifacts,
+  panel,
 } as const;

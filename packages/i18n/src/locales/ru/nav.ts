@@ -22,7 +22,16 @@ export const nav = {
   reports: 'Отчёты',
 
   panel: 'Панель',
+  connection: 'Подключение',
   profiles: 'Профили',
+  hosts: 'Хосты',
+  internalSquads: 'Внутренние сквады',
+  externalSquads: 'Внешние сквады',
+  templates: 'Шаблоны',
+  snippets: 'Сниппеты',
+  nodePlugins: 'Плагины нод',
+  subscriptionSettings: 'Настройки подписки',
+  infraBilling: 'Инфра-биллинг',
   apiConsole: 'Консоль API',
 
   security: 'Безопасность',

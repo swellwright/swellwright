@@ -166,6 +166,7 @@ describe('step-up authentication on routes', () => {
       'changePassword',
       'changeVaultPassphrase',
       'checkPlugin',
+      'connectPanelWithToken',
       'createCommandRun',
       'createScript',
       'createSecret',

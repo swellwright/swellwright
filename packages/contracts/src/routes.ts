@@ -56,6 +56,27 @@ import {
 } from './commands.js';
 import { ApiErrorSchema } from './errors.js';
 import {
+  ConnectPanelRequestSchema,
+  ConnectPanelWithTokenRequestSchema,
+  PanelApiTokenListSchema,
+  PanelConfigProfileAnswerSchema,
+  PanelConfigProfileListSchema,
+  PanelConnectionViewSchema,
+  PanelExternalSquadListSchema,
+  PanelHostListSchema,
+  PanelInfraAnswerSchema,
+  PanelInternalSquadListSchema,
+  PanelNodeListSchema,
+  PanelNodePluginListSchema,
+  PanelOverviewSchema,
+  PanelProfileParamsSchema,
+  PanelReadQuerySchema,
+  PanelSnippetListSchema,
+  PanelSubscriptionSettingsAnswerSchema,
+  PanelSubscriptionTemplateListSchema,
+  PanelTestResultSchema,
+} from './panel.js';
+import {
   EnablePluginRequestSchema,
   PluginConfigViewSchema,
   PluginGatewayReplySchema,
@@ -1512,6 +1533,263 @@ export const removeServerArtifactRoute = defineRoute({
   responses: { 204: { description: 'The copy is gone.', schema: z.undefined(), empty: true } },
 });
 
+const PANEL_ERRORS =
+  'The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.';
+
+export const getPanelConnectionRoute = defineRoute({
+  operationId: 'getPanelConnection',
+  method: 'get',
+  path: '/panel/connection',
+  tags: ['panel'],
+  summary: 'The connection to the Remnawave panel',
+  description:
+    'Where the panel is, which vault secret holds its token (never the token), the state found by the last check, the version and whether this release supports it, what the token can read, when the token expires and what went wrong last. Answers 200 with state `unconfigured` when no panel is connected. Reading does not call the panel.',
+  auth: 'any',
+  permission: 'panel:read',
+  responses: { 200: { description: 'The connection.', schema: PanelConnectionViewSchema } },
+});
+
+export const connectPanelRoute = defineRoute({
+  operationId: 'connectPanel',
+  method: 'put',
+  path: '/panel/connection',
+  tags: ['panel'],
+  summary: 'Connect to a panel with a token from the vault',
+  description: `Validates the address (https; the same address policy as for servers: loopback, link-local and metadata addresses are refused), asks the panel for its version and health with the token, reads each resource once to find what the token can read, and only then saves the connection (one row; a second call replaces it). Nothing is stored when the panel refuses. The token secret cannot be deleted from the vault while a connection uses it. Recorded as \`panel.connected\`. ${PANEL_ERRORS} 409 \`address_not_allowed\`.`,
+  auth: 'session',
+  permission: 'panel:write',
+  request: { body: ConnectPanelRequestSchema },
+  responses: { 200: { description: 'The saved connection.', schema: PanelConnectionViewSchema } },
+});
+
+export const connectPanelWithTokenRoute = defineRoute({
+  operationId: 'connectPanelWithToken',
+  method: 'put',
+  path: '/panel/connection/with-token',
+  tags: ['panel'],
+  summary: 'Connect to a panel with a token that is not in the vault yet',
+  description: `The wizard path: the token is tried against the panel first, and only when the panel accepts it is the token sealed into the vault (kind \`panel_token\`, the name you give) and the connection saved, in one transaction. Needs \`panel:write\` and \`vault:manage\`, and a fresh second factor, as every route that writes a secret does. Recorded as \`secret.created\` and \`panel.connected\`. ${PANEL_ERRORS} 409 \`address_not_allowed\`, and 409 when the secret name is taken.`,
+  auth: 'session',
+  permission: 'panel:write',
+  stepUp: true,
+  request: { body: ConnectPanelWithTokenRequestSchema },
+  responses: { 200: { description: 'The saved connection.', schema: PanelConnectionViewSchema } },
+});
+
+export const testPanelRoute = defineRoute({
+  operationId: 'testPanel',
+  method: 'post',
+  path: '/panel/connection/test',
+  tags: ['panel'],
+  summary: 'Test the connection',
+  description:
+    'Asks the panel again (version, health, every resource once) and saves what it finds as the state of the connection. A panel that does not answer or refuses the token is a result (200 with `ok: false` and the state), not an error. Recorded as `panel.tested` with the outcome. Rate limited per user.',
+  auth: 'session',
+  permission: 'panel:write',
+  responses: { 200: { description: 'The result of the test.', schema: PanelTestResultSchema } },
+});
+
+export const disconnectPanelRoute = defineRoute({
+  operationId: 'disconnectPanel',
+  method: 'delete',
+  path: '/panel/connection',
+  tags: ['panel'],
+  summary: 'Disconnect from the panel',
+  description:
+    'Forgets the connection and the short-lived memory of what was read. The token stays in the vault: delete the secret separately. Nothing is changed on the panel. Recorded as `panel.disconnected`. 404 when nothing is connected.',
+  auth: 'session',
+  permission: 'panel:write',
+  responses: { 204: { description: 'Disconnected.', schema: z.undefined(), empty: true } },
+});
+
+export const getPanelOverviewRoute = defineRoute({
+  operationId: 'getPanelOverview',
+  method: 'get',
+  path: '/panel/overview',
+  tags: ['panel'],
+  summary: 'The panel at a glance',
+  description: `Version, health, how many nodes, hosts, config profiles, squads, templates, snippets and node plugins there are, how many nodes are online, the users as counts (no personal data), and the days left of the connected token with a warning from 14 days before. A count the token may not read is null. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The overview.', schema: PanelOverviewSchema } },
+});
+
+export const listPanelNodesRoute = defineRoute({
+  operationId: 'listPanelNodes',
+  method: 'get',
+  path: '/panel/nodes',
+  tags: ['panel'],
+  summary: 'The nodes of the panel',
+  description: `Normalised: state, address, port, country, versions of the node and of Xray, the profile and its active inbounds, tags, provider, traffic and consumption fields, flags. Read from a memory of this server that lives 15 seconds (\`SW_PANEL_CACHE_TTL_SECONDS\`); \`refresh=true\` asks the panel again and is rate limited per user. Read only: nothing is sent to the panel but GET requests. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The nodes.', schema: PanelNodeListSchema } },
+});
+
+export const listPanelHostsRoute = defineRoute({
+  operationId: 'listPanelHosts',
+  method: 'get',
+  path: '/panel/hosts',
+  tags: ['panel'],
+  summary: 'The hosts of the panel',
+  description: `Every field the panel shows for a host. Opaque parts (mux, sockopt, XHTTP extra parameters, final mask, the subscription mappers) are JSON with every secret masked. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The hosts.', schema: PanelHostListSchema } },
+});
+
+export const listPanelConfigProfilesRoute = defineRoute({
+  operationId: 'listPanelConfigProfiles',
+  method: 'get',
+  path: '/panel/config-profiles',
+  tags: ['panel'],
+  summary: 'The config profiles of the panel',
+  description: `Name, tags, inbounds (tag, protocol, network, security, port) and the nodes that run the profile. The Xray configuration itself is not in the list: read one profile for it. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The profiles.', schema: PanelConfigProfileListSchema } },
+});
+
+export const getPanelConfigProfileRoute = defineRoute({
+  operationId: 'getPanelConfigProfile',
+  method: 'get',
+  path: '/panel/config-profiles/{uuid}',
+  tags: ['panel'],
+  summary: 'One config profile with its configuration',
+  description: `The Xray configuration as JSON with every secret masked (REALITY private keys and short ids, passwords, client ids, credentials in URLs, PEM private keys): a mask looks like \`[masked:1a2b3c4d]\`, where the eight characters are a keyed fingerprint of the value, so a rotated key shows as a change and the value cannot be guessed from it. No route returns an unmasked value. 404 when the panel has no such profile. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { params: PanelProfileParamsSchema, query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The profile.', schema: PanelConfigProfileAnswerSchema } },
+});
+
+export const getPanelComputedConfigRoute = defineRoute({
+  operationId: 'getPanelComputedConfig',
+  method: 'get',
+  path: '/panel/config-profiles/{uuid}/computed-config',
+  tags: ['panel'],
+  summary: 'The computed configuration of a config profile',
+  description: `The configuration as the panel computes it for its nodes, masked like the profile. Not cached: it is read when asked. 404 when the panel has no such profile. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { params: PanelProfileParamsSchema },
+  responses: {
+    200: { description: 'The computed profile.', schema: PanelConfigProfileAnswerSchema },
+  },
+});
+
+export const listPanelInternalSquadsRoute = defineRoute({
+  operationId: 'listPanelInternalSquads',
+  method: 'get',
+  path: '/panel/internal-squads',
+  tags: ['panel'],
+  summary: 'The internal squads of the panel',
+  description: `Name, tags, members count (a number, no user), inbounds. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The squads.', schema: PanelInternalSquadListSchema } },
+});
+
+export const listPanelExternalSquadsRoute = defineRoute({
+  operationId: 'listPanelExternalSquads',
+  method: 'get',
+  path: '/panel/external-squads',
+  tags: ['panel'],
+  summary: 'The external squads of the panel',
+  description: `Templates, subscription settings, host overrides, response headers (values that carry credentials are masked), HWID settings, custom remarks. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The squads.', schema: PanelExternalSquadListSchema } },
+});
+
+export const listPanelSubscriptionTemplatesRoute = defineRoute({
+  operationId: 'listPanelSubscriptionTemplates',
+  method: 'get',
+  path: '/panel/subscription-templates',
+  tags: ['panel'],
+  summary: 'The subscription templates of the panel',
+  description: `Type, name, tags and the template body (JSON, or YAML decoded and masked). A template for a local proxy often carries its credentials; they are masked. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: {
+    200: { description: 'The templates.', schema: PanelSubscriptionTemplateListSchema },
+  },
+});
+
+export const getPanelSubscriptionSettingsRoute = defineRoute({
+  operationId: 'getPanelSubscriptionSettings',
+  method: 'get',
+  path: '/panel/subscription-settings',
+  tags: ['panel'],
+  summary: 'The subscription settings of the panel',
+  description: `Custom remarks and response headers, the response rules, HWID settings. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: {
+    200: { description: 'The settings.', schema: PanelSubscriptionSettingsAnswerSchema },
+  },
+});
+
+export const listPanelSnippetsRoute = defineRoute({
+  operationId: 'listPanelSnippets',
+  method: 'get',
+  path: '/panel/snippets',
+  tags: ['panel'],
+  summary: 'The snippets of the panel',
+  description: `Named JSON fragments the panel templates reuse, masked. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The snippets.', schema: PanelSnippetListSchema } },
+});
+
+export const listPanelNodePluginsRoute = defineRoute({
+  operationId: 'listPanelNodePlugins',
+  method: 'get',
+  path: '/panel/node-plugins',
+  tags: ['panel'],
+  summary: 'The node plugins of the panel',
+  description: `Name, tags and the plugin configuration as masked JSON. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The plugins.', schema: PanelNodePluginListSchema } },
+});
+
+export const getPanelInfraRoute = defineRoute({
+  operationId: 'getPanelInfra',
+  method: 'get',
+  path: '/panel/infra',
+  tags: ['panel'],
+  summary: 'Infrastructure providers and billing nodes',
+  description: `Providers with their totals, billing nodes with their next billing date, the nodes that are not in billing yet, and the totals. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The billing data.', schema: PanelInfraAnswerSchema } },
+});
+
+export const listPanelApiTokensRoute = defineRoute({
+  operationId: 'listPanelApiTokens',
+  method: 'get',
+  path: '/panel/api-tokens',
+  tags: ['panel'],
+  summary: 'The API tokens of the panel',
+  description: `Names, scopes and expiry, never the token values. The panel lets only an administrator session list its API tokens, not an API token: with a token the panel answers 403, which is reported as 502 \`panel_forbidden\`, and the capability \`apiTokens\` of the connection is \`denied\`. ${PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelReadQuerySchema },
+  responses: { 200: { description: 'The tokens.', schema: PanelApiTokenListSchema } },
+});
+
 /** Routes any signed-in user may call without a permission. Everything else under `session` names one. */
 export const ROUTES_OPEN_TO_ANY_SESSION: readonly string[] = [
   'getMe',
@@ -1622,6 +1900,25 @@ export const routes = [
   pushArtifactRoute,
   verifyServerArtifactRoute,
   removeServerArtifactRoute,
+  getPanelConnectionRoute,
+  connectPanelRoute,
+  connectPanelWithTokenRoute,
+  testPanelRoute,
+  disconnectPanelRoute,
+  getPanelOverviewRoute,
+  listPanelNodesRoute,
+  listPanelHostsRoute,
+  listPanelConfigProfilesRoute,
+  getPanelConfigProfileRoute,
+  getPanelComputedConfigRoute,
+  listPanelInternalSquadsRoute,
+  listPanelExternalSquadsRoute,
+  listPanelSubscriptionTemplatesRoute,
+  getPanelSubscriptionSettingsRoute,
+  listPanelSnippetsRoute,
+  listPanelNodePluginsRoute,
+  getPanelInfraRoute,
+  listPanelApiTokensRoute,
 ] as const;
 
 /** Errors every route may return, documented once. */

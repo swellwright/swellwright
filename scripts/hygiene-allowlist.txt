@@ -9,3 +9,5 @@
 100.127.255.255
 100.128.0.1
 172.32.0.1
+# An example address inside the description of the frozen API document of the panel (packages/remnawave/spec).
+1.2.3.4

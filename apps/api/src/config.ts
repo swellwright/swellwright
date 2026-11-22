@@ -174,6 +174,35 @@ const EnvSchema = z.object({
     .default(64 * 1024 * 1024),
   /** How many pushes, checks and removals of artifacts one user may start per minute. */
   SW_ARTIFACT_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(10),
+  /**
+   * The Remnawave panel (ADR 0041). The panel's address is validated like an SSH target: loopback is the host
+   * Swellwright itself runs on and is refused by default, private ranges and host names are allowed, link-local and
+   * cloud metadata addresses never are. Plain http only for a loopback or private address, and only when allowed.
+   */
+  SW_PANEL_ALLOW_HTTP: z.preprocess(unsetIfEmpty, z.stringbool().default(false)),
+  SW_PANEL_ALLOW_LOOPBACK: z.preprocess(unsetIfEmpty, z.stringbool().default(false)),
+  SW_PANEL_ALLOW_PRIVATE: z.preprocess(unsetIfEmpty, z.stringbool().default(true)),
+  SW_PANEL_ALLOW_HOSTNAMES: z.preprocess(unsetIfEmpty, z.stringbool().default(true)),
+  /** Turns the verification of the panel's TLS certificate off for every panel. Never needed with a CA of its own. */
+  SW_PANEL_ALLOW_INSECURE_TLS: z.preprocess(unsetIfEmpty, z.stringbool().default(false)),
+  /** One request to the panel, in seconds (the connection itself has `SW_PANEL_CONNECT_TIMEOUT_SECONDS`). */
+  SW_PANEL_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(120).default(15),
+  SW_PANEL_CONNECT_TIMEOUT_SECONDS: z.coerce.number().int().min(1).max(60).default(5),
+  /** The largest answer taken from the panel, in MiB; a bigger one is refused as a change of the contract. */
+  SW_PANEL_MAX_RESPONSE_MIB: z.coerce.number().int().min(1).max(256).default(16),
+  /** How long an answer is kept in the memory of this server before the panel is asked again, in seconds. */
+  SW_PANEL_CACHE_TTL_SECONDS: z.coerce.number().int().min(0).max(3600).default(15),
+  /** How often a connected panel is checked in the background (version, token, what can be read), in minutes. 0: never. */
+  SW_PANEL_CHECK_INTERVAL_MINUTES: z.coerce
+    .number()
+    .min(0)
+    .max(1440)
+    .refine((minutes) => minutes === 0 || minutes >= 0.02, 'must be 0 (off) or at least 0.02')
+    .default(5),
+  /** How many times one user may ask the panel again (`refresh=true`) per minute. */
+  SW_PANEL_REFRESH_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(12),
+  /** How many connection tests and connects one user may start per minute. */
+  SW_PANEL_TEST_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(10),
 });
 
 export interface AppConfig {
@@ -259,6 +288,25 @@ export interface AppConfig {
     readonly directory: string;
     readonly maxBytes: number;
     readonly rateLimitPerMinute: number;
+  };
+  /** The connection to a Remnawave panel (ADR 0041). */
+  readonly panel: {
+    /** The outbound address policy: applied to the address in the URL and to every address a name resolves to. */
+    readonly policy: {
+      readonly allowLoopback: boolean;
+      readonly allowPrivate: boolean;
+      readonly allowHostnames: boolean;
+    };
+    readonly allowHttp: boolean;
+    readonly allowInsecureTls: boolean;
+    readonly timeoutMs: number;
+    readonly connectTimeoutMs: number;
+    readonly maxResponseBytes: number;
+    readonly cacheTtlMs: number;
+    /** 0: no background check. */
+    readonly checkIntervalMs: number;
+    readonly refreshRateLimitPerMinute: number;
+    readonly testRateLimitPerMinute: number;
   };
 }
 
@@ -438,6 +486,22 @@ export function loadConfig(
       ),
       maxBytes: e.SW_ARTIFACT_MAX_BYTES,
       rateLimitPerMinute: e.SW_ARTIFACT_RATE_LIMIT_PER_MINUTE,
+    },
+    panel: {
+      policy: {
+        allowLoopback: e.SW_PANEL_ALLOW_LOOPBACK,
+        allowPrivate: e.SW_PANEL_ALLOW_PRIVATE,
+        allowHostnames: e.SW_PANEL_ALLOW_HOSTNAMES,
+      },
+      allowHttp: e.SW_PANEL_ALLOW_HTTP,
+      allowInsecureTls: e.SW_PANEL_ALLOW_INSECURE_TLS,
+      timeoutMs: e.SW_PANEL_TIMEOUT_SECONDS * 1000,
+      connectTimeoutMs: e.SW_PANEL_CONNECT_TIMEOUT_SECONDS * 1000,
+      maxResponseBytes: e.SW_PANEL_MAX_RESPONSE_MIB * 1024 * 1024,
+      cacheTtlMs: e.SW_PANEL_CACHE_TTL_SECONDS * 1000,
+      checkIntervalMs: Math.round(e.SW_PANEL_CHECK_INTERVAL_MINUTES * 60_000),
+      refreshRateLimitPerMinute: e.SW_PANEL_REFRESH_RATE_LIMIT_PER_MINUTE,
+      testRateLimitPerMinute: e.SW_PANEL_TEST_RATE_LIMIT_PER_MINUTE,
     },
   };
 }
