@@ -77,7 +77,9 @@ function asText(value: unknown): string {
   if (typeof value === 'string') {
     return value;
   }
-  return JSON.stringify(value === undefined ? null : value);
+  // JSON.stringify answers undefined for a value JSON cannot hold (undefined, a function, a symbol).
+  const text: unknown = JSON.stringify(value);
+  return typeof text === 'string' ? text : 'null';
 }
 
 const isItems = (value: unknown): value is { items: number } =>
