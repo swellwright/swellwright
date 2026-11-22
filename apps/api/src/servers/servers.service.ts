@@ -610,6 +610,8 @@ export class ServersService {
     address: string;
     port: number;
     fingerprints: string[];
+    /** The key types of the pinned keys: the connection prefers them (a server has keys of several types). */
+    hostKeyTypes: string[];
     access: {
       id: string;
       method: AccessMethod;
@@ -635,6 +637,7 @@ export class ServersService {
       address: row.address,
       port: row.sshPort,
       fingerprints: row.hostKeys.map((key) => key.fingerprintSha256),
+      hostKeyTypes: [...new Set(row.hostKeys.map((key) => key.algorithm))],
       access: row.access.map((entry) => ({
         id: entry.id,
         method: entry.method,

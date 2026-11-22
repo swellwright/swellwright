@@ -87,7 +87,7 @@ export class ServerSshService {
     const info = await this.servers.connectionInfo(id);
     let key;
     try {
-      key = await this.ssh.scanHostKey(info.address, info.port);
+      key = await this.ssh.scanHostKey(info.address, info.port, info.hostKeyTypes);
     } catch (error) {
       await this.audit.note({
         action: 'server.host_key.scanned',
@@ -134,7 +134,7 @@ export class ServerSshService {
     const info = await this.servers.connectionInfo(id);
     let key;
     try {
-      key = await this.ssh.scanHostKey(info.address, info.port);
+      key = await this.ssh.scanHostKey(info.address, info.port, info.hostKeyTypes);
     } catch (error) {
       await this.audit.note({
         action: 'server.host_key.scanned',
@@ -256,7 +256,7 @@ export class ServerSshService {
     let refused: CodedHttpException | null = null;
     try {
       outcome = await this.ssh.withAccess(
-        { address: info.address, port: info.port },
+        { address: info.address, port: info.port, hostKeyTypes: info.hostKeyTypes },
         info.fingerprints,
         entry,
         (session) => this.probe(session, started),
@@ -349,7 +349,7 @@ export class ServerSshService {
       const started = performance.now();
       try {
         const collected = await this.ssh.withAccess(
-          { address: info.address, port: info.port },
+          { address: info.address, port: info.port, hostKeyTypes: info.hostKeyTypes },
           info.fingerprints,
           entry,
           (session) => this.collect(session),

@@ -16,11 +16,19 @@ export interface FakeSudo {
 
 /**
  * `passwordless`: sudo never asks (NOPASSWD). Otherwise it demands `password` on the standard input of `-S` and
- * answers "a password is required" to `-n`.
+ * answers "a password is required" to `-n`. `resetHome`: the command runs with this `HOME`, as under the real sudo of
+ * Debian and Ubuntu (`env_reset` gives the command the home of the target user, not the caller's); without it the
+ * caller's `HOME` is kept, which hides every bug that depends on the difference.
  */
-export function installFakeSudo(options: { password: string; passwordless?: boolean }): FakeSudo {
+export function installFakeSudo(options: {
+  password: string;
+  passwordless?: boolean;
+  resetHome?: string;
+}): FakeSudo {
   if (!/^[A-Za-z0-9_-]+$/u.test(options.password))
     throw new Error('The fake sudo password must be simple.');
+  if (options.resetHome !== undefined && !/^\/[A-Za-z0-9_./-]+$/u.test(options.resetHome))
+    throw new Error('The fake sudo home must be a simple absolute path.');
   const dir = mkdtempSync(join(tmpdir(), 'sw-fake-sudo-'));
   const logFile = join(dir, 'sudo.log');
   writeFileSync(logFile, '');
@@ -28,7 +36,9 @@ export function installFakeSudo(options: { password: string; passwordless?: bool
 LOG='${logFile}'
 PASSWORD='${options.password}'
 PASSWORDLESS=${options.passwordless === true ? '1' : '0'}
+${options.resetHome === undefined ? '' : `RESET_HOME='${options.resetHome}'`}
 { printf 'argv:'; for a in "$@"; do printf ' [%s]' "$a"; done; printf '\n'; env; } >> "$LOG"
+if [ -n "\${RESET_HOME:-}" ]; then HOME=$RESET_HOME; export HOME; fi
 s=0
 while [ $# -gt 0 ]; do
   case "$1" in -n) shift;; -S) s=1; shift;; -p) shift 2;; --) shift; break;; -*) shift;; *) break;; esac

@@ -19,7 +19,13 @@ import {
   messageOf,
   redact,
 } from './errors.js';
-import { describeHostKey, matchesPinned, normalizePolicy, toSsh2Algorithms } from './host-key.js';
+import {
+  describeHostKey,
+  matchesPinned,
+  normalizePolicy,
+  toSsh2Algorithms,
+  withPinnedKeyTypes,
+} from './host-key.js';
 import { SftpClient } from './sftp.js';
 import { assertEnvName, assertNoNul, checkedHost, checkedPort, checkedUsername } from './shell.js';
 import { mapHandshakeError, mapRuntimeError, type Ssh2ErrorLike } from './ssh2-errors.js';
@@ -203,7 +209,7 @@ export class SshConnection extends EventEmitter<SshConnectionEvents> {
   static async connect(target: SshTarget): Promise<SshConnection> {
     const prepared = prepare(target);
     const policy = normalizePolicy(target.hostKey);
-    const algorithms = toSsh2Algorithms(target.algorithms);
+    const algorithms = toSsh2Algorithms(withPinnedKeyTypes(target.algorithms, policy));
 
     if (target.auth.kind === 'key') {
       const parsed = utils.parseKey(target.auth.privateKey, target.auth.passphrase);

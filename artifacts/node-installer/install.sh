@@ -27,7 +27,7 @@
 
 set -u
 
-INSTALLER_VERSION=1.0.0
+INSTALLER_VERSION=1.0.1
 
 DEFAULT_NODE_PORT=62050
 # The node image is pinned (never :latest). Update the default with the artifact version when the supported node release changes.
@@ -636,6 +636,24 @@ ask_secret() {
 # ---------------------------------------------------------------- files and packages
 
 backup_file() { [ -f "$1" ] && cp -a "$1" "$1.bak.$(date +%Y%m%d%H%M%S)"; return 0; }
+# edit_if_changed FILE SED_EXPRESSION: applies the expression and, only when the text really changes, keeps the old version
+# (file.bak.TIMESTAMP) and writes the new one; returns 0 then and 1 when the file is as it was.
+edit_if_changed() {
+    _eic=$(mktemp) || die "mktemp failed"
+    sed "$2" "$1" >"$_eic" || { rm -f "$_eic"; die "sed failed on ${1#"$R"}"; }
+    if cmp -s "$_eic" "$1"; then rm -f "$_eic"; return 1; fi
+    backup_file "$1"
+    cat "$_eic" >"$1"
+    rm -f "$_eic"
+    return 0
+}
+# append_line FILE LINE: adds a line to the end of a file. A file that does not end with a line break (the image of a hosting
+# provider often writes /etc/hosts so) gets one first, or the new line would be glued to the last one (found on a real server:
+# the address of the node ended up inside the line of the machine itself, and the host name of that line was garbled).
+append_line() {
+    if [ -s "$1" ] && [ -n "$(tail -c 1 "$1")" ]; then printf '\n' >>"$1"; fi
+    printf '%s\n' "$2" >>"$1"
+}
 
 # write_file PATH [MODE] < content: writes only when the content changes, keeps a backup of the old file.
 write_file() {
@@ -664,12 +682,26 @@ make_dir() {
 # The backups are named file.bak.YYYYMMDDHHMMSS, so the last name is the newest (the time stamps of the files themselves are those of the originals).
 restore_newest_backup() { _b=$(ls -1 "$1".bak.* 2>/dev/null | sort | tail -n 1); [ -n "$_b" ] && cp -a "$_b" "$1"; return 0; }
 
+# Is somebody else working with the packages? The lock files say it (fuser, from psmisc: on Ubuntu and a usual Debian). The
+# names of processes do not: the watcher of unattended-upgrades (unattended-upgrade-shutdown) and PackageKit's daemon run
+# for as long as the machine is up, or minutes after an upgrade, and hold no lock; waiting for them made every apt call of
+# the installer wait for up to 15 minutes (found on a fresh Ubuntu 24.04 server). Without fuser the names of the programs
+# that do the work are used, and a run of unattended-upgrade is told apart by its command line.
+apt_busy() {
+    if command -v fuser >/dev/null 2>&1; then
+        fuser "$R/var/lib/dpkg/lock-frontend" "$R/var/lib/dpkg/lock" "$R/var/lib/apt/lists/lock" "$R/var/cache/apt/archives/lock" >/dev/null 2>&1
+        return
+    fi
+    pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 \
+        || pgrep -f '/usr/bin/unattended-upgrade( |$)' >/dev/null 2>&1 \
+        || pgrep -x packagekitd >/dev/null 2>&1 || pgrep -f apt.systemd.daily >/dev/null 2>&1
+}
+
 # A fresh Ubuntu starts unattended-upgrades and holds the dpkg lock for a while: wait (up to 15 minutes), do not fail with
 # "Could not get lock". apt itself also waits (DPkg::Lock::Timeout).
 apt_wait() {
     _aw=0
-    while pgrep -x apt >/dev/null 2>&1 || pgrep -x apt-get >/dev/null 2>&1 || pgrep -x dpkg >/dev/null 2>&1 || pgrep -x unattended-upgr >/dev/null 2>&1 \
-        || pgrep -x packagekitd >/dev/null 2>&1 || pgrep -f apt.systemd.daily >/dev/null 2>&1; do
+    while apt_busy; do
         [ "$_aw" -eq 0 ] && echo "waiting for another apt or dpkg process (usually unattended-upgrades) to release the lock ..."
         if [ "$_aw" -ge "${APT_WAIT_MAX:-900}" ]; then echo "the dpkg lock was not released in $_aw s, going on"; return 0; fi
         sleep "${APT_WAIT_STEP:-5}"; _aw=$((_aw + ${APT_WAIT_STEP:-5}))
@@ -842,7 +874,7 @@ step_hostname() {
         note "/etc/hosts already has $NODE_IP $NODE_DOMAIN"
     else
         backup_file "$R/etc/hosts"
-        printf '%s %s %s\n' "$NODE_IP" "$NODE_DOMAIN" "$_short" >>"$R/etc/hosts"
+        append_line "$R/etc/hosts" "$NODE_IP $NODE_DOMAIN $_short"
         ok "added to /etc/hosts: $NODE_IP $NODE_DOMAIN $_short"
     fi
     kv "hostname" "$(hostname)"
@@ -1428,9 +1460,9 @@ step_ssh() {
         [ -n "$_home" ] || die "Cannot find the home directory of $NEW_USER"
         make_dir 700 "$NEW_USER:" "$_home/.ssh"
         touch "$_home/.ssh/authorized_keys"
-        grep -qxF "$NEW_USER_PUBKEY" "$_home/.ssh/authorized_keys" || printf '%s\n' "$NEW_USER_PUBKEY" >>"$_home/.ssh/authorized_keys"
+        grep -qxF "$NEW_USER_PUBKEY" "$_home/.ssh/authorized_keys" || append_line "$_home/.ssh/authorized_keys" "$NEW_USER_PUBKEY"
         if [ -n "${NEW_USER_PUBKEY2:-}" ]; then
-            grep -qxF "$NEW_USER_PUBKEY2" "$_home/.ssh/authorized_keys" || printf '%s\n' "$NEW_USER_PUBKEY2" >>"$_home/.ssh/authorized_keys"
+            grep -qxF "$NEW_USER_PUBKEY2" "$_home/.ssh/authorized_keys" || append_line "$_home/.ssh/authorized_keys" "$NEW_USER_PUBKEY2"
         fi
         chown "$NEW_USER:" "$_home/.ssh/authorized_keys"
         chmod 600 "$_home/.ssh/authorized_keys"
@@ -1501,23 +1533,22 @@ step_rename() {
     kv "Was" "$_from"
     kv "Now" "$_names"
 
+    # A file is touched (and its old version kept) only when the rename changes it: a second run with the same names
+    # leaves everything as it is, and a refused configuration restores only what this run changed.
+    _touched=
     for _f in "$R/etc/nginx/conf.d/default.conf" "$R/etc/nginx/conf.d/selfsni.conf"; do
-        backup_file "$_f"
-        sed -i "s/^\\([[:space:]]*server_name\\)[[:space:]].*;/\\1 $_names;/" "$_f"
+        edit_if_changed "$_f" "s/^\\([[:space:]]*server_name\\)[[:space:]].*;/\\1 $_names;/" && _touched="$_touched $_f"
     done
-    backup_file "$R/etc/haproxy/haproxy.cfg"
-    sed -i "s/^\\([[:space:]]*use_backend xray_vless if { req_ssl_sni -i \\)[^}]*}/\\1$_names }/" "$R/etc/haproxy/haproxy.cfg"
+    edit_if_changed "$R/etc/haproxy/haproxy.cfg" "s/^\\([[:space:]]*use_backend xray_vless if { req_ssl_sni -i \\)[^}]*}/\\1$_names }/" && _touched="$_touched $R/etc/haproxy/haproxy.cfg"
 
     if ! _o=$(nginx -t 2>&1); then
         printf '%s\n' "$_o" | dimcat
-        for _f in "$R/etc/nginx/conf.d/default.conf" "$R/etc/nginx/conf.d/selfsni.conf"; do restore_newest_backup "$_f"; done
-        restore_newest_backup "$R/etc/haproxy/haproxy.cfg"
+        for _f in $_touched; do restore_newest_backup "$_f"; done
         die "nginx -t: configuration error, the files were restored"
     fi
     if ! _o=$(haproxy -c -f "$R/etc/haproxy/haproxy.cfg" 2>&1); then
         printf '%s\n' "$_o" | dimcat
-        for _f in "$R/etc/nginx/conf.d/default.conf" "$R/etc/nginx/conf.d/selfsni.conf"; do restore_newest_backup "$_f"; done
-        restore_newest_backup "$R/etc/haproxy/haproxy.cfg"
+        for _f in $_touched; do restore_newest_backup "$_f"; done
         die "haproxy -c: configuration error, the files were restored"
     fi
     ok "nginx -t and haproxy -c: the configurations are valid"
@@ -1525,18 +1556,22 @@ step_rename() {
     hostnamectl set-hostname "$_new" || die "hostnamectl failed"
     _short=${_new%%.*}; _fshort=${_from%%.*}
     if awk -v of="$_from" '{ for (i = 2; i <= NF; i++) if ($i == of) f = 1 } END { exit !f }' "$R/etc/hosts" 2>/dev/null; then
-        backup_file "$R/etc/hosts"
         _tmp=$(mktemp) || die "mktemp failed"
         awk -v of="$_from" -v nf="$_new" -v os="$_fshort" -v ns="$_short" '
             { hit = 0; for (i = 2; i <= NF; i++) if ($i == of) hit = 1
               if (hit) for (i = 2; i <= NF; i++) { if ($i == of) $i = nf; else if ($i == os) $i = ns }
               print }' "$R/etc/hosts" >"$_tmp" || die "awk failed"
-        cat "$_tmp" >"$R/etc/hosts"
+        if cmp -s "$_tmp" "$R/etc/hosts"; then
+            note "/etc/hosts already has $_new"
+        else
+            backup_file "$R/etc/hosts"
+            cat "$_tmp" >"$R/etc/hosts"
+            ok "/etc/hosts: $_from -> $_new"
+        fi
         rm -f "$_tmp"
-        ok "/etc/hosts: $_from -> $_new"
     elif [ -n "${NODE_IP:-}" ]; then
         backup_file "$R/etc/hosts"
-        printf '%s %s %s\n' "$NODE_IP" "$_new" "$_short" >>"$R/etc/hosts"
+        append_line "$R/etc/hosts" "$NODE_IP $_new $_short"
         ok "added to /etc/hosts: $NODE_IP $_new $_short"
     fi
 

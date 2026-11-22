@@ -105,8 +105,15 @@ export class ArtifactHost {
   corruptUploads = false;
   /** The next hash of the file in its place is taken after one byte was added to it. */
   corruptFinalOnce = false;
-  /** SFTP writes are never answered while this is set (read when an SFTP session opens). */
-  readonly flags: { sftpStallWrites: boolean } = { sftpStallWrites: false };
+  /**
+   * `sftpStallWrites`: SFTP writes are never answered. `systemDirPrivate`: `/var/lib/swellwright` is a directory only
+   * root can enter (the step layer makes it 0700 when it runs as root), so a login that is not root cannot look at the
+   * system artifact directory over SFTP or by commands that do not go through sudo. Both are read when a session opens.
+   */
+  readonly flags: { sftpStallWrites: boolean; systemDirPrivate: boolean } = {
+    sftpStallWrites: false,
+    systemDirPrivate: false,
+  };
 
   private constructor(
     readonly server: TestSshServer,
@@ -181,6 +188,9 @@ export class ArtifactHost {
       get sftpStallWrites() {
         return created.host?.flags.sftpStallWrites ?? false;
       },
+      get sftpDenied() {
+        return created.host?.flags.systemDirPrivate === true && uid !== 0 ? [SYSTEM_DIR] : [];
+      },
     });
     created.host = new ArtifactHost(server, root, uid, home);
     return created.host;
@@ -249,6 +259,27 @@ export class ArtifactHost {
   /** Runs `a && b && c`: stops at the first that fails, like the shell. */
   run(line: string, root: boolean): { out: string; err: string; code: number } {
     this.commands.push({ command: line, root });
+    // The one command that is not a chain of simple ones: what is at a path, asked as root (`inspectAsRootCommand`).
+    const inspect =
+      /^if \[ ! -e (.+) \]; then echo missing; elif \[ -f .+ \]; then sha256sum -- .+; else echo other; fi$/u.exec(
+        line,
+      );
+    if (inspect) {
+      const path = words(inspect[1] ?? '', this.home)[0] ?? '';
+      if (
+        this.deny(path, root) ||
+        (this.flags.systemDirPrivate && !root && path.startsWith(SYSTEM_DIR))
+      ) {
+        return { out: '', err: `sh: 1: cannot open ${path}: Permission denied\n`, code: 1 };
+      }
+      if (!this.exists(path)) {
+        return { out: 'missing\n', err: '', code: 0 };
+      }
+      if (statSync(this.local(path)).isDirectory()) {
+        return { out: 'other\n', err: '', code: 0 };
+      }
+      return this.simple(['sha256sum', '--', path], root);
+    }
     let out = '';
     for (const part of line.split(' && ')) {
       const result = this.simple(words(part, this.home), root);
@@ -357,10 +388,12 @@ export class ArtifactHost {
         }
         const mode = Number.parseInt(args[args.indexOf('-m') + 1] ?? '0', 8);
         if (flags.includes('-d')) {
-          const path = paths[0] ?? '';
-          mkdirSync(this.local(path), { recursive: true });
-          this.modes.set(path, mode);
-          this.owners.set(path, 'root');
+          // Every named directory is made (with its parents) and gets the mode and the owner.
+          for (const path of paths) {
+            mkdirSync(this.local(path), { recursive: true });
+            this.modes.set(path, mode);
+            this.owners.set(path, 'root');
+          }
           return ok;
         }
         const [from = '', to = ''] = paths;

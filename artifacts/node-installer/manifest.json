@@ -1,12 +1,12 @@
 {
   "manifestVersion": 1,
   "name": "node-installer",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Installs and hardens a Remnawave node: firewall, Docker, HAProxy SNI routing, nginx default site, the node container and the checks.",
   "file": "install.sh",
   "interpreter": "sh",
-  "sha256": "118d244b962486daae6236f98b372d67cec9cd6fc046a3dd21881a0064b84a5c",
-  "size": 101446,
+  "sha256": "3d53287c4b6491d82b4f5101e49b2c2a468a7d0f2e11ade51b13ff6f0e0f72ab",
+  "size": 103415,
   "minOs": "debian 12 / ubuntu 22.04",
   "steps": [
     {

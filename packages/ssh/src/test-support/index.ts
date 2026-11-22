@@ -1,7 +1,7 @@
 // Test doubles for code that uses @swellwright/ssh: an in-process SSH server and a stand-in for sudo.
 // Not for production use.
 
-export { generateTestKeyPair, publicKeyFingerprint } from './keys.js';
+export { generateTestKeyPair, generateTestRsaKeyPair, publicKeyFingerprint } from './keys.js';
 export type { TestKeyPair } from './keys.js';
 export { installFakeSudo } from './fake-sudo.js';
 export { startCuttableProxy } from './proxy.js';

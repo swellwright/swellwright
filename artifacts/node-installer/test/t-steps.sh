@@ -14,6 +14,51 @@ t_base_step() {
     assert_out "BASE_UPGRADE=no"
 }
 
+# Stock Ubuntu runs the watcher of unattended-upgrades all the time (its process name is cut to "unattended-upgr", as the
+# name of a run is); it holds no lock. Waiting for it made every apt call of the installer wait 15 minutes (found on a
+# fresh Ubuntu 24.04 server).
+t_base_step_does_not_wait_for_the_unattended_upgrades_watcher() {
+    printf 'unattended-upgr\t/usr/bin/python3 /usr/share/unattended-upgrades/unattended-upgrade-shutdown --wait-for-signal\n' >"$STATE/processes"
+    run_inst base APT_WAIT_MAX=3 APT_WAIT_STEP=1
+    assert_rc 0
+    assert_not_contains "$R/var/log/swellwright-node-installer.log" "waiting for another apt"
+    assert_called "apt-get -o DPkg::Lock::Timeout=600 update"
+}
+
+t_base_step_waits_for_a_running_unattended_upgrade() {
+    printf 'unattended-upgr\t/usr/bin/python3 /usr/bin/unattended-upgrade\n' >"$STATE/processes"
+    run_inst base APT_WAIT_MAX=2 APT_WAIT_STEP=1
+    assert_rc 0
+    assert_contains "$R/var/log/swellwright-node-installer.log" "waiting for another apt or dpkg process"
+    assert_contains "$R/var/log/swellwright-node-installer.log" "the dpkg lock was not released in 2 s, going on"
+    assert_called "apt-get -o DPkg::Lock::Timeout=600 update"
+}
+
+t_base_step_waits_for_the_daily_apt_job() {
+    printf 'apt.systemd.dai\t/bin/sh /usr/lib/apt/apt.systemd.daily lock_is_held install\n' >"$STATE/processes"
+    run_inst base APT_WAIT_MAX=2 APT_WAIT_STEP=1
+    assert_rc 0
+    assert_contains "$R/var/log/swellwright-node-installer.log" "waiting for another apt or dpkg process"
+}
+
+# With fuser the lock files decide, and the names of resident daemons are no reason to wait (PackageKit's daemon stays for
+# minutes after an upgrade).
+t_base_step_asks_the_lock_files_when_it_can() {
+    have fuser
+    printf 'packagekitd	/usr/libexec/packagekitd
+' >"$STATE/processes"
+    run_inst base APT_WAIT_MAX=3 APT_WAIT_STEP=1
+    assert_rc 0
+    assert_not_contains "$R/var/log/swellwright-node-installer.log" "waiting for another apt"
+    assert_called "apt-get -o DPkg::Lock::Timeout=600 update"
+    : >"$STUB_LOG"
+    : >"$STATE/locked"
+    run_inst base APT_WAIT_MAX=2 APT_WAIT_STEP=1
+    assert_rc 0
+    assert_contains "$R/var/log/swellwright-node-installer.log" "waiting for another apt or dpkg process"
+    assert_contains "$R/var/log/swellwright-node-installer.log" "the dpkg lock was not released in 2 s, going on"
+}
+
 t_base_step_stops_on_apt_failure() {
     fail_on "apt-get -o DPkg::Lock::Timeout=600 update"
     run_inst base
@@ -50,6 +95,22 @@ t_hostname_step() {
     run_inst hostname NODE_DOMAIN=node1.example.com NODE_IP=192.0.2.10
     assert_rc 0
     [ "$(grep -c 'node1.example.com' "$R/etc/hosts")" = 1 ] || fail "the hosts line was added twice"
+}
+
+# The image of a hosting provider often writes /etc/hosts without a final line break. The new line must not be glued to
+# the last one (found on a real server: the address of the node ended up inside the line of the machine itself and the
+# host name of that line became "vm-name" plus an address).
+t_hostname_step_with_a_hosts_file_that_does_not_end_with_a_line_break() {
+    printf '127.0.0.1	localhost
+198.51.100.5	vm-name' >"$R/etc/hosts"
+    run_inst hostname NODE_DOMAIN=node1.example.com NODE_IP=192.0.2.10
+    assert_rc 0
+    assert_line "$R/etc/hosts" "198.51.100.5	vm-name"
+    assert_line "$R/etc/hosts" "192.0.2.10 node1.example.com node1"
+    [ "$(grep -c . "$R/etc/hosts")" = 3 ] || fail "the file has an unexpected number of lines"
+    run_inst hostname NODE_DOMAIN=node1.example.com NODE_IP=192.0.2.10
+    assert_rc 0
+    [ "$(grep -c . "$R/etc/hosts")" = 3 ] || fail "the hosts line was added again"
 }
 
 t_firewall_step() {
