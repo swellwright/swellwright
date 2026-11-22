@@ -82,7 +82,10 @@ export function curlOf(
     }
   }
   const query = search.toString();
-  const base = (baseUrl ?? 'https://panel.example.com').replace(/\/+$/u, '');
+  let base = baseUrl ?? 'https://panel.example.com';
+  while (base.endsWith('/')) {
+    base = base.slice(0, -1);
+  }
   return `curl -sS -H "Authorization: Bearer $PANEL_TOKEN" -H "Accept: application/json" "${base}${path}${query === '' ? '' : `?${query}`}"`;
 }
 

@@ -251,7 +251,7 @@ describe('preparing a request of the console', () => {
       'a\u0000b',
       'a\u0085b',
       `a${String.fromCharCode(0x2028)}b`,
-      'tab\there'.replace('\t', '\u0009'),
+      'a\tb',
     ]) {
       assert.match(
         refused('UsersController_getUsersStream', { query: { tag: bad } }),

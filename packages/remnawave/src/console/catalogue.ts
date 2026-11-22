@@ -124,9 +124,20 @@ export function groupOf(tag: string | null): string {
   if (tag === null) {
     return 'Other';
   }
-  const bracket = /^\[(Public|Protected)\]\s+(.*)$/u.exec(tag);
-  const name = (bracket?.[2] ?? tag).replace(/\s+Controller$/u, '').trim();
-  return bracket?.[1] ? `${name} (${bracket[1].toLowerCase()})` : name;
+  // Plain string operations: a pattern that backtracks over a run of spaces is quadratic on a long one.
+  const trimmed = tag.trim();
+  let name = trimmed;
+  let kind: string | null = null;
+  for (const prefix of ['[Public]', '[Protected]']) {
+    if (trimmed.startsWith(prefix)) {
+      kind = prefix.slice(1, -1).toLowerCase();
+      name = trimmed.slice(prefix.length).trim();
+    }
+  }
+  if (name.endsWith('Controller')) {
+    name = name.slice(0, -'Controller'.length).trim();
+  }
+  return kind === null ? name : `${name} (${kind})`;
 }
 
 /** `NodesController_getNodes` read as words, for the operations the description gives no summary. */

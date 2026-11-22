@@ -62,7 +62,9 @@ export function cutToBytes(
   }
   let cut = Buffer.from(text, 'utf8').subarray(0, limit).toString('utf8');
   // A character split by the cut decodes to U+FFFD at the end: drop it.
-  cut = cut.replace(/�+$/u, '');
+  while (cut.endsWith(String.fromCharCode(0xfffd))) {
+    cut = cut.slice(0, -1);
+  }
   const line = cut.lastIndexOf('\n');
   if (line > cut.length - 2048 && line > 0) {
     cut = cut.slice(0, line);
