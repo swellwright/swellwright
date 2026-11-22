@@ -5,6 +5,7 @@ export * from './checks.js';
 export * from './commands.js';
 export * from './errors.js';
 export * from './openapi.js';
+export * from './panel-console.js';
 export * from './panel.js';
 export * from './panel-snapshots.js';
 export * from './plugins.js';

@@ -86,6 +86,8 @@ interface Options {
 @Injectable()
 export class PanelReaderService {
   private readonly refreshLimiter: WindowLimiter;
+  /** The computed configuration is never kept, so every read asks the panel: it counts against a budget of its own. */
+  private readonly computedLimiter: WindowLimiter;
 
   constructor(
     @Inject(CONFIG) private readonly config: AppConfig,
@@ -95,6 +97,16 @@ export class PanelReaderService {
     @Inject(PanelCache) private readonly cache: PanelCache,
   ) {
     this.refreshLimiter = new WindowLimiter(config.panel.refreshRateLimitPerMinute, 60_000);
+    this.computedLimiter = new WindowLimiter(config.panel.computedRateLimitPerMinute, 60_000);
+  }
+
+  private limitComputed(actor: Actor | null): void {
+    if (actor !== null && !this.computedLimiter.hit(actor.id)) {
+      throw new RateLimitedException(
+        60,
+        'Too many reads of the computed configuration. Try again in a minute.',
+      );
+    }
   }
 
   private limitRefresh(actor: Actor | null): void {
@@ -207,10 +219,18 @@ export class PanelReaderService {
     });
   }
 
-  /** Not kept in memory: it is read when it is asked for, and counts as a forced read. */
-  computedConfig(actor: Actor, uuid: string): Promise<Read<PanelConfigProfileView>> {
-    return this.load(`computedConfig:${uuid}`, actor, (c) => c.computedConfig(uuid), {
+  /**
+   * Not kept in memory: the computed configuration is derived from the profile, its squads and its nodes together, so
+   * nothing short of reading it says that a kept copy is still the one the panel would give, and a stale one is the
+   * thing a person comparing it with a node must not be shown. Every read therefore asks the panel, and counts against a
+   * limit of its own (`SW_PANEL_COMPUTED_RATE_LIMIT_PER_MINUTE`) instead of the refresh limit: a burst of forced reads of
+   * other objects no longer blocks it, and asking for it over and over is still limited (ADR 0046, note on ADR 0041).
+   */
+  async computedConfig(actor: Actor, uuid: string): Promise<Read<PanelConfigProfileView>> {
+    this.limitComputed(actor);
+    return await this.load(`computedConfig:${uuid}`, actor, (c) => c.computedConfig(uuid), {
       refresh: true,
+      counted: true,
       cache: false,
       notFoundIsObject: 'config profile',
     });

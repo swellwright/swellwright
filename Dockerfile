@@ -106,6 +106,8 @@ COPY --from=build /app/packages/conventions/dist ./packages/conventions/dist
 COPY --from=build /app/packages/db/dist ./packages/db/dist
 COPY --from=build /app/packages/plugin-api/dist ./packages/plugin-api/dist
 COPY --from=build /app/packages/remnawave/dist ./packages/remnawave/dist
+# The frozen description of the panel's API: the API console builds its catalogue from it when it is first asked (ADR 0046).
+COPY --from=build /app/packages/remnawave/spec ./packages/remnawave/spec
 COPY --from=build /app/packages/ssh/dist ./packages/ssh/dist
 # The built-in artifacts (ADR 0039): a script and its manifest each. The server checks every file against its manifest
 # when it starts; `node apps/api/dist/admin.js artifacts` does the same from outside.

@@ -83,6 +83,7 @@ export const AUDIT_ACTIONS = [
   'panel.convention_pack.reset',
   'panel.snapshot.created',
   'panel.snapshot.deleted',
+  'panel.console.request',
 ] as const;
 export const AuditActionSchema = z.enum(AUDIT_ACTIONS).meta({ id: 'AuditAction' });
 export type AuditAction = z.infer<typeof AuditActionSchema>;
