@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 
-import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   type CommandOutput,
   type CommandOutputPage,
@@ -17,8 +23,12 @@ import {
   type CreateCommandRunRequest,
   DEFAULT_RUN_TIMEOUT_SECONDS,
   FINISHED_RUN_STATES,
+  MAX_RUN_SECRETS,
   OUTPUT_PAGE_DEFAULT,
   type ParameterValues,
+  parameterSecretName,
+  type Permission,
+  type RunSecretView,
   ScriptParametersSchema,
 } from '@swellwright/contracts';
 import { type Database, Prisma } from '@swellwright/db';
@@ -31,6 +41,7 @@ import { type AppConfig } from '../config.js';
 import { CodedHttpException, RateLimitedException } from '../http.js';
 import { type Actor } from '../servers/servers.service.js';
 import { CONFIG, DATABASE } from '../tokens.js';
+import { VaultService } from '../vault/vault.service.js';
 import { CommandRunner } from './command-runner.service.js';
 import { displayText, pageOf, startOnBoundary } from './output.js';
 import { normalizeBody, ScriptsService, sha256Hex } from './scripts.service.js';
@@ -38,6 +49,7 @@ import { normalizeBody, ScriptsService, sha256Hex } from './scripts.service.js';
 type DangerLevel = CommandRunSummary['dangerLevel'];
 
 type RunRow = Prisma.CommandRunGetPayload<object>;
+type SecretRow = Prisma.CommandRunSecretGetPayload<object>;
 type TargetRow = Prisma.CommandRunTargetGetPayload<object>;
 
 const EMPTY_COUNTS: CommandRunCounts = {
@@ -107,7 +119,17 @@ function summaryOf(row: RunRow, counts: CommandRunCounts): CommandRunSummary {
   };
 }
 
-function viewOf(row: RunRow, targets: readonly TargetRow[]): CommandRunView {
+const secretView = (row: SecretRow): RunSecretView => ({
+  name: row.name,
+  secretId: row.secretId,
+  secretName: row.secretName,
+});
+
+function viewOf(
+  row: RunRow,
+  targets: readonly TargetRow[],
+  secrets: readonly SecretRow[],
+): CommandRunView {
   const counts: CommandRunCounts = { ...EMPTY_COUNTS, total: targets.length };
   for (const target of targets) {
     counts[target.state] += 1;
@@ -120,6 +142,7 @@ function viewOf(row: RunRow, targets: readonly TargetRow[]): CommandRunView {
     scriptVersion: row.scriptVersion,
     parameters: (row.parameters ?? {}) as ParameterValues,
     confirmedLevel: row.confirmedLevel,
+    secrets: [...secrets].sort((a, b) => a.name.localeCompare(b.name)).map(secretView),
     targets: targets.map((target) => targetView(target)),
   };
 }
@@ -133,6 +156,13 @@ function invalidParameters(issues: readonly { name: string | null; message: stri
       message: issue.message,
     })),
   );
+}
+
+/** A secret chosen for a run that does not fit, as the 400 the contract promises. */
+function invalidSecrets(
+  issues: readonly { path: (string | number)[]; message: string }[],
+): ZodError {
+  return new ZodError(issues.map((issue) => ({ code: 'custom' as const, ...issue })));
 }
 
 /**
@@ -149,6 +179,7 @@ export class CommandRunsService {
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(ScriptsService) private readonly scripts: ScriptsService,
     @Inject(CommandRunner) private readonly runner: CommandRunner,
+    @Inject(VaultService) private readonly vault: VaultService,
   ) {
     this.limiter = new WindowLimiter(config.commands.rateLimitPerMinute, 60_000);
   }
@@ -157,10 +188,15 @@ export class CommandRunsService {
     return requireDatabase(this.database).client;
   }
 
+  /**
+   * `permissions` are what the caller's role holds: handing a secret to a run needs `vault:reveal` besides
+   * `servers:exec` (a script can print what it reads, so it is a reveal in effect, ADR 0042).
+   */
   async create(
     actor: Actor,
     request: CreateCommandRunRequest,
     meta: RequestMeta,
+    permissions: readonly Permission[],
   ): Promise<CommandRunView> {
     if (!this.limiter.hit(actor.id)) {
       throw new RateLimitedException(60, 'Too many runs. Try again in a minute.');
@@ -175,6 +211,11 @@ export class CommandRunsService {
     let sudo: boolean;
     let level: DangerLevel;
     let values: ParameterValues = {};
+    // The secrets of the run: the ones asked for by name, and those of the `secret` parameters of the script.
+    const handed: { name: string; secretId: string; parameter: string | undefined }[] = (
+      request.secrets ?? []
+    ).map((entry) => ({ name: entry.name, secretId: entry.secretId, parameter: undefined }));
+    let secretParameters: Readonly<Record<string, readonly string[]>> = {};
     if (request.mode === 'script') {
       const script = await this.scripts.find(request.scriptId);
       const definitions = ScriptParametersSchema.safeParse(script.parameters);
@@ -188,6 +229,23 @@ export class CommandRunsService {
         throw invalidParameters(checked.issues);
       }
       values = checked.values;
+      secretParameters = Object.fromEntries(
+        definitions.data.flatMap((definition) =>
+          definition.type === 'secret' ? [[definition.name, definition.secretTypes]] : [],
+        ),
+      );
+      for (const [parameter, secretId] of Object.entries(checked.secrets)) {
+        const name = parameterSecretName(parameter);
+        if (handed.some((entry) => entry.name === name)) {
+          throw invalidSecrets([
+            {
+              path: ['parameters', parameter],
+              message: `A secret named ${name} was given in \`secrets\` as well.`,
+            },
+          ]);
+        }
+        handed.push({ name, secretId, parameter });
+      }
       body = script.body;
       scriptId = script.id;
       scriptName = script.name;
@@ -201,6 +259,7 @@ export class CommandRunsService {
       sudo = request.sudo ?? false;
       level = request.dangerLevel ?? 'change';
     }
+    const secrets = await this.checkSecrets(actor, handed, secretParameters, permissions, meta);
     if (level !== 'read' && request.confirmedLevel !== level) {
       throw new CodedHttpException(
         409,
@@ -262,6 +321,10 @@ export class CommandRunsService {
     const skipped = targets.filter((target) => target.state === 'skipped').length;
 
     await this.db.$transaction(async (tx) => {
+      if (secrets.length > 0) {
+        // Under the lock that replacing and deleting a secret take too: the run is queued with the values it checked.
+        await this.vault.recheckForRun(tx, secrets);
+      }
       await tx.commandRun.create({
         data: {
           id: runId,
@@ -283,6 +346,45 @@ export class CommandRunsService {
         },
       });
       await tx.commandRunTarget.createMany({ data: targets });
+      if (secrets.length > 0) {
+        await tx.commandRunSecret.createMany({
+          data: secrets.map((secret) => ({
+            runId,
+            name: secret.name,
+            secretId: secret.secretId,
+            secretName: secret.secretName,
+            secretVersion: secret.version,
+          })),
+        });
+        // One record for every secret that was handed over, in the same transaction as the run: no run, no record, and
+        // no run without its record. It names the secret and the servers, never a value.
+        const serverIds = request.serverIds
+          .filter((id) =>
+            targets.some((target) => target.serverId === id && target.state !== 'skipped'),
+          )
+          .slice(0, 5)
+          .join(',');
+        for (const secret of secrets) {
+          await this.audit.record(
+            {
+              action: 'secret.used_in_run',
+              outcome: 'success',
+              actor,
+              object: { type: 'secret', id: secret.secretId },
+              details: {
+                run: runId,
+                name: secret.name,
+                secret_name: secret.secretName.slice(0, 100),
+                version: secret.version,
+                servers: targets.length - skipped,
+                server_ids: serverIds,
+              },
+              meta,
+            },
+            tx,
+          );
+        }
+      }
       await this.audit.record(
         {
           action: 'command.run.started',
@@ -298,6 +400,7 @@ export class CommandRunsService {
             confirmed: level !== 'read',
             timeout_seconds: request.timeoutSeconds ?? DEFAULT_RUN_TIMEOUT_SECONDS,
             body_sha256: bodySha256,
+            secrets: secrets.length,
             ...(scriptName === null ? {} : { script: scriptName, script_version: scriptVersion }),
           },
           meta,
@@ -308,6 +411,60 @@ export class CommandRunsService {
 
     this.runner.kick(runId);
     return this.get(runId);
+  }
+
+  /**
+   * Decides whether the secrets a run asks for may be handed to it, before anything is queued (ADR 0042): the role must
+   * hold `vault:reveal`, the vault must be open (423), every secret must exist, be of a kind a run (and the parameter,
+   * if it came from one) may have, and not have expired (409 `secret_expired`). Answers what the run is queued with.
+   */
+  private async checkSecrets(
+    actor: Actor,
+    handed: readonly { name: string; secretId: string; parameter: string | undefined }[],
+    secretParameters: Readonly<Record<string, readonly string[]>>,
+    permissions: readonly Permission[],
+    meta: RequestMeta,
+  ): Promise<{ name: string; secretId: string; secretName: string; version: number }[]> {
+    if (handed.length === 0) {
+      return [];
+    }
+    if (!permissions.includes('vault:reveal')) {
+      await this.audit.note({
+        action: 'authz.denied',
+        outcome: 'denied',
+        actor,
+        object: { type: 'route', id: 'createCommandRun' },
+        details: { permission: 'vault:reveal', via: 'session' },
+        meta,
+      });
+      throw new ForbiddenException(
+        'Handing a secret to a run needs the permission to reveal secrets: a script can print what it reads.',
+      );
+    }
+    if (handed.length > MAX_RUN_SECRETS) {
+      throw invalidSecrets([
+        { path: ['secrets'], message: `At most ${String(MAX_RUN_SECRETS)} secrets.` },
+      ]);
+    }
+    const found = await this.vault.inspectForRun(handed, { kind: 'command_run', id: actor.id });
+    for (const [index, entry] of found.entries()) {
+      const wanted = handed[index];
+      const allowed =
+        wanted?.parameter === undefined ? undefined : secretParameters[wanted.parameter];
+      if (
+        wanted?.parameter !== undefined &&
+        allowed !== undefined &&
+        !allowed.includes(entry.type)
+      ) {
+        throw invalidSecrets([
+          {
+            path: ['parameters', wanted.parameter],
+            message: `This parameter takes a secret of the kind ${allowed.join(', ')}, not ${entry.type}.`,
+          },
+        ]);
+      }
+    }
+    return found;
   }
 
   private async countsFor(runIds: readonly string[]): Promise<Map<string, CommandRunCounts>> {
@@ -350,12 +507,12 @@ export class CommandRunsService {
   async get(id: string): Promise<CommandRunView> {
     const row = await this.db.commandRun.findUnique({
       where: { id },
-      include: { targets: { orderBy: { ordinal: 'asc' } } },
+      include: { targets: { orderBy: { ordinal: 'asc' } }, secrets: true },
     });
     if (!row) {
       throw new NotFoundException('There is no such run.');
     }
-    return viewOf(row, row.targets);
+    return viewOf(row, row.targets, row.secrets);
   }
 
   /** The bytes `[start, start + length)` of what is kept of one stream, from the chunks it was stored in. */

@@ -13,6 +13,7 @@ import {
 } from '@swellwright/contracts';
 import { type CuttableProxy, startCuttableProxy } from '@swellwright/ssh/test-support';
 
+import { type AppOptions } from '../app.module.js';
 import {
   auditEvents,
   type Client,
@@ -167,9 +168,11 @@ export class Harness {
   private readonly proxies: CuttableProxy[] = [];
   private readonly keyBehind = new Map<number, string>();
   private counter = 0;
+  private appOptions: Partial<AppOptions> = {};
 
-  async open(env: Record<string, string> = {}): Promise<void> {
-    this.instance = await start({ ...BASE_ENV, ...env });
+  async open(env: Record<string, string> = {}, options: Partial<AppOptions> = {}): Promise<void> {
+    this.appOptions = options;
+    this.instance = await start({ ...BASE_ENV, ...env }, options);
     const { secret } = await createOwner(this.instance);
     this.authenticators.set('owner', secret);
     this.owner = await signInAs(this.instance, 'owner', secret);
@@ -211,7 +214,7 @@ export class Harness {
 
   /** The application is stopped and another one started on the same database; the signed-in clients move over. */
   async restart(env: Record<string, string> = {}): Promise<void> {
-    const next = await restart(this.instance, { ...BASE_ENV, ...env });
+    const next = await restart(this.instance, { ...BASE_ENV, ...env }, this.appOptions);
     const move = (from: Client): Client => {
       const client = next.client();
       client.cookie = from.cookie;

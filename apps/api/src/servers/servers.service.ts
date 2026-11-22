@@ -33,7 +33,8 @@ import { type Database, Prisma } from '@swellwright/db';
 import { AuditService } from '../audit/audit.service.js';
 import { type RequestMeta, requireDatabase } from '../auth/context.js';
 import { CodedHttpException } from '../http.js';
-import { DATABASE } from '../tokens.js';
+import { CLOCK, DATABASE } from '../tokens.js';
+import { expiryView } from '../vault/expiry.js';
 import { unreadableFacts } from './facts/parse-facts.js';
 import { SshService } from './ssh.service.js';
 
@@ -49,6 +50,9 @@ export interface Actor {
   readonly name: string;
 }
 
+/** What a server shows of a secret it names: never the value, with the expiry so that an expired one is seen. */
+const SECRET_REF = { id: true, name: true, type: true, expiresAt: true } as const;
+
 const WITH_FACT = {
   fact: { select: { facts: true, collectedAt: true, source: true, scriptSha256: true } },
 } as const;
@@ -58,8 +62,8 @@ const FULL = {
   access: {
     orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
     include: {
-      secret: { select: { id: true, name: true, type: true } },
-      sudoSecret: { select: { id: true, name: true, type: true } },
+      secret: { select: SECRET_REF },
+      sudoSecret: { select: SECRET_REF },
     },
   },
   ...WITH_FACT,
@@ -161,19 +165,24 @@ export function toServerSummary(row: SummaryRow): ServerSummary {
   };
 }
 
-const secretRef = (row: { id: string; name: string; type: SecretType }): SecretRef => ({
+const secretRef = (
+  row: { id: string; name: string; type: SecretType; expiresAt: Date | null },
+  nowMs: number,
+): SecretRef => ({
   id: row.id,
   name: row.name,
   type: row.type,
+  expiresAt: row.expiresAt?.toISOString() ?? null,
+  ...expiryView(row.expiresAt, nowMs),
 });
 
-export function toServerAccess(row: AccessRow): ServerAccess {
+export function toServerAccess(row: AccessRow, nowMs: number): ServerAccess {
   return {
     id: row.id,
     method: row.method,
     username: row.username,
-    secret: secretRef(row.secret),
-    sudoSecret: row.sudoSecret ? secretRef(row.sudoSecret) : null,
+    secret: secretRef(row.secret, nowMs),
+    sudoSecret: row.sudoSecret ? secretRef(row.sudoSecret, nowMs) : null,
     priority: row.priority,
     lastVerifiedAt: row.lastVerifiedAt?.toISOString() ?? null,
     lastVerifyOk: row.lastVerifyOk,
@@ -215,6 +224,7 @@ export class ServersService {
     @Inject(DATABASE) private readonly database: Database | undefined,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(SshService) private readonly ssh: SshService,
+    @Inject(CLOCK) private readonly now: () => number,
   ) {}
 
   private get db(): Database['client'] {
@@ -267,7 +277,7 @@ export class ServersService {
     return {
       ...serverFields(row),
       hostKeys: row.hostKeys.map((key) => toHostKey(key, names)),
-      access: row.access.map(toServerAccess),
+      access: row.access.map((entry) => toServerAccess(entry, this.now())),
       facts: factsView(row.fact),
     };
   }
@@ -865,10 +875,10 @@ export class ServersService {
     const row = await this.db.serverAccess.findFirstOrThrow({
       where: { id: accessId, serverId },
       include: {
-        secret: { select: { id: true, name: true, type: true } },
-        sudoSecret: { select: { id: true, name: true, type: true } },
+        secret: { select: SECRET_REF },
+        sudoSecret: { select: SECRET_REF },
       },
     });
-    return toServerAccess(row);
+    return toServerAccess(row, this.now());
   }
 }

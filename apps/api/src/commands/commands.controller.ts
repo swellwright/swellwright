@@ -18,6 +18,7 @@ import {
   getScriptRoute,
   listCommandRunsRoute,
   listScriptsRoute,
+  permissionsOf,
   type ScriptList,
   ScriptIdParamsSchema,
   type ScriptView,
@@ -76,7 +77,14 @@ export class CommandsController {
     @Body() body: CreateCommandRunRequest,
     @Req() req: AuthedRequest,
   ): Promise<CommandRunView> {
-    return this.runs.create(actorOf(req), body, requestMeta(req));
+    const { user, grants } = requireAuth(req);
+    return this.runs.create(
+      actorOf(req),
+      body,
+      requestMeta(req),
+      // A step-up route is for a session, so a token's grants never apply; the role's permissions do.
+      grants ?? permissionsOf(user.role),
+    );
   }
 
   @ContractRoute(listCommandRunsRoute)

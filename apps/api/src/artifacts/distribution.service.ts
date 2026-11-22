@@ -164,6 +164,7 @@ export class DistributionService {
       );
     }
     const tried: string[] = [];
+    let expired: CodedHttpException | null = null;
     for (const entry of info.access) {
       try {
         return await this.ssh.withAccess(
@@ -173,15 +174,25 @@ export class DistributionService {
           operation,
         );
       } catch (error) {
+        if (error instanceof CodedHttpException && error.apiCode === 'secret_expired') {
+          // The entry names a secret that expired (nothing was sent with it): the next entry may work (ADR 0042).
+          expired = error;
+          tried.push(`${entry.id}:${error.apiCode}`);
+          continue;
+        }
         if (
           error instanceof CodedHttpException &&
           (error.apiCode === 'ssh_auth_failed' || error.apiCode === 'ssh_key_invalid')
         ) {
+          expired = null;
           tried.push(`${entry.id}:${error.apiCode}`);
           continue;
         }
         throw error;
       }
+    }
+    if (expired !== null && tried.every((entry) => entry.endsWith(':secret_expired'))) {
+      throw expired;
     }
     throw new CodedHttpException(
       502,

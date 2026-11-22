@@ -34,6 +34,8 @@ export const AUDIT_ACTIONS = [
   'secret.updated',
   'secret.deleted',
   'secret.revealed',
+  'secret.use_refused',
+  'secret.used_in_run',
   'authz.denied',
   'audit.chain.verified',
   'audit.exported',

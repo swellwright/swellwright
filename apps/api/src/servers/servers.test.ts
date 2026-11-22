@@ -660,11 +660,17 @@ describe('the server inventory', { skip: !databaseUrl }, () => {
         id: passwordSecret,
         name: 'login password',
         type: 'ssh_password',
+        expiresAt: null,
+        expired: false,
+        expiresInDays: null,
       });
       assert.deepEqual(entry.sudoSecret, {
         id: sudoSecret,
         name: 'sudo password',
         type: 'ssh_password',
+        expiresAt: null,
+        expired: false,
+        expiresInDays: null,
       });
       assert.equal(entry.priority, 0);
 

@@ -9,6 +9,10 @@ export const errors = {
   stepUpRequired: 'Confirm with a code from your authenticator, then try again.',
   notReady: 'The server cannot sign anyone in yet: it has no database.',
   vaultSealed: 'The vault is sealed. Unseal it with the passphrase first.',
+  secretExpired:
+    'The secret "{{name}}" has expired. Renew its expiry or replace it in the vault, then try again.',
+  secretExpiredUnnamed:
+    'A secret has expired. Renew its expiry or replace it in the vault, then try again.',
   validation: 'Some of the values are not valid.',
   server: 'Something went wrong on the server. Try again.',
   generic: 'Something went wrong. Try again.',

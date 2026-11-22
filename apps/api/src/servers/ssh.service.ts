@@ -20,10 +20,12 @@ import {
 import { type AppConfig } from '../config.js';
 import { CodedHttpException } from '../http.js';
 import { CONFIG } from '../tokens.js';
-import { VaultService } from '../vault/vault.service.js';
+import { VaultService, type UseOptions } from '../vault/vault.service.js';
 
 /** The part of an access entry a connection needs: names of secrets, never their values. */
 export interface SshAccessRef {
+  /** The access entry: what the audit record of a refused expired secret names as the consumer. */
+  readonly id: string;
   readonly method: 'password' | 'key';
   readonly username: string;
   readonly secretId: string;
@@ -195,6 +197,7 @@ export class SshService implements OnApplicationShutdown {
     fingerprints: readonly string[],
     access: SshAccessRef,
     operation: (session: SshSession) => Promise<T>,
+    options?: UseOptions,
   ): Promise<T> {
     if (fingerprints.length === 0) {
       throw new CodedHttpException(
@@ -205,14 +208,18 @@ export class SshService implements OnApplicationShutdown {
     }
     const host = await this.resolve(server.address);
     // The secrets stay in these variables for the length of the call: nothing logs them, no error carries them.
+    // An expired secret is refused by the vault (409 `secret_expired`), before anything is sent (ADR 0042).
+    const consumer = { kind: 'server_access', id: access.id } as const;
     const secret = await this.vault.readForServer(
       access.secretId,
       access.method === 'key' ? 'ssh_key' : 'ssh_password',
+      consumer,
+      options,
     );
     const sudoPassword =
       access.sudoSecretId === null
         ? undefined
-        : await this.vault.readForServer(access.sudoSecretId, 'ssh_password');
+        : await this.vault.readForServer(access.sudoSecretId, 'ssh_password', consumer, options);
     const target: SshTarget = {
       host,
       port: server.port,

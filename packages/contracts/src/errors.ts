@@ -8,6 +8,8 @@ export const ERROR_CODES = [
   'forbidden',
   'step_up_required',
   'vault_sealed',
+  // A secret whose expiry has passed is never handed to a consumer (ADR 0042). `details` has `secretId`, `secretName`.
+  'secret_expired',
   'not_found',
   'conflict',
   'rate_limited',

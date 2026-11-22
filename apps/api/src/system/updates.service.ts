@@ -4,7 +4,7 @@ import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/
 import type { UpdatesResponse } from '@swellwright/contracts';
 
 import type { AppConfig } from '../config.js';
-import { CONFIG, UPDATES_CLOCK } from '../tokens.js';
+import { CONFIG, CLOCK } from '../tokens.js';
 
 /** How long an answer from GitHub is used before the next question. */
 export const UPDATE_CHECK_INTERVAL_MS = 24 * 3_600_000;
@@ -91,7 +91,7 @@ export class UpdatesService implements OnApplicationShutdown {
 
   constructor(
     @Inject(CONFIG) private readonly config: AppConfig,
-    @Inject(UPDATES_CLOCK) private readonly now: () => number,
+    @Inject(CLOCK) private readonly now: () => number,
   ) {}
 
   /** What is known now; starts a check first when the answer is older than a day (or an hour after a failure). */
