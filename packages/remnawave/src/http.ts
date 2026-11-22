@@ -4,6 +4,7 @@ import {
   PanelForbiddenError,
   PanelNotFoundError,
   PanelRateLimitedError,
+  PanelResponseTooLargeError,
   PanelTimeoutError,
   PanelUnavailableError,
   PanelUrlError,
@@ -14,6 +15,7 @@ import {
   createNodeTransport,
   type Transport,
   TransportError,
+  type TransportResponse,
 } from './transport.js';
 import { parsePanelUrl, type ParsedPanelUrl } from './url.js';
 
@@ -47,6 +49,21 @@ export interface PanelHttpOptions {
   /** Replaces the waiting and the randomness of the backoff (tests). */
   readonly sleep?: (ms: number) => Promise<void>;
   readonly random?: () => number;
+}
+
+/**
+ * What `getRaw` returns: the final answer of the panel whatever its status, as it came. The API console shows it (after
+ * masking); nothing else reads a panel this way.
+ */
+export interface PanelRawResponse {
+  readonly status: number;
+  /** Lower-case names; repeated headers are joined with a comma. */
+  readonly headers: Readonly<Record<string, string>>;
+  readonly body: Uint8Array;
+  /** From the first byte of the first try to the last byte of the last, retries and waits included. */
+  readonly durationMs: number;
+  /** How many tries it took: 1 unless a reset, a 429 or a 5xx was retried. */
+  readonly attempts: number;
 }
 
 export interface PanelHttpDefaults {
@@ -188,9 +205,31 @@ export class PanelHttp {
     this.transport.close();
   }
 
-  /** `/api/nodes?x=1` under the base address of the panel. */
+  /**
+   * `/api/nodes?x=1` under the base address of the panel. A path that does not start with a slash, or that lands
+   * anywhere but under the panel's own origin and prefix (`@host/x` appended to `https://panel` is a different host), is
+   * refused whoever built it.
+   */
   private urlFor(pathAndQuery: string): URL {
-    return new URL(`${this.target.base}${pathAndQuery}`);
+    if (!pathAndQuery.startsWith('/') || pathAndQuery.startsWith('//')) {
+      throw new PanelUrlError('A request path starts with a single slash.');
+    }
+    let url: URL;
+    try {
+      url = new URL(`${this.target.base}${pathAndQuery}`);
+    } catch {
+      throw new PanelUrlError('The request path is not a valid path.');
+    }
+    const prefix = `${this.target.pathPrefix}/`;
+    if (
+      url.origin !== this.target.origin ||
+      url.username !== '' ||
+      url.password !== '' ||
+      !url.pathname.startsWith(prefix)
+    ) {
+      throw new PanelUrlError('The request path leaves the address of the panel.');
+    }
+    return url;
   }
 
   /**
@@ -199,6 +238,64 @@ export class PanelHttp {
    */
   getJson(endpoint: string, pathAndQuery: string): Promise<unknown> {
     return this.semaphore.run(() => this.attempts(endpoint, this.urlFor(pathAndQuery)));
+  }
+
+  /**
+   * GETs a path and returns the final answer whatever its status (a 404 or a 400 with its body is something the API
+   * console shows). The failures that say something about the connection are errors as in every other read: 401 (the
+   * token is not accepted), 429 (after the waits the client is willing to make), a failure of the network or of TLS, a
+   * timeout, a refused address or redirect, an answer larger than the limit. A 5xx is retried like any other GET and,
+   * when it keeps coming, returned as the answer it is.
+   */
+  getRaw(endpoint: string, pathAndQuery: string): Promise<PanelRawResponse> {
+    const url = this.urlFor(pathAndQuery);
+    return this.semaphore.run(() => this.rawAttempts(endpoint, url));
+  }
+
+  private async rawAttempts(endpoint: string, url: URL): Promise<PanelRawResponse> {
+    const started = Date.now();
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.settings.maxAttempts; attempt += 1) {
+      try {
+        const response = await this.exchange(endpoint, url, true);
+        const { status } = response;
+        if (status === 401) {
+          throw new PanelAuthError(endpoint);
+        }
+        if (status === 429) {
+          throw new PanelRateLimitedError(
+            endpoint,
+            parseRetryAfter(response.headers['retry-after']) ?? 1,
+          );
+        }
+        if (status >= 500 && attempt < this.settings.maxAttempts) {
+          throw new PanelUnavailableError(
+            endpoint,
+            'http_5xx',
+            `The panel answered ${endpoint} with an error (HTTP ${String(status)}).`,
+            status,
+          );
+        }
+        return {
+          status,
+          headers: response.headers,
+          body: response.body,
+          durationMs: Date.now() - started,
+          attempts: attempt,
+        };
+      } catch (error) {
+        lastError = error;
+        if (attempt === this.settings.maxAttempts) {
+          break;
+        }
+        const wait = this.retryWait(error, attempt);
+        if (wait === undefined) {
+          break;
+        }
+        await this.sleep(wait);
+      }
+    }
+    throw lastError;
   }
 
   private backoff(attempt: number): number {
@@ -246,10 +343,11 @@ export class PanelHttp {
     return undefined;
   }
 
-  private async once(endpoint: string, start: URL): Promise<unknown> {
+  /** One exchange with the panel, redirects inside its origin followed; the answer is returned whatever its status. */
+  private async exchange(endpoint: string, start: URL, raw = false): Promise<TransportResponse> {
     let url = start;
     for (let hops = 0; ; hops += 1) {
-      let response;
+      let response: TransportResponse;
       try {
         response = await this.transport.get({
           url,
@@ -264,44 +362,49 @@ export class PanelHttp {
           maxBytes: this.settings.maxResponseBytes,
         });
       } catch (error) {
-        throw this.mapTransportError(endpoint, error);
+        throw this.mapTransportError(endpoint, error, raw);
       }
       const { status } = response;
-      if (REDIRECT_STATUSES.has(status)) {
-        const location = response.headers['location'];
-        let next: URL | undefined;
-        try {
-          next = location === undefined ? undefined : new URL(location, url);
-        } catch {
-          next = undefined;
-        }
-        if (next?.origin !== this.target.origin) {
-          throw new PanelUnavailableError(
-            endpoint,
-            'redirect_refused',
-            `The panel redirected ${endpoint} to another address. Redirects that leave the panel's origin are not followed; use the final address of the panel.`,
-            status,
-          );
-        }
-        if (hops >= MAX_REDIRECTS) {
-          throw new PanelUnavailableError(
-            endpoint,
-            'redirect_refused',
-            `The panel redirected ${endpoint} too many times.`,
-            status,
-          );
-        }
-        url = next;
-        continue;
+      if (!REDIRECT_STATUSES.has(status)) {
+        return response;
       }
-      if (status >= 200 && status < 300) {
-        return this.parseBody(endpoint, response.body, response.headers['content-type']);
+      const location = response.headers['location'];
+      let next: URL | undefined;
+      try {
+        next = location === undefined ? undefined : new URL(location, url);
+      } catch {
+        next = undefined;
       }
-      throw this.mapStatus(endpoint, status, response.headers['retry-after']);
+      if (next?.origin !== this.target.origin) {
+        throw new PanelUnavailableError(
+          endpoint,
+          'redirect_refused',
+          `The panel redirected ${endpoint} to another address. Redirects that leave the panel's origin are not followed; use the final address of the panel.`,
+          status,
+        );
+      }
+      if (hops >= MAX_REDIRECTS) {
+        throw new PanelUnavailableError(
+          endpoint,
+          'redirect_refused',
+          `The panel redirected ${endpoint} too many times.`,
+          status,
+        );
+      }
+      url = next;
     }
   }
 
-  private mapTransportError(endpoint: string, error: unknown): Error {
+  private async once(endpoint: string, start: URL): Promise<unknown> {
+    const response = await this.exchange(endpoint, start);
+    const { status } = response;
+    if (status >= 200 && status < 300) {
+      return this.parseBody(endpoint, response.body, response.headers['content-type']);
+    }
+    throw this.mapStatus(endpoint, status, response.headers['retry-after']);
+  }
+
+  private mapTransportError(endpoint: string, error: unknown, raw = false): Error {
     if (!(error instanceof TransportError)) {
       return new PanelUnavailableError(
         endpoint,
@@ -315,6 +418,9 @@ export class PanelHttp {
       case 'timeout':
         return new PanelTimeoutError(endpoint, 'response', this.settings.timeoutMs);
       case 'too_large':
+        if (raw) {
+          return new PanelResponseTooLargeError(endpoint, this.settings.maxResponseBytes);
+        }
         return new PanelContractError(endpoint, [
           {
             path: '',

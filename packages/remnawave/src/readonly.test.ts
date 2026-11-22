@@ -75,19 +75,28 @@ describe('the client is read-only', () => {
   });
 
   it('has no other HTTP verb in its sources', () => {
-    const dir = new URL('../src/', import.meta.url);
-    const files = readdirSync(dir, { withFileTypes: true })
-      .filter(
-        (entry) => entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts'),
-      )
-      .map((entry) => entry.name);
-    assert.ok(files.includes('transport.ts') && files.includes('http.ts'));
+    // The sources of the client, and those of the API console (ADR 0046), which also only sends a GET.
+    const dirs = [new URL('../src/', import.meta.url), new URL('../src/console/', import.meta.url)];
     const verbs =
       /['"`](POST|PUT|PATCH|DELETE|HEAD|OPTIONS|CONNECT|TRACE)['"`]|\.(post|put|patch|delete)\(/u;
-    for (const file of files) {
-      const text = readFileSync(new URL(file, dir), 'utf8');
-      assert.ok(!verbs.test(text), `${file} names another HTTP verb`);
+    let scanned = 0;
+    for (const dir of dirs) {
+      const files = readdirSync(dir, { withFileTypes: true })
+        .filter(
+          (entry) =>
+            entry.isFile() && entry.name.endsWith('.ts') && !entry.name.endsWith('.test.ts'),
+        )
+        .map((entry) => entry.name);
+      for (const file of files) {
+        const text = readFileSync(new URL(file, dir), 'utf8');
+        assert.ok(!verbs.test(text), `${file} names another HTTP verb`);
+        scanned += 1;
+      }
+      if (dir === dirs[0]) {
+        assert.ok(files.includes('transport.ts') && files.includes('http.ts'));
+      }
     }
+    assert.ok(scanned > 20);
   });
 
   describe('against a panel that records what it is asked', () => {

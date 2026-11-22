@@ -1,10 +1,11 @@
 export * from './adapters.js';
 export * from './client.js';
+export * from './console/index.js';
 export * from './diff.js';
 export * from './endpoints.js';
 export * from './errors.js';
 export { DEFAULTS as PANEL_HTTP_DEFAULTS, parseRetryAfter, PanelHttp } from './http.js';
-export type { PanelHttpOptions } from './http.js';
+export type { PanelHttpOptions, PanelRawResponse } from './http.js';
 export * from './mask.js';
 export * from './panel-state.js';
 export * from './probe.js';

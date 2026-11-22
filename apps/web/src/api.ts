@@ -37,6 +37,13 @@ import {
   type ConnectPanelWithTokenRequest,
   type PanelConfigProfileAnswer,
   PanelConfigProfileAnswerSchema,
+  type PanelConsoleCatalogue,
+  PanelConsoleCatalogueSchema,
+  type PanelConsoleOperationDetail,
+  PanelConsoleOperationDetailSchema,
+  type PanelConsoleRequest,
+  type PanelConsoleResult,
+  PanelConsoleResultSchema,
   type PanelConfigProfileList,
   PanelConfigProfileListSchema,
   type PanelConnectionView,
@@ -773,6 +780,27 @@ export const getPanelInfra = (refresh = false): Promise<PanelInfraAnswer> =>
   send('GET', `/panel/infra${refreshQuery(refresh)}`, undefined, PanelInfraAnswerSchema);
 
 // ---- snapshots of the panel (ADR 0043) -------------------------------------------------------------------------------
+
+/** Every operation of the panel's API, from the frozen description that ships with the server (`panel:read`). Asks nothing of the panel. */
+export const listPanelConsoleOperations = (): Promise<PanelConsoleCatalogue> =>
+  send('GET', '/panel/api-console/operations', undefined, PanelConsoleCatalogueSchema);
+
+/** One operation with the schemas of its body and its answer (`panel:read`). */
+export const getPanelConsoleOperation = (
+  operationId: string,
+): Promise<PanelConsoleOperationDetail> =>
+  send(
+    'GET',
+    `/panel/api-console/operations/${encodeURIComponent(operationId)}`,
+    undefined,
+    PanelConsoleOperationDetailSchema,
+  );
+
+/** Sends one read to the connected panel and returns its answer, masked (`panel:console`; about people also needs a code). */
+export const sendPanelConsoleRequest = (
+  request: PanelConsoleRequest,
+): Promise<PanelConsoleResult> =>
+  send('POST', '/panel/api-console/requests', request, PanelConsoleResultSchema);
 
 /** One page of the snapshots of the connected panel, newest first (`panel:read`). Never calls the panel. */
 export const listPanelSnapshots = (

@@ -76,6 +76,9 @@ const NodePluginsPage = lazy(() =>
 const SnippetsPage = lazy(() =>
   import('./panel/snippets-page.js').then((m) => ({ default: m.SnippetsPage })),
 );
+const ApiConsolePage = lazy(() =>
+  import('./panel/api-console/api-console-page.js').then((m) => ({ default: m.ApiConsolePage })),
+);
 const SnapshotsPage = lazy(() =>
   import('./panel/snapshots-page.js').then((m) => ({ default: m.SnapshotsPage })),
 );
@@ -302,6 +305,17 @@ function SnapshotsRoute() {
   );
 }
 
+function ApiConsoleRoute() {
+  const { t } = useTranslation('nav');
+  const { session } = useConsole();
+  return (
+    <PanelRoute
+      page={<ApiConsolePage permissions={session.permissions} />}
+      title={t('apiConsole')}
+    />
+  );
+}
+
 const D = ROUTES.DASHBOARD;
 
 /** The paths of a child are relative to the layout route `/dashboard`. */
@@ -337,6 +351,7 @@ export const routes: RouteObject[] = [
           { path: relative(D.PANEL.SNIPPETS), element: <SnippetsRoute /> },
           { path: relative(D.PANEL.NODE_PLUGINS), element: <NodePluginsRoute /> },
           { path: relative(D.PANEL.SNAPSHOTS), element: <SnapshotsRoute /> },
+          { path: relative(D.PANEL.API_CONSOLE), element: <ApiConsoleRoute /> },
           { path: relative(D.SECURITY.ROOT), element: <AreaIndex area="security" /> },
           { path: relative(D.SECURITY.VAULT), element: <VaultRoute /> },
           { path: relative(D.SECURITY.USERS), element: <UsersRoute /> },

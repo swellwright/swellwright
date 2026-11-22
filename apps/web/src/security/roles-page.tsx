@@ -24,6 +24,7 @@ const PERMISSION_KEY = {
   'servers:exec': 'serversExec',
   'panel:read': 'panelRead',
   'panel:write': 'panelWrite',
+  'panel:console': 'panelConsole',
   'runs:read': 'runsRead',
   'runs:execute': 'runsExecute',
   'vault:read': 'vaultRead',

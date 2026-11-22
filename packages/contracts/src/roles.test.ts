@@ -79,6 +79,27 @@ describe('permission catalogue', () => {
     assert.deepEqual(readers, ['owner', 'auditor']);
   });
 
+  it('lets only the owner and the operator send requests to the panel from the API console', () => {
+    const senders = USER_ROLES.filter((role) => hasPermission(role, 'panel:console'));
+    assert.deepEqual(senders, ['owner', 'operator']);
+    // Browsing the catalogue is a plain panel read, and sending needs it too.
+    assert.equal(IMPLIED_PERMISSIONS['panel:console'], 'panel:read');
+    for (const role of ['observer', 'terminal', 'auditor'] as const) {
+      assert.ok(hasPermission(role, 'panel:read') && !hasPermission(role, 'panel:console'), role);
+    }
+    const console = routes.find((r) => r.operationId === 'sendPanelConsoleRequest');
+    assert.ok(console && 'permission' in console);
+    assert.equal(console.permission, 'panel:console');
+    // A cookie session only: the console uses the stored token of the panel, and a token of Swellwright has no second
+    // factor to prove for the operations about people.
+    assert.equal(console.auth, 'session');
+    for (const id of ['listPanelConsoleOperations', 'getPanelConsoleOperation']) {
+      const browse = routes.find((r) => r.operationId === id);
+      assert.ok(browse && 'permission' in browse);
+      assert.equal(browse.permission, 'panel:read');
+    }
+  });
+
   it('has a description for every role and an entry for every built-in role', () => {
     assert.deepEqual(Object.keys(ROLE_INFO).sort(), [...USER_ROLES].sort());
     for (const role of USER_ROLES) {

@@ -77,6 +77,13 @@ import {
   PanelTestResultSchema,
 } from './panel.js';
 import {
+  PanelConsoleCatalogueSchema,
+  PanelConsoleOperationDetailSchema,
+  PanelConsoleOperationParamsSchema,
+  PanelConsoleRequestSchema,
+  PanelConsoleResultSchema,
+} from './panel-console.js';
+import {
   CreatePanelSnapshotRequestSchema,
   PanelDiffQuerySchema,
   PanelDiffSchema,
@@ -1911,6 +1918,53 @@ export const ROUTES_OPEN_TO_ANY_SESSION: readonly string[] = [
 ];
 
 /** Every route of the public API. The server binds its handlers to these definitions. */
+const CONSOLE_ERRORS =
+  "Besides the codes of the panel reads (409 `panel_not_connected`, 409 `panel_unsupported_version`, 502 `panel_unauthorized`, 502 `panel_unreachable`, 504 `panel_timeout`, 429 `panel_rate_limited`, 423 `vault_sealed`): 400 `validation_failed` with `details.issues` naming each field of the request that is wrong, 404 `console_operation_unknown`, 403 `console_operation_blocked` (a write, or a read that is never sent; `details.reason`), 403 `console_user_data_disabled`, 403 `step_up_required` for an operation about people, 502 `console_response_too_large`, 502 `console_response_unsupported`, 429 `rate_limited` (this console's own limit per user).";
+
+export const listPanelConsoleOperationsRoute = defineRoute({
+  operationId: 'listPanelConsoleOperations',
+  method: 'get',
+  path: '/panel/api-console/operations',
+  tags: ['panel'],
+  summary: "The operations of the panel's API",
+  description:
+    'Every operation of the frozen API description of the panel (3.4.11) that ships with this server: its path, method, group, parameters, whether it is open, about people, blocked or not a read, and whether it needs an administrator session. Nothing is asked of the panel to build it, so it works while no panel is connected. `settings` says whether the operations about people can be sent at all.',
+  auth: 'any',
+  permission: 'panel:read',
+  responses: { 200: { description: 'The catalogue.', schema: PanelConsoleCatalogueSchema } },
+});
+
+export const getPanelConsoleOperationRoute = defineRoute({
+  operationId: 'getPanelConsoleOperation',
+  method: 'get',
+  path: '/panel/api-console/operations/{operationId}',
+  tags: ['panel'],
+  summary: 'One operation with its schemas',
+  description:
+    'The operation of the catalogue and, in addition, the JSON Schema of its request body and of its successful answer with every reference followed (a recursive schema is cut where it repeats). 404 `console_operation_unknown` for an id that is not in the catalogue.',
+  auth: 'any',
+  permission: 'panel:read',
+  request: { params: PanelConsoleOperationParamsSchema },
+  responses: {
+    200: { description: 'The operation.', schema: PanelConsoleOperationDetailSchema },
+  },
+});
+
+export const sendPanelConsoleRequestRoute = defineRoute({
+  operationId: 'sendPanelConsoleRequest',
+  method: 'post',
+  path: '/panel/api-console/requests',
+  tags: ['panel'],
+  summary: 'Send a read request to the panel',
+  description: `Sends one GET to the connected panel with the stored token and returns what the panel answered, whatever its status, masked. The request names an operation of the catalogue and its parameters; it is never a URL or a header, so the target is always the connected panel and a path of the catalogue with the checked values filled in. Anything that is not a GET, not in the catalogue, or marked blocked is refused. The body is masked before it leaves this server (REALITY keys, short ids, passwords, tokens, the access material of users) and cut to \`SW_PANEL_CONSOLE_MAX_BODY_KIB\`. Operations about people are refused (403 \`console_user_data_disabled\`) unless \`SW_PANEL_CONSOLE_USER_DATA=true\`, and then need \`vault:reveal\` and a fresh second factor; their answers also hide names, mail, device ids and addresses. Rate limited per user (\`SW_PANEL_CONSOLE_RATE_PER_MINUTE\`). Recorded as \`panel.console.request\` (the operation, the path with its placeholders, the names of the query parameters, the status, the time and how many values were masked; never a value, the token or the body). A session only: a token cannot hold the permission. ${CONSOLE_ERRORS}`,
+  auth: 'session',
+  permission: 'panel:console',
+  request: { body: PanelConsoleRequestSchema },
+  responses: {
+    200: { description: 'What the panel answered, masked.', schema: PanelConsoleResultSchema },
+  },
+});
+
 export const routes = [
   healthRoute,
   readyRoute,
@@ -2031,6 +2085,9 @@ export const routes = [
   deletePanelSnapshotRoute,
   diffPanelSnapshotRoute,
   exportPanelSnapshotRoute,
+  listPanelConsoleOperationsRoute,
+  getPanelConsoleOperationRoute,
+  sendPanelConsoleRequestRoute,
 ] as const;
 
 /** Errors every route may return, documented once. */

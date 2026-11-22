@@ -4,6 +4,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { validateTargetAddress } from '@swellwright/ssh';
 import {
   type AddressGuard,
+  ConsoleClient,
   maskKeyIdOf,
   PanelClient,
   parsePanelUrl,
@@ -81,9 +82,10 @@ export class PanelClients {
     return base;
   }
 
-  create(target: PanelTarget, token: string): PanelClient {
+  /** The options every client shares: the address policy, TLS, the timeouts and the cap on what is read. */
+  private common(target: PanelTarget, token: string) {
     const { panel } = this.config;
-    return new PanelClient({
+    return {
       baseUrl: target.baseUrl,
       token,
       allowInsecureHttp: panel.allowHttp,
@@ -94,6 +96,21 @@ export class PanelClients {
       maxResponseBytes: panel.maxResponseBytes,
       addressGuard: this.guard,
       maskKey: this.maskKey,
+    } as const;
+  }
+
+  create(target: PanelTarget, token: string): PanelClient {
+    return new PanelClient(this.common(target, token));
+  }
+
+  /**
+   * The client of the API console (ADR 0046): the same transport and limits as every read, and nothing else it can
+   * send but the GET of a prepared catalogue request. Made for one request and closed after it.
+   */
+  createConsole(target: PanelTarget, token: string): ConsoleClient {
+    return new ConsoleClient({
+      ...this.common(target, token),
+      maxBodyBytes: this.config.panel.console.maxBodyBytes,
     });
   }
 }

@@ -20,6 +20,7 @@ import {
   type Client,
   codeFor,
   createOwner,
+  createUser,
   databaseUrl,
   forgetLastStep,
   found,
@@ -407,6 +408,95 @@ describe('limits and joining', { skip: !databaseUrl }, () => {
     assert.equal(errorOf(limited).code, 'rate_limited');
   });
 });
+
+describe('the computed configuration has a budget of its own', { skip: !databaseUrl }, () => {
+  let booted: Booted;
+  let fake: FakePanel;
+  let path = '';
+
+  before(async () => {
+    fake = await FakePanel.start();
+    booted = await boot({
+      SW_PANEL_CACHE_TTL_SECONDS: '0',
+      SW_PANEL_REFRESH_RATE_LIMIT_PER_MINUTE: '2',
+      SW_PANEL_COMPUTED_RATE_LIMIT_PER_MINUTE: '3',
+    });
+    const secret = await makeSecret(booted.owner, 'panel token', 'panel_token', fake.token);
+    assert.equal((await connect(booted.owner, fake.url, secret)).status, 200);
+    path = `/panel/config-profiles/${String(must(fake.fixtures.configProfiles[0])['uuid'])}/computed-config`;
+  });
+  after(async () => {
+    await stop(booted.instance);
+    await fake.close();
+  });
+
+  it('is read after a burst of forced reads of other objects has used up the refresh budget', async () => {
+    assert.equal((await booted.owner.get('/panel/snippets?refresh=true')).status, 200);
+    assert.equal((await booted.owner.get('/panel/hosts?refresh=true')).status, 200);
+    const burst = await booted.owner.get('/panel/nodes?refresh=true');
+    assert.equal(burst.status, 429, 'the refresh budget is spent');
+    assert.equal(errorOf(burst).code, 'rate_limited');
+    const base = fake.countRequests(/computed-config/u);
+    const first = await booted.owner.get(path);
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.equal(fake.countRequests(/computed-config/u), base + 1, 'it asked the panel');
+  });
+
+  it('does not use up the refresh budget with its own reads, and is limited by its own budget', async () => {
+    // Two of three were left: reading it twice more is allowed, and the third read after that is not.
+    assert.equal((await booted.owner.get(path)).status, 200);
+    assert.equal((await booted.owner.get(path)).status, 200);
+    const over = await booted.owner.get(path);
+    assert.equal(over.status, 429);
+    assert.equal(errorOf(over).code, 'rate_limited');
+    assert.ok(Number(over.headers.get('retry-after')) > 0);
+    // Reading the profile itself, from memory or not, is not limited by it, and still not kept for the computed one.
+    assert.equal((await booted.owner.get(path.replace('/computed-config', ''))).status, 200);
+    assert.equal(
+      fake.countRequests(/computed-config/u) >= 3,
+      true,
+      'the refused read did not reach the panel',
+    );
+  });
+
+  it('counts per person: another user has a budget of their own', async () => {
+    const other = await signInAs(
+      booted.instance,
+      'second',
+      (await createUser(booted.instance, 'second', 'operator')).secret,
+    );
+    assert.equal((await other.get(path)).status, 200);
+  });
+});
+
+describe(
+  'the computed configuration does not take the refresh budget either',
+  { skip: !databaseUrl },
+  () => {
+    it('leaves a person their forced reads after they have read it as often as they like', async () => {
+      const fake = await FakePanel.start();
+      const booted = await boot({
+        SW_PANEL_CACHE_TTL_SECONDS: '0',
+        SW_PANEL_REFRESH_RATE_LIMIT_PER_MINUTE: '2',
+        SW_PANEL_COMPUTED_RATE_LIMIT_PER_MINUTE: '50',
+      });
+      try {
+        const secret = await makeSecret(booted.owner, 'panel token', 'panel_token', fake.token);
+        assert.equal((await connect(booted.owner, fake.url, secret)).status, 200);
+        const path = `/panel/config-profiles/${String(must(fake.fixtures.configProfiles[0])['uuid'])}/computed-config`;
+        for (let i = 0; i < 10; i += 1) {
+          assert.equal((await booted.owner.get(path)).status, 200, String(i));
+        }
+        assert.equal((await booted.owner.get('/panel/snippets?refresh=true')).status, 200);
+        assert.equal((await booted.owner.get('/panel/hosts?refresh=true')).status, 200);
+        assert.equal((await booted.owner.get('/panel/nodes?refresh=true')).status, 429);
+      } finally {
+        await stop(booted.instance);
+        await fake.close();
+      }
+    });
+  },
+);
 
 describe('the background check', { skip: !databaseUrl }, () => {
   let booted: Booted;
