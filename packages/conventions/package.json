@@ -1,0 +1,33 @@
+{
+  "name": "@swellwright/conventions",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The convention linter, the reconciliation of hosts with nodes and servers, and the impact calculator: pure functions over what a Remnawave panel reported",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*",
+    "!dist/test-model.*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"dist/**/*.test.js\""
+  },
+  "dependencies": {
+    "@swellwright/contracts": "workspace:*",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@swellwright/i18n": "workspace:*",
+    "@types/node": "26.6.6"
+  }
+}

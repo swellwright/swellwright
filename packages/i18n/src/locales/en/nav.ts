@@ -29,6 +29,7 @@ export const nav = {
   externalSquads: 'External squads',
   templates: 'Templates',
   snippets: 'Snippets',
+  checks: 'Checks',
   nodePlugins: 'Node plugins',
   subscriptionSettings: 'Subscription settings',
   infraBilling: 'Infra billing',

@@ -1,0 +1,93 @@
+# An example convention pack for Swellwright. Everything in it is a placeholder: change the patterns, the ranges and the
+# thresholds to what your own installation does, then paste the file into Panel > Checks > Conventions > Edit the pack
+# (or load it with "Load from a file"). The format is described in docs/en/conventions.md.
+#
+# A pack is data, not code. Settings by rule id; a rule that is not named here keeps the defaults of the built-in pack
+# (`GET /panel/checks/rules` lists every rule with its parameters).
+format: swellwright.conventions/v1
+name: Example conventions
+description: >-
+  Nodes are called CC-NN (a country code and a number), hosts carry that name in their remark, every host names its SNI,
+  and objects tagged TEST are left alone.
+
+# The scope of every rule that has none of its own. Objects tagged TEST, and objects whose name says "test", are not
+# judged. A pattern matches the whole name and is written in the safe subset described in docs/en/conventions.md.
+scope:
+  excludeTags: [TEST]
+  exclude: ".*[Tt]est.*"
+
+rules:
+  # Naming.
+  node.name-pattern:
+    params:
+      pattern: "[A-Z]{2}-[0-9]{2}"
+    note: Nodes are called after their country code and a two-digit number.
+  host.remark-pattern:
+    params:
+      pattern: ".+ [A-Z]{2}-[0-9]{2} - .+"
+    note: "A remark reads: <marker> <node name> - <what it is for>."
+  host.remark-unique:
+    params:
+      caseSensitive: false
+  profile.name-pattern:
+    params:
+      pattern: "[A-Za-z0-9 _-]+"
+  squad.name-pattern:
+    params:
+      pattern: "[A-Za-z0-9 _-]+"
+  template.name-pattern:
+    params:
+      pattern: "[A-Za-z0-9 _-]+"
+
+  # Hosts.
+  host.sni-explicit:
+    severity: error
+    note: A host without an SNI follows whatever the client falls back to.
+  host.address-policy:
+    params:
+      policy: ip
+  host.vless-route-id:
+    params:
+      reserved:
+        - { from: 0, to: 0, reason: zero means no route }
+        - { from: 1000, to: 1099, reason: routes of the hop chains }
+        - { from: 16384, to: 20479, reason: 0x4000-0x4FFF }
+      warnOnDuplicates: true
+  host.state:
+    params:
+      report: [disabled]
+
+  # Nodes and the panel itself.
+  node.version-skew:
+    params:
+      checkNodeVersion: true
+      checkXrayVersion: true
+      sameLineAsPanel: true
+  panel.token-expiry:
+    params:
+      warnDays: 30
+
+  # A rule can be switched off, or given another severity, for the whole pack.
+  profile.shared:
+    enabled: false
+    note: Shared profiles are how this installation is built.
+
+# What reconciliation expects of hosts, nodes and the server inventory. Check only: nothing here changes anything.
+reconciliation:
+  hostAddress: node-ip # a host points at an IP of the node that serves it
+  hostSni: node-address # and names that node's domain as its SNI
+  hostPort: none
+  dns:
+    enabled: true
+    maxTtlSeconds: 600
+  inventory:
+    matchBy: [address, dns]
+    reportUnmanaged: true
+    reportExtra: true
+  scope:
+    excludeTags: [TEST]
+
+# When the impact calculator calls a change high risk.
+impact:
+  highRiskRestartNodes: 2
+  highRiskRestartShare: 0.4
