@@ -25,12 +25,12 @@ import { CommandsController } from './commands/commands.controller.js';
 import { ScriptsService } from './commands/scripts.service.js';
 import { type AppConfig } from './config.js';
 import {
+  CLOCK,
   CONFIG,
   DATABASE,
   PASSWORD_HASHER,
   PLUGIN_NETWORK,
   SECRET_BOX,
-  UPDATES_CLOCK,
   VAULT_KDF,
 } from './tokens.js';
 import {
@@ -123,7 +123,7 @@ export class AppModule implements OnApplicationShutdown {
           useValue: options.readinessChecks ?? checksFrom(config, database),
         },
         ReadinessService,
-        { provide: UPDATES_CLOCK, useValue: options.clock ?? (() => Date.now()) },
+        { provide: CLOCK, useValue: options.clock ?? (() => Date.now()) },
         UpdatesService,
         {
           provide: PASSWORD_HASHER,

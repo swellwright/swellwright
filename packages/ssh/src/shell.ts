@@ -73,6 +73,21 @@ export function assertEnvName(name: string): void {
   }
 }
 
+/** The names a secret of a step may have; also the name of its file and of the `<NAME>_FILE` variable. */
+export const STEP_SECRET_NAME = /^[A-Z][A-Z0-9_]{0,63}$/u;
+
+/** At most this many secrets and this many bytes per secret go to one step. */
+export const MAX_STEP_SECRETS = 16;
+export const MAX_STEP_SECRET_BYTES = 64 * 1024;
+
+export function assertStepSecretName(name: string): void {
+  if (!STEP_SECRET_NAME.test(name)) {
+    throw new SshInputError(
+      'A secret of a step is named with capital letters, digits and underscore, starting with a letter (64 characters at most).',
+    );
+  }
+}
+
 /** Values of environment variables and other payload text must not contain NUL. */
 export function assertNoNul(value: string, what: string): void {
   if (value.includes('\0')) throw new SshInputError(`${what} must not contain a NUL character.`);

@@ -80,6 +80,26 @@ export class CodedHttpException extends HttpException {
   }
 }
 
+/**
+ * 409 `secret_expired`: the secret exists, but its expiry has passed, so nothing may use it (ADR 0042). It names the
+ * secret by id and name (never the value) and says what to do. Every operation that uses a secret answers it in its own
+ * envelope, as it does for the sealed vault: this one is already an API error, so the HTTP routes need nothing more.
+ */
+export class SecretExpiredException extends CodedHttpException {
+  constructor(secret: { readonly id: string; readonly name: string; readonly expiresAt: Date }) {
+    super(
+      409,
+      'secret_expired',
+      `The secret "${secret.name}" expired on ${secret.expiresAt.toISOString().slice(0, 10)}. Renew its expiry or replace the secret, then try again.`,
+      {
+        secretId: secret.id,
+        secretName: secret.name,
+        expiresAt: secret.expiresAt.toISOString(),
+      },
+    );
+  }
+}
+
 /** 429 with a `Retry-After` header. */
 export class RateLimitedException extends HttpException {
   constructor(

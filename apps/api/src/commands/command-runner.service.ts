@@ -57,6 +57,8 @@ const FATAL_CODES = new Set([
   'no_access_entry',
   'ssh_auth_failed',
   'ssh_key_invalid',
+  // The secret of every access entry expired before the script was started: renewing it is a person's job (ADR 0042).
+  'secret_expired',
 ]);
 /** The kinds that pass: the server may come back, the connection may be made again. */
 const TRANSIENT_CODES = new Set(['ssh_connect_failed', 'ssh_timeout', 'ssh_failed']);
@@ -519,6 +521,9 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
           info.fingerprints,
           entry,
           (session) => this.work(session, row, context),
+          // A script that has started is followed to its end whatever happens to the credential meanwhile: an expiry
+          // is checked when a use begins, not in the middle of one (ADR 0042).
+          { allowExpired: row.launched || row.run.cancelRequestedAt !== null },
         );
         if (row.accessId !== entry.id) {
           await this.db.commandRunTarget.updateMany({
@@ -531,7 +536,9 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
       } catch (error) {
         if (
           error instanceof CodedHttpException &&
-          (error.apiCode === 'ssh_auth_failed' || error.apiCode === 'ssh_key_invalid') &&
+          (error.apiCode === 'ssh_auth_failed' ||
+            error.apiCode === 'ssh_key_invalid' ||
+            error.apiCode === 'secret_expired') &&
           entries.length > 1
         ) {
           refused = error;
@@ -833,6 +840,8 @@ export class CommandRunner implements OnApplicationBootstrap, BeforeApplicationS
               : {}),
           });
         },
+        // Tidying up after a script that started: allowed even if the credential has expired since.
+        { allowExpired: true },
       );
     } catch (error) {
       this.logger.warn(

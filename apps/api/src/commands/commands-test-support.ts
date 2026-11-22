@@ -13,6 +13,7 @@ import {
 } from '@swellwright/contracts';
 import { type CuttableProxy, startCuttableProxy } from '@swellwright/ssh/test-support';
 
+import { type AppOptions } from '../app.module.js';
 import {
   auditEvents,
   type Client,
@@ -168,8 +169,11 @@ export class Harness {
   private readonly keyBehind = new Map<number, string>();
   private counter = 0;
 
-  async open(env: Record<string, string> = {}): Promise<void> {
-    this.instance = await start({ ...BASE_ENV, ...env });
+  async open(
+    env: Record<string, string> = {},
+    options: Partial<AppOptions> = {},
+  ): Promise<void> {
+    this.instance = await start({ ...BASE_ENV, ...env }, options);
     const { secret } = await createOwner(this.instance);
     this.authenticators.set('owner', secret);
     this.owner = await signInAs(this.instance, 'owner', secret);

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { ServerNameSchema } from './servers.js';
+import { RUN_SECRET_TYPES } from './vault.js';
 
 /**
  * How much a script can change on a server. It is stored on the script and shown wherever the script is chosen. The
@@ -24,6 +25,21 @@ export const MAX_SCRIPT_PARAMETERS = 20;
 export const MAX_RUN_SERVERS = 50;
 export const DEFAULT_RUN_TIMEOUT_SECONDS = 300;
 export const MAX_RUN_TIMEOUT_SECONDS = 3600;
+
+/**
+ * A vault secret can be handed to a run (ADR 0042): the runner writes it to a file for the length of the run and the
+ * script reads it through `<NAME>_FILE`. The name is a shell variable name in capitals; two prefixes are Swellwright's.
+ */
+export const RUN_SECRET_NAME_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/u;
+export const MAX_RUN_SECRETS = 8;
+/** Names that belong to Swellwright's own variables (`SW_PARAM_*`, `SWELLWRIGHT_STEP_DIR`, ...). */
+export const RESERVED_RUN_SECRET_PREFIXES = ['SW_', 'SWELLWRIGHT_'] as const;
+export const isRunSecretNameAllowed = (name: string): boolean =>
+  RUN_SECRET_NAME_PATTERN.test(name) &&
+  !RESERVED_RUN_SECRET_PREFIXES.some((prefix) => name.startsWith(prefix));
+
+/** What the output shows where the value of a secret was: the value never reaches the stored output. */
+export const runSecretMarker = (name: string): string => `[secret ${name}]`;
 
 // A value that reaches a script is plain text: a NUL cannot cross the shell and a script text with one is not a script.
 const noNul = (value: string): boolean => !value.includes('\u0000');
@@ -90,17 +106,32 @@ export const BooleanParameterSchema = z
   })
   .meta({ id: 'BooleanParameter' });
 
+export const SecretParameterSchema = z
+  .object({
+    ...ParameterCommon,
+    type: z.literal('secret'),
+    secretTypes: z
+      .array(z.enum(RUN_SECRET_TYPES))
+      .min(1)
+      .max(RUN_SECRET_TYPES.length)
+      .describe(
+        'The kinds of vault secret that may be chosen for it. The person picks a secret of the vault, never types a value.',
+      ),
+  })
+  .meta({ id: 'SecretParameter' });
+
 export const ScriptParameterSchema = z
   .discriminatedUnion('type', [
     StringParameterSchema,
     IntegerParameterSchema,
     EnumParameterSchema,
     BooleanParameterSchema,
+    SecretParameterSchema,
   ])
   .meta({
     id: 'ScriptParameter',
     description:
-      'A typed parameter of a script. Its value reaches the script as the environment variable `SW_PARAM_<NAME>` (booleans as `1` or `0`), never inside the script text.',
+      'A typed parameter of a script. Its value reaches the script as the environment variable `SW_PARAM_<NAME>` (booleans as `1` or `0`), never inside the script text. A `secret` parameter is different: the value of the run is the id of a vault secret, and the script finds the secret in a file named by `<NAME>_FILE` (the parameter name in capitals), never in the environment, the script text or the stored run.',
   });
 export type ScriptParameter = z.infer<typeof ScriptParameterSchema>;
 
@@ -183,6 +214,17 @@ export function parameterDefinitionIssues(
       if (parameter.default !== undefined && !parameter.options.includes(parameter.default)) {
         issues.push({ name, message: 'The default is not one of the options.' });
       }
+    } else if (parameter.type === 'secret') {
+      if (new Set(parameter.secretTypes).size !== parameter.secretTypes.length) {
+        issues.push({ name, message: 'A kind of secret is listed twice.' });
+      }
+      if (!isRunSecretNameAllowed(name.toUpperCase())) {
+        issues.push({
+          name,
+          message:
+            'A secret parameter becomes a variable in capitals: its name must not start with sw_ or swellwright_.',
+        });
+      }
     }
   }
   return issues;
@@ -202,8 +244,17 @@ export const ScriptParametersSchema = z
   });
 
 export type ParameterCheck =
-  | { readonly ok: true; readonly values: ParameterValues; readonly env: Record<string, string> }
+  | {
+      readonly ok: true;
+      readonly values: ParameterValues;
+      readonly env: Record<string, string>;
+      /** The `secret` parameters that were given: parameter name to the id of the vault secret. Never in `values` or `env`. */
+      readonly secrets: Record<string, string>;
+    }
   | { readonly ok: false; readonly issues: readonly ParameterIssue[] };
+
+/** The name a secret parameter has as a secret of the run: the parameter name in capitals (`node_key` is `NODE_KEY`). */
+export const parameterSecretName = (name: string): string => name.toUpperCase();
 
 /**
  * Checks the values a person gave against the definitions and works out what the script will see. Used by the server
@@ -217,6 +268,7 @@ export function checkParameterValues(
   const issues: ParameterIssue[] = [];
   const values: ParameterValues = {};
   const env: Record<string, string> = {};
+  const secrets: Record<string, string> = {};
   const known = new Set(parameters.map((p) => p.name));
   for (const name of Object.keys(given)) {
     if (!known.has(name)) {
@@ -290,9 +342,19 @@ export function checkParameterValues(
         }
         break;
       }
+      case 'secret': {
+        // The value is the id of a secret of the vault: the server checks that it exists and is of a kind the
+        // parameter allows. It is not a value that reaches the script, so it is neither in `values` nor in `env`.
+        if (typeof value !== 'string' || !z.uuid().safeParse(value).success) {
+          issues.push({ name, message: 'Choose a secret of the vault.' });
+        } else {
+          secrets[name] = value;
+        }
+        break;
+      }
     }
   }
-  return issues.length > 0 ? { ok: false, issues } : { ok: true, values, env };
+  return issues.length > 0 ? { ok: false, issues } : { ok: true, values, env, secrets };
 }
 
 /** The Script as the list shows it: no text. */
@@ -525,6 +587,19 @@ export const CommandRunSummarySchema = z
   .meta({ id: 'CommandRunSummary' });
 export type CommandRunSummary = z.infer<typeof CommandRunSummarySchema>;
 
+export const RunSecretViewSchema = z
+  .object({
+    name: z.string().describe('The name the script knows it by: the file is named by `<NAME>_FILE`.'),
+    secretId: z.uuid().nullable().describe('Null after the secret was deleted.'),
+    secretName: z.string().describe('What the secret was called in the vault when the run was made.'),
+  })
+  .meta({
+    id: 'RunSecretView',
+    description:
+      'A vault secret that was handed to the run as a file. Only the name and the secret are kept, never a value.',
+  });
+export type RunSecretView = z.infer<typeof RunSecretViewSchema>;
+
 export const CommandRunViewSchema = z
   .object({
     ...CommandRunSummarySchema.shape,
@@ -540,6 +615,11 @@ export const CommandRunViewSchema = z
     confirmedLevel: DangerLevelSchema.nullable().describe(
       'The level the person confirmed when the run was started; null for a `read` run.',
     ),
+    secrets: z
+      .array(RunSecretViewSchema)
+      .describe(
+        'The vault secrets handed to the run, by name. Where the output holds one of their values, it shows `[secret NAME]` instead.',
+      ),
     targets: z.array(CommandTargetViewSchema).describe('In the order the servers were chosen.'),
   })
   .meta({ id: 'CommandRunView' });
@@ -565,7 +645,30 @@ export type CommandRunListQuery = z.infer<typeof CommandRunListQuerySchema>;
 export const CommandRunIdParamsSchema = z.object({ id: z.uuid() });
 export const CommandTargetParamsSchema = z.object({ id: z.uuid(), targetId: z.uuid() });
 
+export const RunSecretRequestSchema = z
+  .object({
+    name: z.string().regex(RUN_SECRET_NAME_PATTERN, {
+      message: 'Use 1 to 64 capital letters, digits or underscores, starting with a letter.',
+    }),
+    secretId: z.uuid(),
+  })
+  .meta({ id: 'RunSecretRequest' });
+export type RunSecretRequest = z.infer<typeof RunSecretRequestSchema>;
+
 const RunCommon = {
+  secrets: z
+    .array(RunSecretRequestSchema)
+    .max(MAX_RUN_SECRETS)
+    .refine((list) => new Set(list.map((entry) => entry.name)).size === list.length, {
+      message: 'A name is used twice.',
+    })
+    .refine((list) => list.every((entry) => isRunSecretNameAllowed(entry.name)), {
+      message: 'A name must not start with SW_ or SWELLWRIGHT_.',
+    })
+    .optional()
+    .describe(
+      `Vault secrets for the script, up to ${String(MAX_RUN_SECRETS)}, by the name the script knows them by. Each is written to a file on the server (mode 0600) for the length of the run and removed afterwards; the script reads it through the variable \`<NAME>_FILE\`. Needs \`vault:reveal\` as well as \`servers:exec\`: a script can print what it reads. A secret that has expired is refused (409 \`secret_expired\`), and so is the vault being sealed (423).`,
+    ),
   serverIds: z
     .array(z.uuid())
     .min(1)
@@ -605,7 +708,7 @@ export const CreateCommandRunRequestSchema = z
         })
         .refine(noNul, { message: 'The command must not contain a NUL character.' })
         .describe(
-          'POSIX sh. It is kept with the run, so do not put a secret in it: use a script with a vault-backed value, or type it on the server.',
+          'POSIX sh. It is kept with the run, so do not put a secret in it: hand a vault secret to the run with `secrets` and read it from `$NAME_FILE`.',
         ),
       sudo: z.boolean().optional().describe('Run as root through sudo. False by default.'),
       dangerLevel: DangerLevelSchema.optional().describe(

@@ -17,6 +17,7 @@ import type {
   CreateSecretRequest,
   RevealedSecret,
   SecretList,
+  SecretType,
   SecretView,
   UnsealVaultRequest,
   UpdateSecretRequest,
@@ -29,8 +30,9 @@ import { type Database, Prisma, type Secret, type VaultMeta } from '@swellwright
 import { AuditService } from '../audit/audit.service.js';
 import { type RequestMeta, requireDatabase } from '../auth/context.js';
 import { WindowLimiter } from '../auth/rate-limit.js';
-import { RateLimitedException, VaultSealedException } from '../http.js';
-import { DATABASE, VAULT_KDF } from '../tokens.js';
+import { RateLimitedException, SecretExpiredException, VaultSealedException } from '../http.js';
+import { CLOCK, DATABASE, VAULT_KDF } from '../tokens.js';
+import { expiryView, isExpired } from './expiry.js';
 import { deriveKey, KDF_SALT_BYTES, type KdfParams } from './kdf.js';
 import {
   decryptSecret,
@@ -55,13 +57,49 @@ const ROTATION_TX = { timeout: 60_000, maxWait: 10_000 } as const;
 const UNSEAL_ATTEMPTS = 10;
 const UNSEAL_WINDOW_MS = 15 * 60_000;
 
+/** A refused use of an expired secret is recorded once per secret in this window, however often it is tried. */
+const REFUSAL_NOTE_WINDOW_MS = 10 * 60_000;
+
 /** Who did it. The vault has no server command: every caller is a signed-in user. */
 export interface Actor {
   readonly id: string;
   readonly name: string;
 }
 
-export function toSecretView(row: Secret): SecretView {
+/**
+ * Whatever takes a secret's value to use it (ADR 0042): a server login, a plugin, a command run. The kind and the id
+ * are what the audit record of a refusal says; a value is never given without one.
+ */
+export interface SecretConsumer {
+  readonly kind: 'server_access' | 'plugin' | 'command_run';
+  readonly id: string;
+}
+
+export interface UseOptions {
+  /**
+   * A use that began before the expiry may go on: following a script that is already running on a server must not stop
+   * because the credential of the connection expired meanwhile. Only the runner, for a target whose step has started.
+   */
+  readonly allowExpired?: boolean;
+}
+
+/** What a consumer needs to take a value: which secret, of which kinds, and the words of the two ordinary failures. */
+interface UseRequest {
+  readonly id: string;
+  readonly types: readonly SecretType[];
+  readonly consumer: SecretConsumer;
+  readonly options: UseOptions | undefined;
+  readonly missing: string;
+  readonly wrongKind: (row: Secret) => string;
+}
+
+/** The value of a secret that was taken for a consumer, with the row it came from. */
+export interface TakenSecret {
+  readonly value: string;
+  readonly row: Secret;
+}
+
+export function toSecretView(row: Secret, nowMs: number): SecretView {
   return {
     id: row.id,
     name: row.name,
@@ -69,6 +107,7 @@ export function toSecretView(row: Secret): SecretView {
     description: row.description,
     version: row.version,
     expiresAt: row.expiresAt?.toISOString() ?? null,
+    ...expiryView(row.expiresAt, nowMs),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     valueChangedAt: row.valueChangedAt.toISOString(),
@@ -88,11 +127,14 @@ export class VaultService implements OnApplicationShutdown {
   private readonly attempts = new WindowLimiter(UNSEAL_ATTEMPTS, UNSEAL_WINDOW_MS);
   private kek: Buffer | null = null;
   private readonly serial = new Serial();
+  /** When a refused use of each secret was last recorded. */
+  private readonly refusals = new Map<string, number>();
 
   constructor(
     @Inject(DATABASE) private readonly database: Database | undefined,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(VAULT_KDF) private readonly kdf: KdfParams,
+    @Inject(CLOCK) private readonly now: () => number,
   ) {}
 
   private get db(): Database['client'] {
@@ -264,7 +306,8 @@ export class VaultService implements OnApplicationShutdown {
 
   async list(): Promise<SecretList> {
     const rows = await this.db.secret.findMany({ orderBy: { name: 'asc' } });
-    return { secrets: rows.map(toSecretView) };
+    const now = this.now();
+    return { secrets: rows.map((row) => toSecretView(row, now)) };
   }
 
   /** Needs the vault open. The value is encrypted before it reaches the database and is not returned again. */
@@ -307,7 +350,7 @@ export class VaultService implements OnApplicationShutdown {
         );
         return created;
       });
-      return toSecretView(row);
+      return toSecretView(row, this.now());
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConflictException('A secret with that name exists already.');
@@ -390,7 +433,7 @@ export class VaultService implements OnApplicationShutdown {
         );
         return tx.secret.findUniqueOrThrow({ where: { id } });
       });
-      return toSecretView(row);
+      return toSecretView(row, this.now());
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConflictException('A secret with that name exists already.');
@@ -456,58 +499,115 @@ export class VaultService implements OnApplicationShutdown {
   }
 
   /**
-   * The value of a secret for a plugin that was bound to it (ADR 0029). Not a reveal: no person asked, so there is
-   * no `secret.revealed`; the broker records the plugin's use instead. The type must be the one the plugin
-   * declared, so a plugin cannot be pointed at a secret of another kind.
+   * The one door through which the value of a secret goes to something that uses it (ADR 0042). The order is fixed: a
+   * sealed vault answers 423 first, then the secret must exist and be of a kind this consumer may have, then its expiry
+   * must not have passed (409 `secret_expired`, recorded once per ten minutes), and only then is the value decrypted.
+   * Not a reveal: no person asked, so there is no `secret.revealed`; the operation that uses the value records its own
+   * use. The consumers below say which kinds they take and in which words they fail; none of them decides "expired".
    */
-  readForPlugin(id: string, type: string): Promise<string> {
+  private takeValue(request: UseRequest): Promise<TakenSecret> {
     return this.serial.run(async () => {
       const kek = this.openKey();
-      const row = await this.db.secret.findUnique({ where: { id } });
+      const row = await this.db.secret.findUnique({ where: { id: request.id } });
       if (!row) {
-        throw new NotFoundException('The secret chosen for this setting no longer exists.');
+        throw new NotFoundException(request.missing);
       }
-      if (row.type !== type) {
-        throw new ConflictException('The secret chosen for this setting is not of the right kind.');
+      if (!request.types.includes(row.type)) {
+        throw new ConflictException(request.wrongKind(row));
+      }
+      if (
+        request.options?.allowExpired !== true &&
+        row.expiresAt !== null &&
+        isExpired(row.expiresAt, this.now())
+      ) {
+        await this.noteRefusal(row, request.consumer);
+        throw new SecretExpiredException({ id: row.id, name: row.name, expiresAt: row.expiresAt });
       }
       try {
-        return decryptSecret(kek, { id, version: row.version, type: row.type }, row);
+        const value = decryptSecret(kek, { id: row.id, version: row.version, type: row.type }, row);
+        return { value, row };
       } catch {
         this.logger.error(
-          `secret ${id} did not decrypt: the stored blobs do not match their context`,
+          `secret ${row.id} did not decrypt: the stored blobs do not match their context`,
         );
         throw new InternalServerErrorException('The secret could not be decrypted.');
       }
     });
   }
 
-  /**
-   * The value of a secret for a connection to a server (ADR 0037). Not a reveal: no person asked, so there is no
-   * `secret.revealed`; the operation that connects records its own use (`server.access.verified`, `server.facts.
-   * refreshed`). The type must be the one the access method needs, so an entry cannot be pointed at a secret of
-   * another kind. The caller keeps the value in memory for the length of the call and nowhere else.
-   */
-  readForServer(id: string, type: 'ssh_password' | 'ssh_key'): Promise<string> {
-    return this.serial.run(async () => {
-      const kek = this.openKey();
-      const row = await this.db.secret.findUnique({ where: { id } });
-      if (!row) {
-        throw new NotFoundException('The secret that this access entry names no longer exists.');
+  /** Records that an expired secret was asked for, at most once per secret per ten minutes. No value, ever. */
+  private async noteRefusal(row: Secret, consumer: SecretConsumer): Promise<void> {
+    const now = this.now();
+    const last = this.refusals.get(row.id);
+    if (last !== undefined && now - last < REFUSAL_NOTE_WINDOW_MS) {
+      return;
+    }
+    if (this.refusals.size > 1000) {
+      for (const [id, at] of this.refusals) {
+        if (now - at >= REFUSAL_NOTE_WINDOW_MS) {
+          this.refusals.delete(id);
+        }
       }
-      if (row.type !== type) {
-        throw new ConflictException(
-          `The secret "${row.name}" is not of the kind "${type}" that this access entry needs.`,
-        );
-      }
-      try {
-        return decryptSecret(kek, { id, version: row.version, type: row.type }, row);
-      } catch {
-        this.logger.error(
-          `secret ${id} did not decrypt: the stored blobs do not match their context`,
-        );
-        throw new InternalServerErrorException('The secret could not be decrypted.');
-      }
+    }
+    this.refusals.set(row.id, now);
+    await this.audit.note({
+      action: 'secret.use_refused',
+      outcome: 'denied',
+      actor: null,
+      object: { type: 'secret', id: row.id },
+      details: {
+        reason: 'expired',
+        secret_type: row.type,
+        consumer: consumer.kind,
+        consumer_id: consumer.id,
+      },
+      meta: { ip: undefined, requestId: undefined },
     });
+  }
+
+  /**
+   * The value of a secret for a plugin that was bound to it (ADR 0029). The type must be the one the plugin declared,
+   * so a plugin cannot be pointed at a secret of another kind. The broker records the plugin's use.
+   */
+  async readForPlugin(
+    id: string,
+    type: SecretType,
+    consumer: SecretConsumer,
+    options?: UseOptions,
+  ): Promise<string> {
+    const taken = await this.takeValue({
+      id,
+      types: [type],
+      consumer,
+      options,
+      missing: 'The secret chosen for this setting no longer exists.',
+      wrongKind: () => 'The secret chosen for this setting is not of the right kind.',
+    });
+    return taken.value;
+  }
+
+  /**
+   * The value of a secret for a connection to a server (ADR 0037). The type must be the one the access method needs, so
+   * an entry cannot be pointed at a secret of another kind. The operation that connects records its own use
+   * (`server.access.verified`, `server.facts.refreshed`). The caller keeps the value in memory for the length of the call
+   * and nowhere else.
+   */
+  async readForServer(
+    id: string,
+    type: 'ssh_password' | 'ssh_key',
+    consumer: SecretConsumer,
+    options?: UseOptions,
+  ): Promise<string> {
+    const taken = await this.takeValue({
+      id,
+      types: [type],
+      consumer,
+      options,
+      missing: 'The secret that this access entry names no longer exists.',
+      wrongKind: (row) =>
+        `The secret "${row.name}" is not of the kind "${type}" that this access entry needs.`,
+    });
+    return taken.value;
   }
 
   /** The only way a value leaves. Recorded first: no record, no value. */
@@ -539,7 +639,14 @@ export class VaultService implements OnApplicationShutdown {
       details: { secret_type: row.type, version: row.version },
       meta,
     });
-    return { id, name: row.name, type: row.type, version: row.version, value };
+    return {
+      id,
+      name: row.name,
+      type: row.type,
+      version: row.version,
+      expired: isExpired(row.expiresAt, this.now()),
+      value,
+    };
   }
 
   private async storedMeta(): Promise<VaultMeta> {

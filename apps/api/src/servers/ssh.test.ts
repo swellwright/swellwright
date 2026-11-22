@@ -1068,12 +1068,19 @@ describe('servers over SSH', { skip: !databaseUrl }, () => {
   describe('the vault', () => {
     it('hands a server only the kind of secret its entry needs, and records no reveal', async () => {
       const vault = instance.app.get(VaultService);
-      assert.equal(await vault.readForServer(loginSecret, 'ssh_password'), LOGIN);
-      assert.equal(await vault.readForServer(keySecret, 'ssh_key'), KEY.privateKey);
-      await assert.rejects(vault.readForServer(loginSecret, 'ssh_key'), /not of the kind/u);
-      await assert.rejects(vault.readForServer(keySecret, 'ssh_password'), /not of the kind/u);
+      const consumer = { kind: 'server_access', id: '0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6c' } as const;
+      assert.equal(await vault.readForServer(loginSecret, 'ssh_password', consumer), LOGIN);
+      assert.equal(await vault.readForServer(keySecret, 'ssh_key', consumer), KEY.privateKey);
       await assert.rejects(
-        vault.readForServer('0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b', 'ssh_password'),
+        vault.readForServer(loginSecret, 'ssh_key', consumer),
+        /not of the kind/u,
+      );
+      await assert.rejects(
+        vault.readForServer(keySecret, 'ssh_password', consumer),
+        /not of the kind/u,
+      );
+      await assert.rejects(
+        vault.readForServer('0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b', 'ssh_password', consumer),
         /no longer exists/u,
       );
       assert.equal(

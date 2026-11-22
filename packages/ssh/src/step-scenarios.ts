@@ -98,7 +98,13 @@ export function defineStepScenarios(
 
     const run = async (
       script: string,
-      extra: { stdin?: string; env?: Record<string, string>; id?: string; sudo?: SudoOptions } = {},
+      extra: {
+        stdin?: string;
+        env?: Record<string, string>;
+        secrets?: Record<string, string>;
+        id?: string;
+        sudo?: SudoOptions;
+      } = {},
     ): Promise<{
       id: string;
       chunks: StepOutputChunk[];
@@ -111,6 +117,7 @@ export function defineStepScenarios(
         baseDir,
         ...(extra.stdin === undefined ? {} : { stdin: extra.stdin }),
         ...(extra.env === undefined ? {} : { env: extra.env }),
+        ...(extra.secrets === undefined ? {} : { secrets: extra.secrets }),
         ...(extra.sudo === undefined ? {} : { sudo: extra.sudo }),
       });
       const chunks: StepOutputChunk[] = [];
@@ -511,6 +518,192 @@ export function defineStepScenarios(
       );
     });
 
+    describe('secrets (ADR 0042)', () => {
+      const DISTINCT = 's3cret-distinct-value';
+      // Trailing newline, quotes, expansions, a backslash and a second line: nothing of it may be interpreted anywhere.
+      const HARD = `${DISTINCT}-"q" 'q' $(echo INJECTED) \`echo INJECTED\` back\\slash\nsecond line\n`;
+
+      const secretsDir = (id: string): string => `${baseDir}/${id}/secrets`;
+      /** The step directory has no secrets directory (a missing one is the success). */
+      const secretsGone = async (id: string): Promise<boolean> =>
+        (await conn.exec(`test -e ${shellQuote(secretsDir(id))}; echo $?`)).stdout.trim() === '1';
+      /** Everything below the step directory that holds the distinct value, one path per line. */
+      const holders = async (id: string): Promise<string[]> =>
+        (
+          await conn.exec(
+            `grep -rlF -e ${shellQuote(DISTINCT)} ${shellQuote(`${baseDir}/${id}`)}; true`,
+          )
+        ).stdout
+          .split('\n')
+          .filter((line) => line.length > 0)
+          .sort();
+      /** How many processes of the server have the distinct value in their command line (the bracket keeps grep out). */
+      const inArguments = async (): Promise<number> =>
+        Number(
+          (await conn.exec(`ps -eo args | grep -c -e '[s]3cret-distinct-value'; true`)).stdout.trim(),
+        );
+
+      it('writes each secret to a private file the script reads through NAME_FILE, and nowhere else', async () => {
+        const script = [
+          'echo "$MYSECRET_FILE"',
+          'stat -c "%a" "$MYSECRET_FILE" "$(dirname "$MYSECRET_FILE")"',
+          'sha256sum < "$MYSECRET_FILE" | cut -d" " -f1',
+          'sha256sum < "$OTHER_FILE" | cut -d" " -f1',
+          'ls "$(dirname "$MYSECRET_FILE")" | sort',
+          'sleep 2',
+          'echo done',
+          '',
+        ].join('\n');
+        const id = nextId('secrets');
+        await startDetachedStep(conn, {
+          id,
+          script,
+          baseDir,
+          secrets: { MYSECRET: HARD, OTHER: 'the-other-value' },
+        });
+        await sleep(700);
+
+        // While the script runs the value is in exactly one file, and in no command line, script or environment file.
+        assert.deepEqual(await holders(id), [`${secretsDir(id)}/MYSECRET`]);
+        assert.equal(await inArguments(), 0, 'a value is in the arguments of a process');
+        const env = await conn.exec(`cat ${shellQuote(`${baseDir}/${id}/env`)}`);
+        assert.ok(!env.stdout.includes(DISTINCT));
+        assert.match(env.stdout, /export MYSECRET_FILE="\$SWELLWRIGHT_STEP_DIR\/secrets\/MYSECRET"/u);
+        const written = await conn.exec(`cat ${shellQuote(`${baseDir}/${id}/script.sh`)}`);
+        assert.equal(written.stdout, script);
+
+        const chunks: StepOutputChunk[] = [];
+        const final = await waitForStep(conn, id, {
+          baseDir,
+          pollMs: 100,
+          onOutput: (chunk) => {
+            chunks.push(chunk);
+          },
+        });
+        assert.equal(final.exitCode, 0);
+        assert.equal(
+          text(chunks, 'stdout'),
+          `${secretsDir(id)}/MYSECRET\n600\n700\n${sha256(HARD)}\n${sha256('the-other-value')}\nMYSECRET\nOTHER\ndone\n`,
+        );
+        assert.equal(await secretsGone(id), true, 'the files are gone when the script ended');
+        assert.deepEqual(await holders(id), [], 'and no copy of the value is left in the step');
+      });
+
+      it('carries bytes exactly: a long value, an odd one, and the absence of a trailing newline', async () => {
+        const long = randomBytes(40_000).toString('base64');
+        const odd = 'äö€😀 \r\n\t end';
+        const script = [
+          'for n in LONG ODD ONE; do',
+          '  eval "f=\\$${n}_FILE"',
+          '  printf "%s " "$(wc -c < "$f" | tr -d " ")"; sha256sum < "$f" | cut -d" " -f1',
+          'done',
+          '',
+        ].join('\n');
+        const result = await run(script, { secrets: { LONG: long, ODD: odd, ONE: 'x' } });
+        assert.equal(result.status.exitCode, 0);
+        assert.equal(
+          text(result.chunks, 'stdout'),
+          `${String(Buffer.byteLength(long))} ${sha256(long)}\n${String(Buffer.byteLength(odd))} ${sha256(odd)}\n1 ${sha256('x')}\n`,
+        );
+      });
+
+      it('gives a step without secrets no secrets directory and no secret variable', async () => {
+        const result = await run('env | grep -c "_FILE=" ; ls "$SWELLWRIGHT_STEP_DIR"\n');
+        assert.doesNotMatch(text(result.chunks, 'stdout'), /secrets/u);
+      });
+
+      it('removes the secrets whatever way the script ends', async () => {
+        const dir = (id: string): string => shellQuote(`${baseDir}/${id}`);
+
+        // The script fails.
+        const failed = await run('sleep 0.3\nexit 3\n', { secrets: { MYSECRET: DISTINCT } });
+        assert.equal(failed.status.exitCode, 3);
+        assert.equal(await secretsGone(failed.id), true, 'after a failure');
+
+        // The script kills its own shell: the wrapper is alive and cleans up.
+        const suicide = await run('kill -9 $$\n', { secrets: { MYSECRET: DISTINCT } });
+        assert.equal(suicide.status.exitCode, 137);
+        assert.equal(await secretsGone(suicide.id), true, 'after the script was killed');
+
+        // A person cancels it (TERM reaches the group, the wrapper records the end).
+        const termId = nextId('secrets-term');
+        await startDetachedStep(conn, {
+          id: termId,
+          script: 'sleep 300 &\nsleep 300\n',
+          baseDir,
+          secrets: { MYSECRET: DISTINCT },
+        });
+        await sleep(400);
+        assert.deepEqual(await holders(termId), [`${secretsDir(termId)}/MYSECRET`]);
+        await cancelStep(conn, termId, { baseDir });
+        assert.equal(await secretsGone(termId), true, 'after cancel (TERM)');
+
+        // A script that ignores TERM is killed outright, wrapper included; cancel sweeps up.
+        const killId = nextId('secrets-kill');
+        await startDetachedStep(conn, {
+          id: killId,
+          script: "trap '' TERM INT\nwhile :; do sleep 1; done\n",
+          baseDir,
+          secrets: { MYSECRET: DISTINCT },
+        });
+        await sleep(400);
+        await cancelStep(conn, killId, { baseDir, graceMs: 600 });
+        assert.equal((await getStepStatus(conn, killId, baseDir)).exitCode, 137);
+        assert.equal(await secretsGone(killId), true, 'after cancel (KILL)');
+
+        // Only the wrapper is killed: nothing records an end; the next look at the step says lost and sweeps up.
+        const lostId = nextId('secrets-lost');
+        await startDetachedStep(conn, {
+          id: lostId,
+          script: 'sleep 60\n',
+          baseDir,
+          secrets: { MYSECRET: DISTINCT },
+        });
+        await sleep(400);
+        const killed = await conn.exec(`kill -s KILL "$(cat ${dir(lostId)}/pid)"`);
+        assert.equal(killed.code, 0, killed.stderr);
+        await sleep(300);
+        assert.equal((await getStepStatus(conn, lostId, baseDir)).state, 'lost');
+        assert.equal(await secretsGone(lostId), true, 'after the wrapper alone was killed');
+
+        // A step that is removed while it runs takes everything with it.
+        const removeId = nextId('secrets-remove');
+        await startDetachedStep(conn, {
+          id: removeId,
+          script: 'sleep 60\n',
+          baseDir,
+          secrets: { MYSECRET: DISTINCT },
+        });
+        await sleep(400);
+        assert.equal(await removeStep(conn, removeId, { baseDir, force: true }), true);
+        assert.equal(await secretsGone(removeId), true, 'after remove');
+        assert.deepEqual(await holders(removeId), []);
+      });
+
+      it('refuses what cannot be delivered, before anything is sent', async () => {
+        const start = (secrets: Record<string, string>, env?: Record<string, string>) =>
+          startDetachedStep(conn, {
+            id: nextId('secrets-bad'),
+            script: 'true\n',
+            baseDir,
+            secrets,
+            ...(env === undefined ? {} : { env }),
+          });
+        for (const name of ['lower', '1BAD', 'A-B', 'A B', '', 'A'.repeat(65), 'X;rm']) {
+          await assert.rejects(start({ [name]: 'v' }), SshInputError, `the name "${name}"`);
+        }
+        await assert.rejects(start({ NUL: 'a\0b' }), SshInputError);
+        await assert.rejects(start({ BIG: 'x'.repeat(64 * 1024 + 1) }), SshInputError);
+        await assert.rejects(
+          start(Object.fromEntries(Array.from({ length: 17 }, (_, n) => [`S${String(n)}`, 'v']))),
+          SshInputError,
+        );
+        await assert.rejects(start({ CLASH: 'v' }, { CLASH_FILE: '/elsewhere' }), SshInputError);
+        const listing = await conn.exec(`ls ${shellQuote(baseDir)} 2>/dev/null | grep -c secrets-bad; true`);
+        assert.equal(listing.stdout.trim(), '0', 'no step was created for any of them');
+      });
+    });
+
     it('uses a per-user directory when none is given', async () => {
       const id = nextId('default-dir');
       const started = await startDetachedStep(conn, { id, script: 'echo default\n' });
@@ -617,6 +810,24 @@ export function defineStepScenarios(
         } finally {
           await conn.exec(`rm -rf "$HOME"/${shellQuote(dirName)}`);
         }
+      });
+
+      it('delivers secrets to a step that runs as root, and removes them', async (context) => {
+        if (env.sudo === undefined) {
+          context.skip('no sudo in this environment');
+          return;
+        }
+        const value = 's3cret-for-root-steps';
+        const result = await run('sha256sum < "$MYSECRET_FILE" | cut -d" " -f1\n', {
+          sudo: env.sudo.options,
+          secrets: { MYSECRET: value },
+        });
+        assert.equal(result.status.exitCode, 0);
+        assert.equal(text(result.chunks, 'stdout'), `${sha256(value)}\n`);
+        const left = await conn.exec(
+          `test -e ${shellQuote(`${baseDir}/${result.id}/secrets`)}; echo $?`,
+        );
+        assert.equal(left.stdout.trim(), '1', 'removed after the script ended');
       });
 
       it('hands the sudo password to nothing but sudo: the step never sees it', async (context) => {

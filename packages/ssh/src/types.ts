@@ -126,6 +126,15 @@ export interface DetachedStepSpec {
   sudo?: SudoOptions;
   /** Delivered through a 0600 file the wrapper sources, so it works whatever the server's `AcceptEnv` says. */
   env?: Readonly<Record<string, string>>;
+  /**
+   * Secret values, by name (`[A-Z][A-Z0-9_]{0,63}`), written to `<step dir>/secrets/<NAME>` (the directory 0700, the
+   * file 0600, owned by whoever owns the step directory) for the length of the step. The script finds the path in
+   * `<NAME>_FILE`. The values travel on the standard input of the launch only (like the script and the sudo
+   * password): never in a command line, in the environment of the SSH command, in `script.sh` or in the `env` file.
+   * The wrapper removes the directory the moment the script ends, whatever the way; `cancelStep`, `getStepStatus`
+   * (for a step that ended or was lost) and `removeStep` remove it too. A value must not contain NUL.
+   */
+  secrets?: Readonly<Record<string, string>>;
 }
 
 export type StepState = 'running' | 'exited' | 'lost' | 'unknown';

@@ -545,7 +545,7 @@ export const listSecretsRoute = defineRoute({
   path: '/secrets',
   tags: ['vault'],
   summary: 'List the secrets, without their values',
-  description: 'Works while the vault is sealed: names, types and dates are not secret.',
+  description: 'Works while the vault is sealed: names, types and dates are not secret. `expired` and `expiresInDays` are worked out by the server clock.',
   auth: 'any',
   permission: 'vault:read',
   responses: { 200: { description: 'The secrets.', schema: SecretListSchema } },
@@ -573,7 +573,7 @@ export const updateSecretRoute = defineRoute({
   tags: ['vault'],
   summary: 'Rename a secret, change its details or replace its value',
   description:
-    'A new `value` needs the vault open and moves the version forward; the old value is not kept. Renaming and the details work while sealed.',
+    'A new `value` needs the vault open and moves the version forward; the old value is not kept. Renaming and the details work while sealed. Setting a later `expiresAt` renews an expired secret; setting `null` removes the expiry.',
   auth: 'session',
   permission: 'vault:manage',
   stepUp: true,
@@ -603,7 +603,7 @@ export const revealSecretRoute = defineRoute({
   tags: ['vault'],
   summary: 'Show the value of a secret',
   description:
-    'The only way a value leaves the vault. Needs the vault open, the reveal permission and a fresh second factor, and is recorded before the value is sent.',
+    'The only way a value leaves the vault. Needs the vault open, the reveal permission and a fresh second factor, and is recorded before the value is sent. An expired secret can still be revealed (to read it and rotate it); the answer says `expired: true`.',
   auth: 'session',
   permission: 'vault:reveal',
   stepUp: true,
@@ -1161,7 +1161,7 @@ export const removeAccessRoute = defineRoute({
 });
 
 const SSH_ERRORS =
-  'Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`.';
+  'Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), `secret_expired` (a secret the access entry names has expired: nothing was sent with it; `details` has `secretId` and `secretName`; renew its expiry or replace the secret), 423 `vault_sealed`, 429 `rate_limited`.';
 
 export const scanHostKeyRoute = defineRoute({
   operationId: 'scanHostKey',

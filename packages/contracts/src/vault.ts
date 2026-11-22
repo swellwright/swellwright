@@ -14,6 +14,26 @@ export const SECRET_TYPES = [
 export const SecretTypeSchema = z.enum(SECRET_TYPES).meta({ id: 'SecretType' });
 export type SecretType = z.infer<typeof SecretTypeSchema>;
 
+/**
+ * The kinds of secret that may be handed to a command run as a file (ADR 0042). Text that a script reads: a token, a
+ * key of a node, a password. A private key (`ssh_key`) and a CA key (`ssh_ca`) are structured and far more powerful
+ * than anything a script needs, so they are left out.
+ */
+export const RUN_SECRET_TYPES = [
+  'generic',
+  'panel_token',
+  'provider_token',
+  'telegram',
+  'dns_oauth',
+  'ssh_password',
+] as const satisfies readonly (typeof SECRET_TYPES)[number][];
+export type RunSecretType = (typeof RUN_SECRET_TYPES)[number];
+export const isRunSecretType = (type: string): type is RunSecretType =>
+  (RUN_SECRET_TYPES as readonly string[]).includes(type);
+
+/** The console warns when a secret expires within this many days. */
+export const SECRET_EXPIRY_WARN_DAYS = 14;
+
 export const VAULT_STATES = ['uninitialized', 'sealed', 'unsealed'] as const;
 
 export const VaultStatusSchema = z
@@ -105,6 +125,18 @@ export const SecretViewSchema = z
       .positive()
       .describe('Moves forward every time the value is replaced.'),
     expiresAt: z.iso.datetime().nullable(),
+    expired: z
+      .boolean()
+      .describe(
+        'The expiry has passed (`expiresAt` is now or earlier, by the server clock). An expired secret is not handed to anything that uses it: a server login, a plugin, a run (409 `secret_expired`). It can still be revealed, renewed or replaced.',
+      ),
+    expiresInDays: z
+      .number()
+      .int()
+      .nullable()
+      .describe(
+        'Whole days until the expiry, rounded up; 0 or less once it has passed. Null when the secret has no expiry.',
+      ),
     createdAt: z.iso.datetime(),
     updatedAt: z.iso.datetime(),
     valueChangedAt: z.iso.datetime(),
@@ -159,6 +191,11 @@ export const RevealedSecretSchema = z
     name: z.string(),
     type: SecretTypeSchema,
     version: z.number().int().positive(),
+    expired: z
+      .boolean()
+      .describe(
+        'The secret has expired. A person may still read it, to rotate it; nothing else is given it.',
+      ),
     value: z.string().describe('The secret. Not kept anywhere by the console after it is hidden.'),
   })
   .meta({ id: 'RevealedSecret' });
