@@ -686,8 +686,7 @@ describe('which names a run needs', () => {
     assert.deepEqual(namesToResolve(healthyFleet(), pack({ dns: { enabled: false } }), null), []);
     const fleet = healthyFleet();
     const model = { ...fleet, hosts: [{ ...at(fleet.hosts, 0), address: 'h.example.org' }] };
-    assert.ok(
-      !namesToResolve(model, pack({ hostAddress: 'node-address' }), null).includes('h.example.org'),
-    );
+    const names = namesToResolve(model, pack({ hostAddress: 'node-address' }), null);
+    assert.ok(names.every((name) => name !== 'h.example.org'));
   });
 });

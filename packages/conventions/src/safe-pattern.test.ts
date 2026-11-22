@@ -54,8 +54,8 @@ describe('safe patterns: what they match', () => {
   });
 
   it('handles classes and shorthands', () => {
-    assert.equal(matches('[A-Z]{2}-\\d{2}', 'NL-01'), true);
-    assert.equal(matches('[A-Z]{2}-\\d{2}', 'nl-01'), false);
+    assert.equal(matches('[A-Z]{2}-\\d{2}', 'XX-01'), true);
+    assert.equal(matches('[A-Z]{2}-\\d{2}', 'xx-01'), false);
     assert.equal(matches('[^0-9]+', 'abc'), true);
     assert.equal(matches('[^0-9]+', 'a1c'), false);
     assert.equal(matches('\\w+\\s\\S+', 'ab cd'), true);
@@ -72,12 +72,12 @@ describe('safe patterns: what they match', () => {
 
   it('works on whole characters, emoji and scripts included', () => {
     assert.equal(
-      matches('\\p{Regional_Indicator}{2} (🎯|🌐) [A-Z]{2}-\\d{2} - .+', '🇳🇱 🎯 NL-01 - selective'),
+      matches('\\p{Regional_Indicator}{2} (🎯|🌐) [A-Z]{2}-\\d{2} - .+', '🇽🇽 🎯 XX-01 - main'),
       true,
     );
-    assert.equal(matches('\\p{Regional_Indicator}{2}', '🇳🇱'), true);
+    assert.equal(matches('\\p{Regional_Indicator}{2}', '🇽🇽'), true);
     assert.equal(matches('.', '🎯'), true, 'one emoji is one character');
-    assert.equal(matches('.', '🇳🇱'), false, 'a flag is two characters');
+    assert.equal(matches('.', '🇽🇽'), false, 'a flag is two characters');
     assert.equal(matches('\\p{L}+', 'Привет'), true);
     assert.equal(matches('\\P{L}+', 'abc'), false);
     assert.equal(matches('\\u{1F3AF}', '🎯'), true);
@@ -131,10 +131,16 @@ describe('safe patterns: what is refused', () => {
     ['a\\', /backslash/u],
     ['\\a', /not supported/u],
     ['\\p', /needs a property/u],
-    ['\\p{NoSuchProperty}', /valid/u],
+    ['\\p{NoSuchProperty}', /not a supported/iu],
+    ['\\p{Script=Klingon}', /not a supported/iu],
+    ['\\p{Is_Alphabetic}', /not a supported/iu],
     ['\\u12', /valid/u],
     ['\\xZZ', /valid/u],
-    ['[z-a]', /valid/u],
+    ['[z-a]', /out of order/u],
+    ['[\\d-x]', /cannot start or end/u],
+    ['[a-\\w]', /cannot start or end/u],
+    ['[\\bx]', /not supported/u],
+    ['[a-\\p{L}]', /cannot start or end/u],
   ];
   for (const [pattern, why] of refused) {
     it(`refuses ${JSON.stringify(pattern)}`, () => {
@@ -207,5 +213,86 @@ describe('safe patterns: the patterns that stop other engines', () => {
     assert.equal(matches('(a|aa)+', 'aaaaaaaaaaaaaaaa'), true);
     assert.equal(matches('(a?){3}a{3}', 'aaa'), true);
     assert.equal(matches('(a?){3}a{3}', 'aa'), false);
+  });
+});
+
+describe('safe patterns: single characters are decided here, not by the engine of the language', () => {
+  // The shorthands, the dot and the classes are code of this module. The engine of the language is the reference they
+  // must agree with, so each is compared with it over every character of the places where the two could differ.
+  const spread: number[] = [];
+  for (let cp = 0; cp <= 0x3100; cp += 1) {
+    spread.push(cp);
+  }
+  for (let cp = 0xfe00; cp <= 0xff10; cp += 1) {
+    spread.push(cp);
+  }
+  spread.push(0x1f300, 0x1f3af, 0x1f1f3, 0x1f1f1, 0x10000, 0x10ffff);
+  const sources = [
+    '\\d',
+    '\\D',
+    '\\w',
+    '\\W',
+    '\\s',
+    '\\S',
+    '.',
+    '[a-f]',
+    '[^a-f]',
+    '[\\d_]',
+    '[\\w-]',
+    '[a\\-z]',
+    '[^\\s\\d]',
+    '[\\x41-\\x5a]',
+    '[\\u{1F300}-\\u{1FAFF}]',
+    '[\\]\\\\^]',
+    '[-a]',
+    '[a-]',
+    '[.*+?()|{}$]',
+  ];
+  for (const source of sources) {
+    it(`${source} agrees with the engine of the language`, () => {
+      const compiled = compilePattern(source);
+      const reference = new RegExp(`^(?:${source})$`, 'u');
+      for (const cp of spread) {
+        const value = String.fromCodePoint(cp);
+        assert.equal(
+          compiled.matches(value),
+          reference.test(value),
+          `${source} on U+${cp.toString(16)}`,
+        );
+      }
+    });
+  }
+
+  it('reads ranges, negation and escapes inside a class', () => {
+    assert.equal(matches('[a-c]+', 'abcabc'), true);
+    assert.equal(matches('[a-c]+', 'abd'), false);
+    assert.equal(matches('[a\\-z]', '-'), true);
+    assert.equal(matches('[a\\-z]', 'b'), false);
+    assert.equal(matches('[\\]]', ']'), true);
+    assert.equal(matches('[a-]', '-'), true, 'a hyphen at the end is a hyphen');
+    assert.equal(matches('[-a]', '-'), true, 'a hyphen at the start is a hyphen');
+    assert.equal(matches('[\\d.]+', '3.14'), true);
+    assert.equal(matches('[\\p{L}\\d]+', 'Ab1Ж'), true);
+    assert.equal(matches('[\\p{L}\\d]+', 'Ab_'), false);
+    assert.equal(matches('[^\\p{L}]', '7'), true);
+    assert.equal(matches('[^\\p{L}]', 'q'), false);
+    assert.equal(matches('[\\u0041-\\u005a]', 'Q'), true);
+  });
+
+  it('knows its list of Unicode properties, and the aliases of the scripts', () => {
+    assert.equal(matches('\\p{Script=Cyrillic}+', 'Привет'), true);
+    assert.equal(matches('\\p{sc=Latin}+', 'hello'), true);
+    assert.equal(matches('\\p{sc=Latin}+', 'Привет'), false);
+    assert.equal(matches('\\p{Script_Extensions=Han}', '中'), true);
+    assert.equal(matches('\\p{Lu}\\p{Ll}+', 'Hello'), true);
+    assert.equal(matches('\\p{Nd}+', '2026'), true);
+    assert.equal(matches('\\p{Extended_Pictographic}', '🎯'), true);
+    assert.equal(matches('\\P{Emoji}+', 'abc'), true);
+  });
+
+  it('never gives the text of a pattern to the engine: what is not on the list is refused whatever it says', () => {
+    for (const hostile of ['\\p{(?:a+)+$}', '\\p{ L }', '\\p{}', '\\p{l}']) {
+      assert.notEqual(patternProblem(hostile), null, hostile);
+    }
   });
 });

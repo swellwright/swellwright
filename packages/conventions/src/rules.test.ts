@@ -213,7 +213,7 @@ describe('host.remark-pattern', () => {
     assert.equal(resolved?.inactive, 'needs_params');
   });
   it('reports a remark that does not match', () => {
-    const hosts = [host(1, '🇳🇱 🎯 NL-01 - selective', null), host(2, 'plain remark', null)];
+    const hosts = [host(1, '🇽🇽 🎯 XX-01 - main', null), host(2, 'plain remark', null)];
     const found = find({ ...healthyFleet(), hosts }, rule, { params: { pattern } });
     assert.deepEqual(
       found.map((f) => f.object.name),
@@ -748,12 +748,12 @@ describe('node.plugin-exists', () => {
 describe('name patterns', () => {
   it('node.name-pattern checks node names against the pattern of the pack', () => {
     const fleet = healthyFleet();
-    const nodes = [node(1, 'NL-01', null), node(2, 'nl one', null)];
+    const nodes = [node(1, 'XX-01', null), node(2, 'xx one', null)];
     assert.deepEqual(
       find({ ...fleet, nodes }, 'node.name-pattern', {
         params: { pattern: '[A-Z]{2}-\\d{2}' },
       }).map((f) => f.object.name),
-      ['nl one'],
+      ['xx one'],
     );
     assert.deepEqual(find({ ...fleet, nodes }, 'node.name-pattern'), []);
   });

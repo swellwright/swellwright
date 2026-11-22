@@ -33,7 +33,7 @@ describe('the built-in pack', () => {
   it('names nothing that belongs to an installation: no domain, no address, no marker, no pattern', () => {
     const text = JSON.stringify(builtInDocument());
     assert.doesNotMatch(text, /\d+\.\d+\.\d+\.\d+/u);
-    assert.doesNotMatch(text, /🎯|🌐|🧪|🇳|rmw|kravenrus/iu);
+    assert.doesNotMatch(text, /🎯|🌐|🧪|🇳/u);
     for (const rule of RULES) {
       for (const name of rule.patternParams) {
         assert.equal(

@@ -59,8 +59,10 @@ Patterns in a pack are **not** JavaScript regular expressions. A pack arrives fr
 A pattern always matches a **whole value** (`^` at the very start and `$` at the very end are accepted and ignored). Supported:
 
 - literals, `.`, and escapes `\d \D \w \W \s \S \p{...} \P{...} \uXXXX \u{...} \xHH \n \t \r` and an escaped symbol
-- classes `[A-Z0-9_-]`, groups `( )`, `(?: )`, named groups (they do not capture), alternation `|`
+- classes `[A-Z0-9_-]` (members, ranges, `^` for negation, the same escapes inside), groups `( )`, `(?: )`, named groups (they do not capture), alternation `|`
 - quantifiers `* + ? {n} {n,} {n,m}`, lazy forms allowed (they change nothing for a yes-or-no match)
+
+`\p{...}` and `\P{...}` take a name from a **fixed list**: a general category (`L`, `Lu`, `Ll`, `N`, `Nd`, `P`, `S`, `Z` and the others of the standard, short or long), a binary property (`Alphabetic`, `Uppercase`, `Lowercase`, `White_Space`, `Emoji`, `Emoji_Presentation`, `Extended_Pictographic`, `Regional_Indicator`, `ASCII`, `Any` and a few more) or `Script=` (or `sc=`, `Script_Extensions=`, `scx=`) with `Latin`, `Cyrillic`, `Greek`, `Han`, `Hiragana`, `Katakana`, `Hangul`, `Arabic`, `Hebrew`, `Thai`, `Devanagari`, `Armenian`, `Georgian` or `Common`. Anything else is refused with the position, so that what a pack may ask of the language's engine is known. No other text of a pack reaches that engine: the shorthands, the dot and the classes are decided by code of Swellwright, and a test compares them with the engine over every character where the two could differ.
 
 Refused, with the character position: back-references, lookahead and lookbehind, word boundaries (`\b`), an anchor in the middle, a quantifier on nothing, a count above 64, a pattern longer than 256 characters or one that needs more than 5000 automaton states. A value longer than 512 characters does not match. When you save, every pattern is checked, so the editor tells you what is wrong before anything runs.
 

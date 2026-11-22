@@ -5,16 +5,19 @@
 //
 // How: the structure of the pattern (sequence, alternation, groups, repetition) is parsed here and run as a
 // Thompson automaton, which keeps a set of states and never backs up, so the time is the length of the value times the
-// size of the automaton. The single characters (a class like `[A-Z]`, `\d`, `\p{L}`, a dot) are tested with the
-// built-in engine, one character at a time, which cannot back up either.
+// size of the automaton. The single characters (a class like `[A-Z]`, `\d`, `\p{L}`, a dot) are decided by code of
+// this module as well: no text of a pack is ever handed to the regular expression engine of the language, so there is
+// nothing for it to compile, and a pack cannot make it do anything but the answers below. Only the Unicode properties
+// are looked up in the engine, and only from a fixed list of constant expressions (see `PROPERTIES`).
 //
 // The language is a subset on purpose, and it is always anchored: a pattern matches a whole value. Supported: literals,
 // `.`, escapes (`\d \D \w \W \s \S \p{..} \P{..} \uXXXX \u{...} \xHH \n \t \r` and an escaped symbol), classes
-// `[...]`, groups `( )`, `(?: )` and named groups (they do not capture), alternation `|`, and the quantifiers
-// `* + ? {n} {n,} {n,m}` with an optional lazy `?` (which changes nothing for a yes-or-no match). `^` at the very start
-// and `$` at the very end are accepted and ignored. Refused, with a message: back-references, lookahead and
-// lookbehind, word boundaries, a quantifier on nothing, an anchor in the middle, a count above 64, a pattern longer
-// than 256 characters or one that would need more than 5000 automaton states.
+// `[...]` (members, ranges, `^` for negation, the same escapes), groups `( )`, `(?: )` and named groups (they do not
+// capture), alternation `|`, and the quantifiers `* + ? {n} {n,} {n,m}` with an optional lazy `?` (which changes
+// nothing for a yes-or-no match). `^` at the very start and `$` at the very end are accepted and ignored. Refused,
+// with a message: back-references, lookahead and lookbehind, word boundaries, a quantifier on nothing, an anchor in
+// the middle, a count above 64, a pattern longer than 256 characters or one that would need more than 5000 automaton
+// states, and a Unicode property that is not in the list.
 
 export class UnsafePatternError extends Error {
   constructor(
@@ -58,14 +61,129 @@ const SIMPLE_ESCAPES: Readonly<Record<string, number>> = {
 
 const isHex = (text: string): boolean => /^[0-9a-fA-F]+$/u.test(text);
 
-/** A test for one character that the built-in engine decides: a class, a property, a shorthand. */
-function nativeTest(source: string, position: number): Test {
-  let re: RegExp;
-  try {
-    re = new RegExp(`^(?:${source})$`, 'u');
-  } catch {
-    throw new UnsafePatternError('Not a valid character class or escape', position);
-  }
+// ---- single characters ------------------------------------------------------------------------------------------
+
+/** What the engine of the language means by `\d`, `\w`, `\s` and `.` (without the `s` flag), written out. */
+const isDigit: Test = (cp) => cp >= 0x30 && cp <= 0x39;
+const isWord: Test = (cp) =>
+  isDigit(cp) || (cp >= 0x41 && cp <= 0x5a) || (cp >= 0x61 && cp <= 0x7a) || cp === 0x5f;
+const WHITESPACE: ReadonlySet<number> = new Set([
+  0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x20, 0xa0, 0x1680, 0x2028, 0x2029, 0x202f, 0x205f, 0x3000, 0xfeff,
+]);
+const isSpace: Test = (cp) => WHITESPACE.has(cp) || (cp >= 0x2000 && cp <= 0x200a);
+const isNotLineBreak: Test = (cp) => cp !== 0x0a && cp !== 0x0d && cp !== 0x2028 && cp !== 0x2029;
+const not =
+  (test: Test): Test =>
+  (cp) =>
+    !test(cp);
+
+const literalTest =
+  (cp: number): Test =>
+  (other) =>
+    other === cp;
+const literal = (cp: number): Node => ({ t: 'char', test: literalTest(cp) });
+
+/**
+ * The Unicode properties a pattern may use, each decided by a regular expression made here from a constant. The
+ * properties of the language are many and some are new with every release; a fixed list is a promise that what a pack
+ * may ask of the engine is known: general categories, the binary properties that are used for names and remarks, and
+ * the scripts people write names in.
+ */
+const GENERAL_CATEGORIES = [
+  'L',
+  'Lu',
+  'Ll',
+  'Lt',
+  'Lm',
+  'Lo',
+  'LC',
+  'M',
+  'Mn',
+  'Mc',
+  'Me',
+  'N',
+  'Nd',
+  'Nl',
+  'No',
+  'P',
+  'Pc',
+  'Pd',
+  'Ps',
+  'Pe',
+  'Pi',
+  'Pf',
+  'Po',
+  'S',
+  'Sm',
+  'Sc',
+  'Sk',
+  'So',
+  'Z',
+  'Zs',
+  'Zl',
+  'Zp',
+  'C',
+  'Cc',
+  'Cf',
+  'Co',
+  'Cn',
+  'Letter',
+  'Uppercase_Letter',
+  'Lowercase_Letter',
+  'Titlecase_Letter',
+  'Modifier_Letter',
+  'Other_Letter',
+  'Mark',
+  'Number',
+  'Decimal_Number',
+  'Letter_Number',
+  'Other_Number',
+  'Punctuation',
+  'Symbol',
+  'Math_Symbol',
+  'Currency_Symbol',
+  'Separator',
+  'Space_Separator',
+  'Other',
+] as const;
+const BINARY_PROPERTIES = [
+  'Any',
+  'ASCII',
+  'Alphabetic',
+  'Uppercase',
+  'Lowercase',
+  'White_Space',
+  'Ideographic',
+  'ASCII_Hex_Digit',
+  'Hex_Digit',
+  'Emoji',
+  'Emoji_Presentation',
+  'Emoji_Modifier',
+  'Emoji_Modifier_Base',
+  'Emoji_Component',
+  'Extended_Pictographic',
+  'Regional_Indicator',
+] as const;
+const SCRIPTS = [
+  'Latin',
+  'Cyrillic',
+  'Greek',
+  'Han',
+  'Hiragana',
+  'Katakana',
+  'Hangul',
+  'Arabic',
+  'Hebrew',
+  'Thai',
+  'Devanagari',
+  'Armenian',
+  'Georgian',
+  'Common',
+] as const;
+
+/** A test that asks the engine about one character at a time and remembers the answers for a while. */
+function propertyTest(expression: string): Test {
+  const re = new RegExp(`^\\p{${expression}}$`, 'u');
   const cache = new Map<number, boolean>();
   return (cp) => {
     const known = cache.get(cp);
@@ -78,6 +196,28 @@ function nativeTest(source: string, position: number): Test {
     }
     return result;
   };
+}
+
+const PROPERTIES: ReadonlyMap<string, Test> = (() => {
+  const map = new Map<string, Test>();
+  for (const name of [...GENERAL_CATEGORIES, ...BINARY_PROPERTIES]) {
+    map.set(name, propertyTest(name));
+  }
+  for (const script of SCRIPTS) {
+    const plain = propertyTest(`Script=${script}`);
+    const extended = propertyTest(`Script_Extensions=${script}`);
+    map.set(`Script=${script}`, plain);
+    map.set(`sc=${script}`, plain);
+    map.set(`Script_Extensions=${script}`, extended);
+    map.set(`scx=${script}`, extended);
+  }
+  return map;
+})();
+
+/** A single character test and, when it stands for exactly one character, which (a range may start or end on it). */
+interface Atom {
+  readonly test: Test;
+  readonly cp: number | null;
 }
 
 class Parser {
@@ -232,9 +372,9 @@ class Parser {
         return { t: 'char', test: this.charClass(end) };
       case '.':
         this.pos += 1;
-        return { t: 'char', test: nativeTest('.', at) };
+        return { t: 'char', test: isNotLineBreak };
       case '\\':
-        return { t: 'char', test: this.escape(end) };
+        return { t: 'char', test: this.escape(end, false).test };
       case '*':
       case '+':
       case '?':
@@ -296,51 +436,102 @@ class Parser {
 
   private charClass(end: number): Test {
     const open = this.pos;
-    let i = this.pos + 1;
-    if (this.chars[i] === '^') {
-      i += 1;
+    this.pos += 1;
+    let negated = false;
+    if (this.chars[this.pos] === '^') {
+      negated = true;
+      this.pos += 1;
     }
-    // A `]` right after the opening is an ordinary member in some dialects and an empty class in others: refuse the doubt.
-    while (i < end) {
-      const c = this.chars[i];
-      if (c === '\\') {
-        i += 2;
-        continue;
+    const singles = new Set<number>();
+    const ranges: [number, number][] = [];
+    const tests: Test[] = [];
+    let members = 0;
+    for (;;) {
+      if (this.pos >= end) {
+        throw new UnsafePatternError('A character class is not closed', open);
       }
-      if (c === '[') {
-        throw new UnsafePatternError('Nested or set-operation classes are not supported', i);
-      }
+      const c = this.chars[this.pos];
       if (c === ']') {
+        this.pos += 1;
         break;
       }
-      i += 1;
+      if (c === '[') {
+        throw new UnsafePatternError('Nested or set-operation classes are not supported', this.pos);
+      }
+      const from = this.classAtom(end);
+      members += 1;
+      const next = this.chars[this.pos + 1];
+      if (
+        this.chars[this.pos] === '-' &&
+        next !== undefined &&
+        next !== ']' &&
+        this.pos + 1 < end
+      ) {
+        const at = this.pos;
+        this.pos += 1;
+        const to = this.classAtom(end);
+        if (from.cp === null || to.cp === null) {
+          throw new UnsafePatternError(
+            'A range cannot start or end with a class such as `\\d`',
+            at,
+          );
+        }
+        if (to.cp < from.cp) {
+          throw new UnsafePatternError('A range is out of order', at);
+        }
+        ranges.push([from.cp, to.cp]);
+      } else if (from.cp === null) {
+        tests.push(from.test);
+      } else {
+        singles.add(from.cp);
+      }
     }
-    if (i >= end || this.chars[i] !== ']') {
-      throw new UnsafePatternError('A character class is not closed', open);
-    }
-    const text = this.chars.slice(open, i + 1).join('');
-    if (text === '[]' || text === '[^]') {
+    if (members === 0) {
       throw new UnsafePatternError('A character class is empty', open);
     }
-    this.pos = i + 1;
-    return nativeTest(text, open);
+    const inside: Test = (cp) =>
+      singles.has(cp) ||
+      ranges.some(([low, high]) => cp >= low && cp <= high) ||
+      tests.some((test) => test(cp));
+    return negated ? not(inside) : inside;
   }
 
-  private escape(end: number): Test {
+  /** One member of a class: an escape, or a character that stands for itself. */
+  private classAtom(end: number): Atom {
+    const c = this.chars[this.pos];
+    if (c === '\\') {
+      return this.escape(end, true);
+    }
+    const cp = c?.codePointAt(0);
+    if (cp === undefined) {
+      throw new UnsafePatternError('Unexpected end of the pattern', this.pos);
+    }
+    this.pos += 1;
+    return { test: literalTest(cp), cp };
+  }
+
+  /** An escape, outside or inside a class: the test for it and, when it stands for one character, that character. */
+  private escape(end: number, inClass: boolean): Atom {
     const at = this.pos;
     const c = this.chars[this.pos + 1];
     if (c === undefined || this.pos + 1 >= end) {
       throw new UnsafePatternError('The pattern ends with a backslash', at);
     }
     this.pos += 2;
+    const single = (cp: number): Atom => ({ test: literalTest(cp), cp });
     switch (c) {
       case 'd':
+        return { test: isDigit, cp: null };
       case 'D':
+        return { test: not(isDigit), cp: null };
       case 'w':
+        return { test: isWord, cp: null };
       case 'W':
+        return { test: not(isWord), cp: null };
       case 's':
+        return { test: isSpace, cp: null };
       case 'S':
-        return nativeTest(`\\${c}`, at);
+        return { test: not(isSpace), cp: null };
       case 'p':
       case 'P': {
         if (this.chars[this.pos] !== '{') {
@@ -350,11 +541,22 @@ class Parser {
         if (close === -1) {
           throw new UnsafePatternError('A property is not closed', at);
         }
-        const name = this.chars.slice(this.pos, close + 1).join('');
+        const name = this.chars.slice(this.pos + 1, close).join('');
+        const test = PROPERTIES.get(name);
+        if (test === undefined) {
+          throw new UnsafePatternError(
+            'Not a supported Unicode property: use a general category such as `L` or `Nd`, one of Alphabetic, Uppercase, Lowercase, Emoji, Extended_Pictographic, Regional_Indicator and the like, or `Script=` with Latin, Cyrillic, Greek, Han and the like',
+            at,
+          );
+        }
         this.pos = close + 1;
-        return nativeTest(`\\${c}${name}`, at);
+        return { test: c === 'p' ? test : not(test), cp: null };
       }
       case 'b':
+        throw new UnsafePatternError(
+          inClass ? 'The escape `\\b` is not supported' : 'Word boundaries are not supported',
+          at,
+        );
       case 'B':
         throw new UnsafePatternError('Word boundaries are not supported', at);
       case 'k':
@@ -367,14 +569,14 @@ class Parser {
             throw new UnsafePatternError('Not a valid code point escape', at);
           }
           this.pos = close + 1;
-          return literalTest(Number.parseInt(hex, 16));
+          return single(Number.parseInt(hex, 16));
         }
         const hex = this.chars.slice(this.pos, this.pos + 4).join('');
         if (hex.length !== 4 || !isHex(hex)) {
           throw new UnsafePatternError('Not a valid `\\uXXXX` escape', at);
         }
         this.pos += 4;
-        return literalTest(Number.parseInt(hex, 16));
+        return single(Number.parseInt(hex, 16));
       }
       case 'x': {
         const hex = this.chars.slice(this.pos, this.pos + 2).join('');
@@ -382,7 +584,7 @@ class Parser {
           throw new UnsafePatternError('Not a valid `\\xHH` escape', at);
         }
         this.pos += 2;
-        return literalTest(Number.parseInt(hex, 16));
+        return single(Number.parseInt(hex, 16));
       }
       default: {
         if (/^[1-9]$/u.test(c)) {
@@ -390,7 +592,7 @@ class Parser {
         }
         const simple = SIMPLE_ESCAPES[c];
         if (simple !== undefined) {
-          return literalTest(simple);
+          return single(simple);
         }
         // An escaped symbol or a letter that means nothing special stands for itself; escaped letters are refused,
         // since `\a` would mean different things in different dialects.
@@ -401,17 +603,11 @@ class Parser {
         if (cp === undefined) {
           throw new UnsafePatternError('Unexpected end of the pattern', at);
         }
-        return literalTest(cp);
+        return single(cp);
       }
     }
   }
 }
-
-const literalTest =
-  (cp: number): Test =>
-  (other) =>
-    other === cp;
-const literal = (cp: number): Node => ({ t: 'char', test: literalTest(cp) });
 
 // ---- the automaton ----------------------------------------------------------------------------------------------
 
