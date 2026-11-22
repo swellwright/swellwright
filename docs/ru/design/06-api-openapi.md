@@ -36,7 +36,7 @@ OpenAPI 3.1 — первоклассный артефакт: документа�
 | panels | `POST /panels` (мастер подключения), `GET /panels/{id}`, `/health`, `/compatibility`, `/tokens` |
 | panel-objects | чтение кэша и прокси записи: `/panels/{id}/nodes`, `/hosts`, `/profiles`, `/squads`, `/templates`, `/subscription-settings`, `/page-configs`, `/plugins`, `/snippets`, `/billing`, `/users` (опц.) |
 | panel-console | `GET /panels/{id}/console/operations`, `POST /panels/{id}/console/plan`, `POST /panels/{id}/console/execute` (согласование) |
-| snapshots | `/panels/{id}/snapshots`, `/diff?from=&to=`, `POST /snapshots/{id}/restore` (объект) |
+| snapshots | Сделано (ADR 0043): `GET /panel/snapshots` (`panel:read`, `limit`, `offset`, новые первыми, с настройками задачи), `POST /panel/snapshots` (`panel:write`, только сессия, `{ label? }`, 201; сам читает панель), `GET /panel/snapshots/{id}`, `DELETE /panel/snapshots/{id}` (`panel:write`, step-up, 204), `GET /panel/snapshots/{id}/diff?against=live\|<id>` (`refresh`, `includeUnchanged`) и `GET /panel/snapshots/{id}/export` (JSON-файл с масками); коды `snapshot_other_panel` 409, `snapshot_too_large` 413, `snapshot_corrupt` 409 и коды панели из ADR 0041; в планах: `POST /snapshots/{id}/restore` (объект, фаза 7) |
 | conventions | CRUD, `POST /conventions/check` (дрейф), `POST /conventions/fix` (план) |
 | chains | CRUD цепочек хопов, `POST /chains/{id}/verify`, `GET /chains/{id}/topology` |
 | dns | `/dns/providers`, `/dns/zones`, `/dns/records`, `POST /dns/plan`, `/dns/apply`, `/dns/propagation`, `/dns/changes` |

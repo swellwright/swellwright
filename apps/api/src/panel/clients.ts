@@ -4,6 +4,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { validateTargetAddress } from '@swellwright/ssh';
 import {
   type AddressGuard,
+  maskKeyIdOf,
   PanelClient,
   parsePanelUrl,
   PanelUrlError,
@@ -32,6 +33,14 @@ export class PanelClients {
     this.maskKey = Buffer.from(
       hkdfSync('sha256', config.authKey, Buffer.alloc(0), 'swellwright:panel-mask:v1', 32),
     );
+  }
+
+  /**
+   * A public identifier of the key behind the fingerprints in masks. A snapshot keeps it, so that a later comparison
+   * knows whether two fingerprints can be compared at all (ADR 0043). It reveals nothing about the key.
+   */
+  get maskKeyId(): string {
+    return maskKeyIdOf(this.maskKey);
   }
 
   /** The reason an address is refused, or null. For a name this judges the name; its answers are judged at connect time. */

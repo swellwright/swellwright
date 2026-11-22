@@ -31,6 +31,7 @@ import {
   PASSWORD_HASHER,
   PLUGIN_NETWORK,
   SECRET_BOX,
+  SNAPSHOT_CLOCK,
   VAULT_KDF,
 } from './tokens.js';
 import {
@@ -46,6 +47,9 @@ import { PanelController } from './panel/panel.controller.js';
 import { PanelMonitorService } from './panel/panel-monitor.service.js';
 import { PanelReaderService } from './panel/panel-reader.service.js';
 import { PanelService } from './panel/panel.service.js';
+import { PanelSnapshotScheduler } from './panel/snapshots/snapshot-scheduler.service.js';
+import { PanelSnapshotsController } from './panel/snapshots/snapshots.controller.js';
+import { PanelSnapshotsService } from './panel/snapshots/snapshots.service.js';
 import { PluginBroker } from './plugins/broker.js';
 import { PluginNetwork } from './plugins/host/network.js';
 import { PluginHostService } from './plugins/host/plugin-host.service.js';
@@ -79,6 +83,8 @@ export interface AppOptions {
   readonly pluginNetwork?: PluginNetwork;
   /** The clock of the update check (milliseconds since the epoch), so that tests need not wait a day. */
   readonly clock?: () => number;
+  /** The clock of the panel snapshots (their time, the job's interval, the retention by day), so that tests need not wait. */
+  readonly snapshotClock?: () => number;
 }
 
 function checksFrom(config: AppConfig, database: Database | undefined): ReadinessCheck[] {
@@ -121,6 +127,7 @@ export class AppModule implements OnApplicationShutdown {
         CommandsController,
         ArtifactsController,
         PanelController,
+        PanelSnapshotsController,
       ],
       providers: [
         { provide: CONFIG, useValue: config },
@@ -158,6 +165,9 @@ export class AppModule implements OnApplicationShutdown {
         PanelService,
         PanelReaderService,
         PanelMonitorService,
+        { provide: SNAPSHOT_CLOCK, useValue: options.snapshotClock ?? (() => Date.now()) },
+        PanelSnapshotsService,
+        PanelSnapshotScheduler,
         PluginRuntime,
         PluginBroker,
         PluginsService,

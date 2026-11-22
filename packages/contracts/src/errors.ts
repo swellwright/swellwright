@@ -43,6 +43,10 @@ export const ERROR_CODES = [
   'panel_contract_changed',
   'panel_unsupported_version',
   'panel_rate_limited',
+  // Snapshots of the panel (ADR 0043).
+  'snapshot_other_panel',
+  'snapshot_too_large',
+  'snapshot_corrupt',
   'internal_error',
 ] as const;
 

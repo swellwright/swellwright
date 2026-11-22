@@ -38,7 +38,7 @@ OpenAPI 3.1 is a first-class artifact: documentation, SDKs, the CLI, MCP and con
 | panels | `POST /panels` (connection wizard), `GET /panels/{id}`, `/health`, `/compatibility`, `/tokens` |
 | panel-objects | cache reads and a write proxy: `/panels/{id}/nodes`, `/hosts`, `/profiles`, `/squads`, `/templates`, `/subscription-settings`, `/page-configs`, `/plugins`, `/snippets`, `/billing`, `/users` (optional) |
 | panel-console | `GET /panels/{id}/console/operations`, `POST /panels/{id}/console/plan`, `POST /panels/{id}/console/execute` (approval) |
-| snapshots | `/panels/{id}/snapshots`, `/diff?from=&to=`, `POST /snapshots/{id}/restore` (object) |
+| snapshots | Built (ADR 0043): `GET /panel/snapshots` (`panel:read`, `limit`, `offset`, newest first, with the settings of the job), `POST /panel/snapshots` (`panel:write`, session only, `{ label? }`, 201; reads the panel itself), `GET /panel/snapshots/{id}`, `DELETE /panel/snapshots/{id}` (`panel:write`, step-up, 204), `GET /panel/snapshots/{id}/diff?against=live\|<id>` (`refresh`, `includeUnchanged`) and `GET /panel/snapshots/{id}/export` (a masked JSON file); codes `snapshot_other_panel` 409, `snapshot_too_large` 413, `snapshot_corrupt` 409 and the panel codes of ADR 0041; planned: `POST /snapshots/{id}/restore` (object, phase 7) |
 | conventions | CRUD, `POST /conventions/check` (drift), `POST /conventions/fix` (plan) |
 | chains | CRUD for hop chains, `POST /chains/{id}/verify`, `GET /chains/{id}/topology` |
 | dns | `/dns/providers`, `/dns/zones`, `/dns/records`, `POST /dns/plan`, `/dns/apply`, `/dns/propagation`, `/dns/changes` |

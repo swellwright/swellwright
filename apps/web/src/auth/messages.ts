@@ -81,6 +81,13 @@ export function describeError(
           ? t('errors:panel.contractChangedAt', where)
           : t('errors:panel.contractChanged');
       }
+      // Snapshots of the panel (ADR 0043).
+      case 'snapshot_other_panel':
+        return t('errors:snapshot.otherPanel');
+      case 'snapshot_too_large':
+        return t('errors:snapshot.tooLarge');
+      case 'snapshot_corrupt':
+        return t('errors:snapshot.corrupt');
       case 'address_not_allowed':
         return t('errors:addressNotAllowed');
       case 'conflict':

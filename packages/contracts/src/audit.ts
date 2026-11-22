@@ -79,6 +79,8 @@ export const AUDIT_ACTIONS = [
   'panel.disconnected',
   'panel.tested',
   'panel.state.changed',
+  'panel.snapshot.created',
+  'panel.snapshot.deleted',
 ] as const;
 export const AuditActionSchema = z.enum(AUDIT_ACTIONS).meta({ id: 'AuditAction' });
 export type AuditAction = z.infer<typeof AuditActionSchema>;

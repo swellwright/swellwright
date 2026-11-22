@@ -12,3 +12,5 @@ export const PLUGIN_NETWORK = Symbol('PLUGIN_NETWORK');
  * move it instead of waiting (`AppOptions.clock`).
  */
 export const CLOCK = Symbol('CLOCK');
+/** The clock of the panel snapshots (their time, the job's interval, the retention by day), in milliseconds since the epoch. */
+export const SNAPSHOT_CLOCK = Symbol('SNAPSHOT_CLOCK');
