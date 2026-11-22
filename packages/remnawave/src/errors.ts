@@ -11,6 +11,8 @@ export type PanelErrorCode =
   | 'panel_unreachable'
   | 'panel_timeout'
   | 'panel_contract_changed'
+  | 'panel_response_too_large'
+  | 'panel_response_unsupported'
   | 'panel_unsupported_version';
 
 export abstract class PanelError extends Error {
@@ -116,6 +118,41 @@ export class PanelTimeoutError extends PanelError {
       phase === 'connect'
         ? `The panel did not accept the connection within ${String(timeoutMs)} ms (${endpoint}).`
         : `The panel did not answer within ${String(timeoutMs)} ms (${endpoint}).`,
+    );
+  }
+}
+
+/**
+ * The answer is larger than the client may read. Only the raw read of the API console (ADR 0046) tells this apart from a
+ * change of the panel's contract: a typed read that gets more than it expected is a contract error, a person who asked
+ * for a big object is told how big the limit is.
+ */
+export class PanelResponseTooLargeError extends PanelError {
+  readonly code = 'panel_response_too_large';
+
+  constructor(
+    readonly endpoint: string,
+    readonly limitBytes: number,
+  ) {
+    super(
+      `The panel's answer for ${endpoint} is larger than the limit of ${String(limitBytes)} bytes and was not read.`,
+    );
+  }
+}
+
+/**
+ * The answer is not JSON or text: binary, or a type the API console does not know how to show (ADR 0046). Only the raw
+ * read of the console tells this apart from a change of the panel's contract.
+ */
+export class PanelUnsupportedResponseError extends PanelError {
+  readonly code = 'panel_response_unsupported';
+
+  constructor(
+    readonly endpoint: string,
+    readonly contentType: string | null,
+  ) {
+    super(
+      `The answer of ${endpoint} is ${contentType === null ? 'of an unknown type' : `of the type ${contentType.slice(0, 80)}`}, which is not shown: only JSON and text are read.`,
     );
   }
 }

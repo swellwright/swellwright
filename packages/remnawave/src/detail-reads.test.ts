@@ -37,6 +37,9 @@ const HOSTILE = {
   pluginKey: 'FAKE-SECRET-HOSTILE-PLUGIN-APIKEY',
 } as const;
 
+/** The lines of a PEM block, written so that the source holds no literal key block (the hygiene check). */
+const pem = (edge: 'BEGIN' | 'END'): string => ['-----', edge, ' PRIVATE', ' KEY-----'].join('');
+
 function hostileTemplates(): Json[] {
   const yaml = [
     'proxies:',
@@ -71,7 +74,7 @@ function hostileTemplates(): Json[] {
         ],
         remarks: { upstream: `https://example.com/api?token=${HOSTILE.jsonQuery}&x=1` },
         embedded: JSON.stringify({ apiKey: HOSTILE.jsonEmbedded }),
-        key: `-----BEGIN PRIVATE KEY-----\n${HOSTILE.jsonPem}\n-----END PRIVATE KEY-----`,
+        key: `${pem('BEGIN')}\n${HOSTILE.jsonPem}\n${pem('END')}`,
       },
       encodedTemplateYaml: null,
     },

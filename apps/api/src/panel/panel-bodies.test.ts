@@ -110,10 +110,13 @@ describe('what the lists of the panel leave out, over the API', { skip: !databas
     const second = await takeSnapshot(booted.owner, 'after');
     const diff = await diffAgainst(booted.owner, first.id, second.id);
     assert.equal(diff.identical, false);
-    const changed = diff.objects.find((object) => object.id === uuid);
-    assert.equal(changed?.kind, 'subscriptionTemplates');
+    const changed = found(
+      diff.objects.find((object) => object.id === uuid),
+      'the changed template',
+    );
+    assert.equal(changed.kind, 'subscriptionTemplates');
     assert.deepEqual(
-      changed?.changes.map((change) => [change.path, change.before, change.after]),
+      changed.changes.map((change) => [change.path, change.before, change.after]),
       [['templateJson.inbounds[tag=socks].port', 10_808, 20_808]],
     );
     changeTemplateBody(fake.fixtures, 0, 10_808);

@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.28.0",
+    "version": "0.29.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -65,7 +65,7 @@
     },
     {
       "name": "panel",
-      "description": "The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server. Snapshots of the panel and the diff between two of them (ADR 0043) are kept masked as well."
+      "description": "The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server. Snapshots of the panel and the diff between two of them (ADR 0043) are kept masked as well. The API console (ADR 0046) lists every operation of the panel's API and sends the reads among them, never anything else, with every answer masked."
     }
   ],
   "paths": {
@@ -6915,6 +6915,149 @@
         ],
         "x-sw-permission": "panel:read"
       }
+    },
+    "/panel/api-console/operations": {
+      "get": {
+        "operationId": "listPanelConsoleOperations",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The operations of the panel's API",
+        "responses": {
+          "200": {
+            "description": "The catalogue.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConsoleCatalogue"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every operation of the frozen API description of the panel (3.4.11) that ships with this server: its path, method, group, parameters, whether it is open, about people, blocked or not a read, and whether it needs an administrator session. Nothing is asked of the panel to build it, so it works while no panel is connected. `settings` says whether the operations about people can be sent at all.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/api-console/operations/{operationId}": {
+      "get": {
+        "operationId": "getPanelConsoleOperation",
+        "tags": [
+          "panel"
+        ],
+        "summary": "One operation with its schemas",
+        "responses": {
+          "200": {
+            "description": "The operation.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConsoleOperationDetail"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The operation of the catalogue and, in addition, the JSON Schema of its request body and of its successful answer with every reference followed (a recursive schema is cut where it repeats). 404 `console_operation_unknown` for an id that is not in the catalogue.",
+        "parameters": [
+          {
+            "name": "operationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/api-console/requests": {
+      "post": {
+        "operationId": "sendPanelConsoleRequest",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Send a read request to the panel",
+        "responses": {
+          "200": {
+            "description": "What the panel answered, masked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConsoleResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Sends one GET to the connected panel with the stored token and returns what the panel answered, whatever its status, masked. The request names an operation of the catalogue and its parameters; it is never a URL or a header, so the target is always the connected panel and a path of the catalogue with the checked values filled in. Anything that is not a GET, not in the catalogue, or marked blocked is refused. The body is masked before it leaves this server (REALITY keys, short ids, passwords, tokens, the access material of users) and cut to `SW_PANEL_CONSOLE_MAX_BODY_KIB`. Operations about people are refused (403 `console_user_data_disabled`) unless `SW_PANEL_CONSOLE_USER_DATA=true`, and then need `vault:reveal` and a fresh second factor; their answers also hide names, mail, device ids and addresses. Rate limited per user (`SW_PANEL_CONSOLE_RATE_PER_MINUTE`). Recorded as `panel.console.request` (the operation, the path with its placeholders, the names of the query parameters, the status, the time and how many values were masked; never a value, the token or the body). A session only: a token cannot hold the permission. Besides the codes of the panel reads (409 `panel_not_connected`, 409 `panel_unsupported_version`, 502 `panel_unauthorized`, 502 `panel_unreachable`, 504 `panel_timeout`, 429 `panel_rate_limited`, 423 `vault_sealed`): 400 `validation_failed` with `details.issues` naming each field of the request that is wrong, 404 `console_operation_unknown`, 403 `console_operation_blocked` (a write, or a read that is never sent; `details.reason`), 403 `console_user_data_disabled`, 403 `step_up_required` for an operation about people, 502 `console_response_too_large`, 502 `console_response_unsupported`, 429 `rate_limited` (this console's own limit per user).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PanelConsoleRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:console"
+      }
     }
   },
   "components": {
@@ -6958,6 +7101,11 @@
           "panel_contract_changed",
           "panel_unsupported_version",
           "panel_rate_limited",
+          "console_operation_unknown",
+          "console_operation_blocked",
+          "console_user_data_disabled",
+          "console_response_too_large",
+          "console_response_unsupported",
           "snapshot_other_panel",
           "snapshot_too_large",
           "snapshot_corrupt",
@@ -7476,6 +7624,7 @@
           "servers:exec",
           "panel:read",
           "panel:write",
+          "panel:console",
           "runs:read",
           "runs:execute",
           "vault:read",
@@ -7639,7 +7788,8 @@
           "panel.convention_pack.saved",
           "panel.convention_pack.reset",
           "panel.snapshot.created",
-          "panel.snapshot.deleted"
+          "panel.snapshot.deleted",
+          "panel.console.request"
         ]
       },
       "AuditOutcome": {
@@ -8902,7 +9052,7 @@
           },
           "permissions": {
             "minItems": 1,
-            "maxItems": 24,
+            "maxItems": 25,
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Permission"
@@ -19328,6 +19478,621 @@
         ],
         "additionalProperties": false,
         "description": "The differences between two snapshots, or between a snapshot and the live panel, seen from `from` to `to`. Runtime state (online, counters, versions of a node) is not compared; a masked secret is compared by its keyed fingerprint and never shown."
+      },
+      "PanelConsoleAvailability": {
+        "type": "string",
+        "enum": [
+          "open",
+          "user_data",
+          "blocked",
+          "write"
+        ],
+        "description": "`open`: a read of the panel's own objects. `user_data`: a read about the people who use the panel (users, devices, subscriptions, requests, usage): off unless the installation allows it, and then needs `vault:reveal` and a fresh second factor. `blocked`: never sent (see `blockedReason`). `write`: not a GET; listed so the API can be read, never sent by this console (writes arrive with the approvals of a later phase)."
+      },
+      "PanelConsoleBlockedReason": {
+        "type": "string",
+        "enum": [
+          "secret_material",
+          "side_effect"
+        ],
+        "description": "`secret_material`: the answer is a key, a link that works as a credential or a subscription body. `side_effect`: a GET that creates something on the panel (a passkey challenge)."
+      },
+      "PanelConsoleParam": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "in": {
+            "type": "string",
+            "enum": [
+              "path",
+              "query"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "structured"
+            ],
+            "description": "`structured` is an array or an object (the table state of the panel's own pages): the console does not send it."
+          },
+          "format": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "uuid",
+                  "date",
+                  "date-time",
+                  "email"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "enum": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "minimum": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "maximum": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "default": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "in",
+          "required",
+          "description",
+          "kind",
+          "format",
+          "enum",
+          "minimum",
+          "maximum",
+          "default"
+        ],
+        "additionalProperties": false
+      },
+      "PanelConsoleOperation": {
+        "type": "object",
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "description": "The panel's own identifier, e.g. `NodesController_getNodes`."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "get",
+              "post",
+              "put",
+              "patch",
+              "delete"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "As the description of the panel writes it: `/api/nodes/{uuid}`."
+          },
+          "group": {
+            "type": "string",
+            "description": "The panel's tag without \"Controller\": `Nodes`."
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "availability": {
+            "$ref": "#/components/schemas/PanelConsoleAvailability"
+          },
+          "blockedReason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelConsoleBlockedReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "adminOnly": {
+            "type": "boolean",
+            "description": "The description says an API token may not call it: only an administrator session can, so the panel answers 403 to the token this console holds."
+          },
+          "publicEndpoint": {
+            "type": "boolean",
+            "description": "The description lists no security for it."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The scopes the description names; none today."
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelConsoleParam"
+            }
+          },
+          "hasRequestBody": {
+            "type": "boolean"
+          },
+          "responseContentTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "operationId",
+          "method",
+          "path",
+          "group",
+          "summary",
+          "description",
+          "availability",
+          "blockedReason",
+          "adminOnly",
+          "publicEndpoint",
+          "scopes",
+          "deprecated",
+          "parameters",
+          "hasRequestBody",
+          "responseContentTypes"
+        ],
+        "additionalProperties": false
+      },
+      "PanelConsoleOperationDetail": {
+        "type": "object",
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "description": "The panel's own identifier, e.g. `NodesController_getNodes`."
+          },
+          "method": {
+            "type": "string",
+            "enum": [
+              "get",
+              "post",
+              "put",
+              "patch",
+              "delete"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "description": "As the description of the panel writes it: `/api/nodes/{uuid}`."
+          },
+          "group": {
+            "type": "string",
+            "description": "The panel's tag without \"Controller\": `Nodes`."
+          },
+          "summary": {
+            "type": "string"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "availability": {
+            "$ref": "#/components/schemas/PanelConsoleAvailability"
+          },
+          "blockedReason": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelConsoleBlockedReason"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "adminOnly": {
+            "type": "boolean",
+            "description": "The description says an API token may not call it: only an administrator session can, so the panel answers 403 to the token this console holds."
+          },
+          "publicEndpoint": {
+            "type": "boolean",
+            "description": "The description lists no security for it."
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The scopes the description names; none today."
+          },
+          "deprecated": {
+            "type": "boolean"
+          },
+          "parameters": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelConsoleParam"
+            }
+          },
+          "hasRequestBody": {
+            "type": "boolean"
+          },
+          "responseContentTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requestBodySchema": {
+            "description": "JSON Schema of the request body, references followed; null for an operation without a body."
+          },
+          "responseSchema": {
+            "description": "JSON Schema of the successful answer, references followed; null when there is none."
+          }
+        },
+        "required": [
+          "operationId",
+          "method",
+          "path",
+          "group",
+          "summary",
+          "description",
+          "availability",
+          "blockedReason",
+          "adminOnly",
+          "publicEndpoint",
+          "scopes",
+          "deprecated",
+          "parameters",
+          "hasRequestBody",
+          "responseContentTypes",
+          "requestBodySchema",
+          "responseSchema"
+        ],
+        "additionalProperties": false
+      },
+      "PanelConsoleCatalogue": {
+        "type": "object",
+        "properties": {
+          "specVersion": {
+            "type": "string",
+            "description": "The version of the panel the catalogue was made for."
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "userDataEnabled": {
+                "type": "boolean",
+                "description": "`SW_PANEL_CONSOLE_USER_DATA`: whether the operations about people can be sent at all."
+              },
+              "ratePerMinute": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              "maxBodyKib": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "userDataEnabled",
+              "ratePerMinute",
+              "maxBodyKib"
+            ],
+            "additionalProperties": false
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "total": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "get": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "open": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "userData": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "blocked": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "write": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "total",
+              "get",
+              "open",
+              "userData",
+              "blocked",
+              "write"
+            ],
+            "additionalProperties": false
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelConsoleOperation"
+            }
+          }
+        },
+        "required": [
+          "specVersion",
+          "settings",
+          "counts",
+          "operations"
+        ],
+        "additionalProperties": false,
+        "description": "Every operation of the panel's API, built from the frozen description that ships with this server: nothing is asked of the panel to list it."
+      },
+      "PanelConsoleRequest": {
+        "type": "object",
+        "properties": {
+          "operationId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "An operation of the catalogue. Nothing else is sent."
+          },
+          "pathParams": {
+            "description": "Values for the `{placeholders}` of the path, checked against what the description says each one is.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          },
+          "query": {
+            "description": "Query parameters of the operation (only those it lists), checked the same way.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 100
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 2048
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "operationId"
+        ],
+        "additionalProperties": false,
+        "description": "What to ask the panel. Never a URL or a header: the target is the connected panel, the path is the catalogue path with the checked values filled in."
+      },
+      "PanelConsoleResult": {
+        "type": "object",
+        "properties": {
+          "operationId": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string",
+            "const": "get"
+          },
+          "path": {
+            "type": "string",
+            "description": "The path of the operation with its placeholders, as in the catalogue. Never the values."
+          },
+          "status": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991,
+            "description": "The HTTP status the panel answered with, whatever it is."
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Retries and waits included."
+          },
+          "attempts": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "headers": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Only `content-type`, `content-length`, `retry-after` and `x-ratelimit-*`."
+          },
+          "contentType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "bodyFormat": {
+            "type": "string",
+            "enum": [
+              "json",
+              "text",
+              "empty"
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "The masked answer: JSON indented by two spaces, or the masked text. Cut at the size limit (see `truncated`)."
+          },
+          "bodyBytes": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "The size of the panel's answer before masking and cutting."
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "masked": {
+            "type": "boolean",
+            "description": "True when at least one value was replaced by a mask."
+          },
+          "maskedCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "maskProfile": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "personal"
+            ],
+            "description": "`personal` also hides who a person is (names, mail, addresses, device ids): the operations about people."
+          },
+          "sentAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "operationId",
+          "method",
+          "path",
+          "status",
+          "durationMs",
+          "attempts",
+          "headers",
+          "contentType",
+          "bodyFormat",
+          "body",
+          "bodyBytes",
+          "truncated",
+          "masked",
+          "maskedCount",
+          "maskProfile",
+          "sentAt"
+        ],
+        "additionalProperties": false,
+        "description": "The answer of the panel, as far as it may be shown. A 404 or a 403 from the panel is a result (200 here); a panel that cannot be reached, refuses the token or answers in a way that cannot be shown is an error with its own code."
+      },
+      "PanelConsoleIssues": {
+        "type": "object",
+        "properties": {
+          "issues": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "path",
+                "message"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "issues"
+        ],
+        "additionalProperties": false,
+        "description": "The `details` of a `validation_failed` answer of the console: which field of the request is wrong, and how."
       }
     },
     "securitySchemes": {

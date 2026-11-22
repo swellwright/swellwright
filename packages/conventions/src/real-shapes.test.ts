@@ -309,7 +309,7 @@ describe('template.body-present and template.unused on what the list gives', () 
     const found = find({ ...fleet, templates: unread }, 'template.body-present');
     assert.equal(found.length, 10);
     assert.ok(found.every((f) => f.code === 'not_loaded' && f.severity === 'info'));
-    assert.ok(found.every((f) => !/empty or could not be read/u.test(f.message)));
+    assert.ok(found.every((f) => !f.message.includes('empty or could not be read')));
   });
 
   it('still reports a body that was read and is empty, and one that was read and is fine', () => {
@@ -425,7 +425,7 @@ describe('a template whose body was not read, in the impact calculator', () => {
       change: { templateJson: { outbounds: [] } },
     });
     assert.equal(report.changed, true);
-    assert.ok(report.notes.some((note) => /was not read/u.test(note.message)));
+    assert.ok(report.notes.some((note) => note.message.includes('was not read')));
     // The same edit against a template that was read, with the same body, changes nothing.
     const read = calculateImpact({
       model: fleet,

@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { Socket } from 'node:net';
 import { timingSafeEqual } from 'node:crypto';
 
+import { buildConsoleFixtures, type ConsoleFixtures, consoleRoute } from './console-fixtures.js';
 import { buildFixtures, FAKE_TOKEN, type FixtureOptions, type PanelFixtures } from './fixtures.js';
 
 // A panel that lives in the process (ADR 0041). It answers the read endpoints of the Remnawave API 3.4 from synthetic
@@ -75,6 +76,8 @@ const equalText = (a: string, b: string): boolean => {
 
 export class FakePanel {
   readonly fixtures: PanelFixtures;
+  /** The people, devices and requests the API console can read (`console-fixtures.ts`). */
+  readonly consoleFixtures: ConsoleFixtures = buildConsoleFixtures();
   readonly requests: RecordedRequest[] = [];
   private readonly injections: Injection[] = [];
   private readonly sockets = new Set<Socket>();
@@ -275,10 +278,21 @@ export class FakePanel {
     if (delayed > 0) {
       await new Promise((resolve) => setTimeout(resolve, delayed));
     }
-    this.route(path, query, send);
+    this.route(path, query, send, (text, contentType) => {
+      res.writeHead(200, {
+        'content-type': contentType,
+        'content-length': Buffer.byteLength(text),
+      });
+      res.end(text);
+    });
   }
 
-  private route(path: string, query: string, send: (status: number, body: unknown) => void): void {
+  private route(
+    path: string,
+    query: string,
+    send: (status: number, body: unknown) => void,
+    sendText: (text: string, contentType: string) => void,
+  ): void {
     const f = this.fixtures;
     const ok = (response: unknown): void => {
       send(200, { response });
@@ -412,6 +426,15 @@ export class FakePanel {
         return;
       }
       ok(found);
+      return;
+    }
+    const more = consoleRoute(path, f, this.consoleFixtures, this.adminSession);
+    if (more?.text !== undefined) {
+      sendText(more.text, more.contentType ?? 'text/plain');
+      return;
+    }
+    if (more) {
+      send(more.status, more.body);
       return;
     }
     send(404, { statusCode: 404, message: `Cannot GET ${path}` });

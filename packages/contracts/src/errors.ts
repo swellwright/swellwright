@@ -43,6 +43,12 @@ export const ERROR_CODES = [
   'panel_contract_changed',
   'panel_unsupported_version',
   'panel_rate_limited',
+  // The API console (ADR 0046). The refusals say what is wrong; `console_operation_blocked` carries `details.reason`.
+  'console_operation_unknown',
+  'console_operation_blocked',
+  'console_user_data_disabled',
+  'console_response_too_large',
+  'console_response_unsupported',
   // Snapshots of the panel (ADR 0043).
   'snapshot_other_panel',
   'snapshot_too_large',

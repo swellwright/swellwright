@@ -20,6 +20,19 @@ export interface MaskOptions {
    * nothing can be learned about the value from it. Without a key the mask is the plain `[masked]`.
    */
   readonly fingerprintKey?: Uint8Array | string | undefined;
+  /**
+   * More names (compared like the built-in ones: case, `-`, `_` and spaces ignored) whose value is secret wherever
+   * the name appears. The API console adds the access material and the personal data of the users of a panel
+   * (ADR 0046); the objects of the typed reads need none.
+   */
+  readonly extraSecretKeys?: readonly string[] | undefined;
+  /**
+   * `xray` (the default) treats the items of `clients`, `users`, `accounts`, `peers` and `proxies` as people of an Xray
+   * configuration: their ids and logins are secret. `off` is for an answer of the panel's own API, where `users` is a
+   * list of the panel's users and the numeric `id` is what a person addresses them by; the names in
+   * `extraSecretKeys` do the masking there.
+   */
+  readonly people?: 'xray' | 'off' | undefined;
 }
 
 export interface Masked<T> {
@@ -129,6 +142,8 @@ const isSecretName = (key: string): boolean => {
   return SECRET_KEYS.has(n) || SECRET_SUBSTRINGS.some((part) => n.includes(part));
 };
 
+/** `vmess://` carries its whole configuration, id included, in one base64 text; `ss://` can too. The payload is secret. */
+const OPAQUE_LINK = /\b(vmess:\/\/|ssr?:\/\/)([A-Za-z0-9+/=_-]{12,})/giu;
 const PEM_PRIVATE =
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/gu;
 const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s@?#"'<>]+)@/giu;
@@ -139,9 +154,18 @@ const BEARER = /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/giu;
 class Masker {
   count = 0;
   private readonly key: Uint8Array | string | undefined;
+  private readonly extra: ReadonlySet<string>;
+  private readonly people: boolean;
 
   constructor(options: MaskOptions) {
     this.key = options.fingerprintKey;
+    this.extra = new Set((options.extraSecretKeys ?? []).map(norm));
+    this.people = options.people !== 'off';
+  }
+
+  /** A name that says its value is secret: the built-in rules and the extra names of this call. */
+  private secretName(key: string): boolean {
+    return isSecretName(key) || this.extra.has(norm(key));
   }
 
   /** The mask for one value. The fingerprint covers the value's canonical text, so equal values match. */
@@ -206,6 +230,10 @@ class Masker {
       URL_USERINFO,
       (_whole, scheme: string, userinfo: string) => `${scheme}${this.mask(userinfo)}@`,
     );
+    out = out.replace(
+      OPAQUE_LINK,
+      (_whole, scheme: string, payload: string) => `${scheme}${this.mask(payload)}`,
+    );
     out = out.replace(URL_PARAM, (whole, sep: string, name: string, value: string) =>
       SECRET_PARAMS.has(norm(name)) && value !== '' ? `${sep}${name}=${this.mask(value)}` : whole,
     );
@@ -244,7 +272,7 @@ class Masker {
     depth: number,
     arrayKey: string | undefined,
   ): Record<string, unknown> {
-    const inPeople = arrayKey !== undefined && PEOPLE_KEYS.has(norm(arrayKey));
+    const inPeople = this.people && arrayKey !== undefined && PEOPLE_KEYS.has(norm(arrayKey));
     // `{ "name": "Authorization", "value": "..." }` and `{ "key": "x-api-key", "value": "..." }` pairs.
     const hasValue = Object.hasOwn(source, 'value');
     let pairName: string | undefined;
@@ -281,13 +309,13 @@ class Masker {
       if (n === 'key' && !hasValue) {
         return [name, this.maskAll(item, depth + 1)];
       }
-      if (isSecretName(name) && n !== 'key') {
+      if (this.secretName(name) && n !== 'key') {
         return [name, this.maskAll(item, depth + 1)];
       }
       if (inPeople && PEOPLE_FIELDS.has(n)) {
         return [name, this.maskAll(item, depth + 1)];
       }
-      if (hasValue && n === 'value' && pairName !== undefined && isSecretName(pairName)) {
+      if (hasValue && n === 'value' && pairName !== undefined && this.secretName(pairName)) {
         return [name, this.maskAll(item, depth + 1)];
       }
       return [name, this.walk(item, depth + 1, name, undefined)];
