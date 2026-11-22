@@ -38,6 +38,9 @@ for implemented features and known follow-ups.
 
 ## Validation
 
+- Before running checks, opening a pull request or merging, read
+  `.agents/skills/swellwright-validate/SKILL.md`: known CI flakiness, the
+  `SW_FORBIDDEN_PATTERNS` hygiene secret, and this repository's actual merge conventions.
 - Node 26; pnpm exactly as `packageManager` in `package.json`. Run `pnpm run doctor` first
   after cloning or moving a workspace. Never reuse broken absolute junctions in node_modules.
 - Standard checks: `pnpm run check`, `pnpm run openapi:check`,
