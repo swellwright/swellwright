@@ -260,9 +260,7 @@ describe('the repository holds no instance data in what ships', () => {
         /\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|ru|de|nl|dev)\b/gu,
       ) ?? []) {
         const ok =
-          domain.endsWith('example.com') ||
-          domain.endsWith('example.org') ||
-          domain.endsWith('example.net') ||
+          /(?:^|\.)example\.(?:com|org|net)$/u.test(domain) ||
           // vendor names that appear in prose
           domain === 'nginx.org' ||
           domain === 'download.docker.com';
