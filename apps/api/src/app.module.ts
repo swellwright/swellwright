@@ -1,5 +1,6 @@
 import { type DynamicModule, Module, type OnApplicationShutdown, Inject } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import type { DnsQuery } from '@swellwright/conventions';
 import { Database } from '@swellwright/db';
 
 import { ArtifactsController } from './artifacts/artifacts.controller.js';
@@ -34,6 +35,7 @@ import {
   CLOCK,
   CONFIG,
   DATABASE,
+  DNS_QUERY,
   PASSWORD_HASHER,
   PLUGIN_NETWORK,
   SECRET_BOX,
@@ -47,6 +49,12 @@ import {
   ReadinessService,
   ValkeyCheck,
 } from './readiness.js';
+import { ChecksController } from './checks/checks.controller.js';
+import { ChecksService } from './checks/checks.service.js';
+import { nodeDnsQuery } from './checks/dns-query.js';
+import { InventoryReader } from './checks/inventory.js';
+import { ChecksMemory } from './checks/memory.js';
+import { ConventionPackService } from './checks/pack.service.js';
 import { PanelClients } from './panel/clients.js';
 import { PanelCache } from './panel/panel-cache.js';
 import { PanelController } from './panel/panel.controller.js';
@@ -89,6 +97,8 @@ export interface AppOptions {
   readonly pluginNetwork?: PluginNetwork;
   /** The clock of the update check (milliseconds since the epoch), so that tests need not wait a day. */
   readonly clock?: () => number;
+  /** Answers the DNS questions of the reconciliation, replaced in tests so that no real name is looked up. */
+  readonly dnsQuery?: DnsQuery;
   /** The clock of the panel snapshots (their time, the job's interval, the retention by day), so that tests need not wait. */
   readonly snapshotClock?: () => number;
   /** The clock of the baseline checks' schedule (when a run is queued, when a server is due), so that tests need not wait. */
@@ -135,6 +145,7 @@ export class AppModule implements OnApplicationShutdown {
         CommandsController,
         ArtifactsController,
         PanelController,
+        ChecksController,
         PanelSnapshotsController,
         BaselineController,
       ],
@@ -174,6 +185,15 @@ export class AppModule implements OnApplicationShutdown {
         PanelService,
         PanelReaderService,
         PanelMonitorService,
+        ChecksMemory,
+        ConventionPackService,
+        InventoryReader,
+        ChecksService,
+        {
+          provide: DNS_QUERY,
+          useValue:
+            options.dnsQuery ?? nodeDnsQuery(config.checks.dnsServers, config.checks.dnsTimeoutMs),
+        },
         { provide: SNAPSHOT_CLOCK, useValue: options.snapshotClock ?? (() => Date.now()) },
         PanelSnapshotsService,
         PanelSnapshotScheduler,

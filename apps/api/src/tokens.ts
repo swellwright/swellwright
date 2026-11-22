@@ -16,3 +16,5 @@ export const CLOCK = Symbol('CLOCK');
 export const SNAPSHOT_CLOCK = Symbol('SNAPSHOT_CLOCK');
 /** The clock of the baseline checks' schedule (when a server is due), in milliseconds since the epoch. */
 export const CHECKS_CLOCK = Symbol('CHECKS_CLOCK');
+/** The question the reconciliation asks of DNS (ADR 0044); tests replace it so that no real name is looked up. */
+export const DNS_QUERY = Symbol('DNS_QUERY');

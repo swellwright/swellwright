@@ -56,7 +56,7 @@ export class CheckScheduler implements OnApplicationBootstrap, BeforeApplication
   ) {}
 
   onApplicationBootstrap(): void {
-    const interval = this.config.checks.intervalMs;
+    const interval = this.config.baseline.intervalMs;
     if (interval <= 0 || !this.database) {
       return;
     }
@@ -91,7 +91,7 @@ export class CheckScheduler implements OnApplicationBootstrap, BeforeApplication
   }
 
   private async round(): Promise<ScheduledRound> {
-    const interval = this.config.checks.intervalMs;
+    const interval = this.config.baseline.intervalMs;
     if (interval <= 0 || !this.database) {
       return { started: [], skipped: 'off' };
     }

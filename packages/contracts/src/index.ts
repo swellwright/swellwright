@@ -2,6 +2,7 @@ export * from './artifacts.js';
 export * from './audit.js';
 export * from './auth.js';
 export * from './baselines.js';
+export * from './checks.js';
 export * from './commands.js';
 export * from './errors.js';
 export * from './openapi.js';

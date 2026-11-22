@@ -30,6 +30,7 @@ export const nav = {
   externalSquads: 'Внешние сквады',
   templates: 'Шаблоны',
   snippets: 'Сниппеты',
+  checks: 'Проверки',
   nodePlugins: 'Плагины нод',
   subscriptionSettings: 'Настройки подписки',
   infraBilling: 'Инфра-биллинг',

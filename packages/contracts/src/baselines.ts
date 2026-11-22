@@ -901,13 +901,13 @@ export const BASELINE_CATEGORIES = [
 export const BaselineCategorySchema = z.enum(BASELINE_CATEGORIES).meta({ id: 'BaselineCategory' });
 export type BaselineCategory = z.infer<typeof BaselineCategorySchema>;
 
-export const CHECK_SEVERITIES = ['high', 'medium', 'low'] as const;
-export const CheckSeveritySchema = z.enum(CHECK_SEVERITIES).meta({
-  id: 'CheckSeverity',
+export const BASELINE_SEVERITIES = ['high', 'medium', 'low'] as const;
+export const BaselineSeveritySchema = z.enum(BASELINE_SEVERITIES).meta({
+  id: 'BaselineSeverity',
   description:
     'What a missed expectation means: `high` is a `fail`, `medium` and `low` are a `warn` (`low` is shown less prominently).',
 });
-export type CheckSeverity = z.infer<typeof CheckSeveritySchema>;
+export type BaselineSeverity = z.infer<typeof BaselineSeveritySchema>;
 
 export const CHECK_ID_PATTERN = /^[a-z][a-z0-9._-]{0,63}$/u;
 
@@ -932,7 +932,7 @@ export const BaselineCheckSchema = z
     }),
     title: z.string().trim().min(1).max(160),
     category: BaselineCategorySchema,
-    severity: CheckSeveritySchema,
+    severity: BaselineSeveritySchema,
     observe: ObserveSchema,
     expect: ExpectationSchema,
     remediationHint: z.string().trim().min(1).max(300).optional(),
@@ -1095,7 +1095,7 @@ export const CheckResultViewSchema = z
     checkId: z.string(),
     title: z.string(),
     category: BaselineCategorySchema,
-    severity: CheckSeveritySchema,
+    severity: BaselineSeveritySchema,
     status: CheckStatusSchema,
     observation: z.object({
       kind: z.string(),
@@ -1219,7 +1219,7 @@ export const DriftItemSchema = z
     checkId: z.string(),
     title: z.string(),
     category: BaselineCategorySchema,
-    severity: CheckSeveritySchema,
+    severity: BaselineSeveritySchema,
     change: DriftChangeSchema,
     from: DriftSideSchema.nullable(),
     to: DriftSideSchema.nullable(),

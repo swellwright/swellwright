@@ -156,7 +156,7 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
 
   before(async () => {
     await h.open({
-      SW_CHECKS_RATE_LIMIT_PER_MINUTE: '600',
+      SW_BASELINE_RATE_LIMIT_PER_MINUTE: '600',
       SW_CHECKS_POLL_MS: '25',
       SW_CHECKS_KEEP_RUNS: '3',
       SW_CHECKS_PARALLELISM: '2',
@@ -762,7 +762,7 @@ describe('the schedule of baseline checks', { skip: !databaseUrl }, () => {
   before(async () => {
     await h.open(
       {
-        SW_CHECKS_RATE_LIMIT_PER_MINUTE: '600',
+        SW_BASELINE_RATE_LIMIT_PER_MINUTE: '600',
         SW_CHECKS_POLL_MS: '25',
         SW_CHECKS_INTERVAL_HOURS: '6',
         SW_CHECKS_PARALLELISM: '3',

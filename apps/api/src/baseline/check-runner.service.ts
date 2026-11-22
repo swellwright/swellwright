@@ -154,7 +154,7 @@ export class CheckRunner implements OnApplicationBootstrap, BeforeApplicationShu
   }
 
   private pump(): void {
-    while (!this.stopping && this.active.size < this.config.checks.parallelism) {
+    while (!this.stopping && this.active.size < this.config.baseline.parallelism) {
       const next = this.queue.shift();
       if (next === undefined) {
         return;
@@ -262,7 +262,7 @@ export class CheckRunner implements OnApplicationBootstrap, BeforeApplicationShu
   ): Promise<boolean> {
     const result = await connection.exec('true', {
       sudo: sudoPassword === undefined ? {} : { password: sudoPassword },
-      timeoutMs: Math.min(PROBE_TIMEOUT_MS, this.config.checks.timeoutMs),
+      timeoutMs: Math.min(PROBE_TIMEOUT_MS, this.config.baseline.timeoutMs),
     });
     return result.code === 0;
   }
@@ -271,7 +271,7 @@ export class CheckRunner implements OnApplicationBootstrap, BeforeApplicationShu
   private async observe(session: SshSession, run: RunRow, plan: Plan): Promise<Observed> {
     const { connection, sudoPassword } = session;
     const uid = await connection.exec('id -u', {
-      timeoutMs: Math.min(PROBE_TIMEOUT_MS, this.config.checks.timeoutMs),
+      timeoutMs: Math.min(PROBE_TIMEOUT_MS, this.config.baseline.timeoutMs),
     });
     const isRoot = uid.code === 0 && uid.stdout.trim() === '0';
     const viaSudo = !isRoot && (await this.sudoWorks(connection, sudoPassword));
@@ -297,11 +297,11 @@ export class CheckRunner implements OnApplicationBootstrap, BeforeApplicationShu
     const limit = new AbortController();
     const timer = setTimeout(() => {
       limit.abort();
-    }, this.config.checks.timeoutMs);
+    }, this.config.baseline.timeoutMs);
     let status: StepStatus;
     try {
       status = await waitForStep(connection, stepId, {
-        pollMs: this.config.checks.pollMs,
+        pollMs: this.config.baseline.pollMs,
         signal: AbortSignal.any([limit.signal, this.abort.signal]),
         onOutput: (chunk) => {
           if (chunk.stream !== 'stdout') {
@@ -328,7 +328,7 @@ export class CheckRunner implements OnApplicationBootstrap, BeforeApplicationShu
             )
           : new ObserveError(
               'check_timeout',
-              `The check did not finish within ${String(this.config.checks.timeoutMs / 1000)} seconds and was stopped.`,
+              `The check did not finish within ${String(this.config.baseline.timeoutMs / 1000)} seconds and was stopped.`,
             );
       }
       if (error instanceof SshStepError) {
@@ -596,7 +596,7 @@ export class CheckRunner implements OnApplicationBootstrap, BeforeApplicationShu
     const old = await this.db.checkRun.findMany({
       where: { serverId },
       orderBy: { queuedAt: 'desc' },
-      skip: this.config.checks.keepRuns,
+      skip: this.config.baseline.keepRuns,
       select: { id: true, state: true },
     });
     const ids = old

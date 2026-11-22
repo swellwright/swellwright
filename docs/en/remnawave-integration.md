@@ -30,7 +30,7 @@ These facts are encoded in the impact calculator and the policies:
 
 ## Conventions (configurable)
 
-Node names `CC-NN`, domain pattern `{cc}{n}.<base>`, host remark patterns, `address` = node IP with an explicit `sni`, fingerprint policy, subscription-type exclusions, `vlessRouteId` ranges, a marker for test objects. Conventions ship as an example pack and are fully replaceable.
+Node names `CC-NN`, domain pattern `{cc}{n}.<base>`, host remark patterns, `address` = node IP with an explicit `sni`, fingerprint policy, subscription-type exclusions, `vlessRouteId` ranges, a marker for test objects. Conventions ship as an example pack and are fully replaceable; [conventions.md](conventions.md) documents the pack format, the rules, reconciliation and the impact calculator.
 
 ## What Swellwright adds on top of the panel
 

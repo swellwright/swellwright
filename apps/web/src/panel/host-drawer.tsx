@@ -24,6 +24,7 @@ import { TbAlertTriangle, TbBraces, TbEyeOff } from 'react-icons/tb';
 import type { PanelHostView } from '@swellwright/contracts';
 import { OverlayHeader, SectionCard } from '@swellwright/ui';
 
+import { PreviewImpactButton } from '../checks/preview-impact.js';
 import { CodeEditor } from '../commands/code-editor.js';
 import type { PanelNames } from './host-lookups.js';
 import { jsonText } from './code-viewer.js';
@@ -240,12 +241,17 @@ function InboundCard({ host, names }: { host: PanelHostView; names: PanelNames }
 }
 
 function HostBody({ host, names }: { host: PanelHostView; names: PanelNames }) {
-  const { t } = useTranslation(['panel', 'common']);
+  const { t } = useTranslation(['panel', 'common', 'checks']);
   const enabled = !host.isDisabled;
   const options = optionsOf(host, names);
 
   return (
     <Stack>
+      <PreviewImpactButton
+        kind="host"
+        label={t('checks:ui.impact.previewImpact')}
+        uuid={host.uuid}
+      />
       <SectionCard.Root>
         <SectionCard.Section>
           <Group gap="sm" justify="space-between" wrap="nowrap">

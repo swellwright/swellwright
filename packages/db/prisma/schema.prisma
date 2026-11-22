@@ -736,6 +736,33 @@ model PanelConnection {
   @@map("panel_connections")
 }
 
+/// A saved convention pack (ADR 0044): the rules, parameters, patterns and thresholds that the convention linter, the
+/// reconciliation and the impact calculator run with. Every save is a new version and one version is active; no active
+/// version means that the built-in pack applies. The document holds no secret.
+model ConventionPack {
+  id          String   @id @default(uuid(7)) @db.Uuid
+  /// Which panel it is for. `default` while Swellwright talks to one panel: a reconnect replaces the connection row
+  /// (ADR 0041), and the conventions of an installation must outlive a rotation of the token.
+  panelKey    String   @default("default") @map("panel_key") @db.VarChar(32)
+  version     Int
+  name        String   @db.VarChar(100)
+  /// The document as it was validated.
+  document    Json
+  /// The text as the user wrote it (YAML or JSON), with its comments.
+  source      String   @db.Text
+  /// SHA-256 (hex) of the canonical JSON of the document.
+  hash        String   @db.VarChar(64)
+  active      Boolean  @default(false)
+  comment     String?  @db.VarChar(500)
+  /// The user who saved it. No foreign key, like the audit chain.
+  createdById String?  @map("created_by_id") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(3)
+
+  @@unique([panelKey, version])
+  @@index([panelKey, active])
+  @@map("convention_packs")
+}
+
 /// Where a snapshot of the panel came from (ADR 0043). `before_change` and `imported` are reserved for later phases.
 enum PanelSnapshotKind {
   manual

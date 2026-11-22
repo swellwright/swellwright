@@ -260,7 +260,7 @@ async function getJson<T>(path: string, schema: { parse: (data: unknown) => T })
  * A call that can fail with the error envelope. The session cookie travels by itself (same origin).
  * `schema` is undefined for a response without a body.
  */
-async function send<T>(
+export async function send<T>(
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   body: unknown,

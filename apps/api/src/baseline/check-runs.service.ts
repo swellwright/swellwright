@@ -9,7 +9,7 @@ import type {
   CheckRunListQuery,
   CheckRunSummary,
   CheckRunView,
-  CheckSeverity,
+  BaselineSeverity,
   ObservedValue,
   StartBaselineRunsRequest,
   StartBaselineRunsResult,
@@ -80,7 +80,7 @@ function resultView(row: ResultRow): CheckResultView {
     checkId: row.checkId,
     title: row.title,
     category: row.category as BaselineCategory,
-    severity: row.severity as CheckSeverity,
+    severity: row.severity as BaselineSeverity,
     status: row.status,
     observation: {
       kind: row.observationKind,
@@ -102,7 +102,7 @@ const comparable = (row: ResultRow): ComparableResult => ({
   checkId: row.checkId,
   title: row.title,
   category: row.category as BaselineCategory,
-  severity: row.severity as CheckSeverity,
+  severity: row.severity as BaselineSeverity,
   status: row.status,
   observed: row.observed as ObservedValue,
   message: row.message,
@@ -137,7 +137,7 @@ export class CheckRunsService {
     @Inject(VaultService) private readonly vault: VaultService,
     @Inject(CHECKS_CLOCK) private readonly now: () => number,
   ) {
-    this.limiter = new WindowLimiter(config.checks.rateLimitPerMinute, 60_000);
+    this.limiter = new WindowLimiter(config.baseline.rateLimitPerMinute, 60_000);
   }
 
   private get db(): Database['client'] {

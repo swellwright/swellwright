@@ -2,6 +2,7 @@ import { artifacts } from './artifacts.js';
 import { audit } from './audit.js';
 import { auth } from './auth.js';
 import { baseline } from './baseline.js';
+import { checks } from './checks.js';
 import { commands } from './commands.js';
 import { common } from './common.js';
 import { errors } from './errors.js';
@@ -36,6 +37,7 @@ export const ru = {
   commands,
   artifacts,
   panel,
+  checks,
   snapshots,
   baseline,
 } as const;
