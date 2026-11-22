@@ -1,0 +1,546 @@
+# Baseline "node-selfsteal": what a Remnawave node set up by the node-installer artifact looks like (ADR 0045, ADR 0036).
+# Shipped with Swellwright and kept current by name at start. It cannot be edited here: copy it to a baseline of your
+# own (Fleet > Baseline > New baseline) and change the copy.
+#
+# It holds the checks of the "linux-generic" baseline (updates, time, resources, SSH, accounts, firewall) and, after
+# them, the facts the installer's `verify` action checks: the services, the node container, the ports, the node API
+# port rules, what the node answers to a request with a foreign SNI, the certificate and the certificate receiver. Names,
+# ports and paths are the installer's defaults (container remnanode, node API port 62050, decoy port 8444,
+# /opt/certs); a node set up with other values needs a copy of this baseline with those values.
+schema: 1
+description: A Remnawave node set up by the node installer - the general checks plus the node, HAProxy, nginx, the node API port rules and the certificate.
+checks:
+  # ---- updates ----
+  - id: updates.reboot-pending
+    title: No reboot is waiting for a kernel or library update
+    category: updates
+    severity: medium
+    observe: { kind: kernel, field: rebootRequired }
+    expect: { equals: false }
+    remediationHint: Reboot the server in a quiet hour; a reboot is needed to run the updated kernel and libraries.
+
+  - id: updates.kernel-current
+    title: The running kernel is the newest installed one
+    category: updates
+    severity: low
+    observe: { kind: kernel, field: behind }
+    expect: { equals: false }
+    remediationHint: Reboot to run the newest installed kernel.
+
+  - id: updates.security-pending
+    title: No security updates are waiting
+    category: updates
+    severity: high
+    observe: { kind: updates.pending, field: security }
+    expect: { atMost: 0 }
+    remediationHint: Install the pending updates (apt-get upgrade) and reboot if asked to.
+
+  - id: updates.pending-count
+    title: Few updates are waiting
+    category: updates
+    severity: low
+    observe: { kind: updates.pending, field: upgradable }
+    expect: { atMost: 20 }
+    remediationHint: Run apt-get upgrade in a quiet hour.
+
+  - id: updates.lists-fresh
+    title: The package lists were refreshed within the last week
+    category: updates
+    severity: low
+    observe: { kind: updates.pending, field: listAgeSeconds }
+    expect: { ageLessThan: 7d }
+    remediationHint: Run apt-get update, or let the apt-daily timer do it.
+
+  - id: updates.unattended-installed
+    title: Unattended upgrades are installed
+    category: updates
+    severity: medium
+    observe: { kind: updates.auto, field: installed }
+    expect: { equals: true }
+    remediationHint: Install the unattended-upgrades package.
+
+  - id: updates.unattended-enabled
+    title: Unattended upgrades are switched on
+    category: updates
+    severity: medium
+    observe: { kind: updates.auto, field: enabled }
+    expect: { equals: true }
+    remediationHint: Set APT::Periodic::Unattended-Upgrade "1"; in /etc/apt/apt.conf.d/20auto-upgrades.
+
+  # ---- time ----
+  - id: time.synchronized
+    title: The clock is synchronised
+    category: time
+    severity: medium
+    observe: { kind: time.sync, field: synchronized }
+    expect: { equals: true }
+    remediationHint: Enable a time service (systemd-timesyncd or chrony) and check that it reaches its servers.
+
+  - id: time.service
+    title: A time service is running
+    category: time
+    severity: medium
+    observe: { kind: time.sync, field: service }
+    expect: { in: [chrony, systemd-timesyncd, ntpd] }
+    remediationHint: Install and start chrony or systemd-timesyncd.
+
+  - id: time.skew
+    title: The clock is within 5 seconds of the clock of this server
+    category: time
+    severity: medium
+    observe: { kind: time.sync, field: skewSeconds }
+    expect: { atMost: 5 }
+    remediationHint: Fix the time service; TLS and one-time codes need a clock that is right.
+
+  # ---- resources ----
+  - id: resources.disk-root-full
+    title: The root filesystem is not nearly full
+    category: resources
+    severity: high
+    observe: { kind: disk.usage, params: { path: / }, field: usedPercent }
+    expect: { atMost: 90 }
+    remediationHint: Free space on / (journal, old logs, unused images) or grow the disk.
+
+  - id: resources.disk-root-warning
+    title: The root filesystem has room
+    category: resources
+    severity: low
+    observe: { kind: disk.usage, params: { path: / }, field: usedPercent }
+    expect: { atMost: 80 }
+    remediationHint: Plan to free space on / or grow the disk.
+
+  - id: resources.inodes-root
+    title: The root filesystem has free inodes
+    category: resources
+    severity: medium
+    observe: { kind: disk.usage, params: { path: / }, field: inodeUsedPercent }
+    expect: { atMost: 90 }
+    remediationHint: Find the directory with millions of small files and clean it.
+
+  - id: resources.memory-available
+    title: At least 10 percent of the memory is available
+    category: resources
+    severity: medium
+    observe: { kind: memory, field: availablePercent }
+    expect: { atLeast: 10 }
+    remediationHint: Find what uses the memory (top, docker stats) or add memory.
+
+  - id: resources.swap-pressure
+    title: Swap is not heavily used
+    category: resources
+    severity: low
+    observe: { kind: memory, field: swapUsedPercent }
+    expect: { atMost: 80 }
+    remediationHint: Heavy swap use means the memory is too small for the load.
+
+  # ---- services ----
+  - id: services.no-failed-units
+    title: No systemd unit has failed
+    category: services
+    severity: medium
+    observe: { kind: systemd.failed, field: failedCount }
+    expect: { atMost: 0 }
+    remediationHint: Look at systemctl --failed and the journal of each unit; fix it or disable it.
+
+  # ---- ssh ----
+  - id: ssh.root-login
+    title: Root cannot log in with a password
+    category: ssh
+    severity: medium
+    observe: { kind: sshd.effective, field: permitrootlogin }
+    expect: { in: [no, prohibit-password, without-password, forced-commands-only] }
+    remediationHint: Set PermitRootLogin no (or prohibit-password) once an administrator account with a key exists.
+
+  - id: ssh.password-login
+    title: SSH password login is closed
+    category: ssh
+    severity: medium
+    observe: { kind: sshd.effective, field: passwordauthentication }
+    expect: { equals: "no" }
+    remediationHint: Set PasswordAuthentication no after you have verified a key login.
+
+  - id: ssh.empty-passwords
+    title: Accounts without a password cannot log in over SSH
+    category: ssh
+    severity: high
+    observe: { kind: sshd.effective, field: permitemptypasswords }
+    expect: { equals: "no" }
+    remediationHint: Set PermitEmptyPasswords no.
+
+  - id: ssh.auth-tries
+    title: At most 6 password tries per connection
+    category: ssh
+    severity: low
+    observe: { kind: sshd.effective, field: maxauthtries }
+    expect: { matches: "^[1-6]$" }
+    remediationHint: Set MaxAuthTries 4 in the sshd configuration.
+
+  - id: ssh.keys-present
+    title: At least one SSH key is authorized
+    category: ssh
+    severity: medium
+    observe: { kind: ssh.keys, field: total }
+    expect: { atLeast: 1 }
+    remediationHint: Authorize a key for an administrator account before closing password login.
+
+  # ---- accounts ----
+  - id: accounts.single-uid-zero
+    title: Only root has user id 0
+    category: accounts
+    severity: high
+    observe: { kind: users.login, field: uidZero }
+    expect: { in: [root] }
+    remediationHint: Remove or change the second account with user id 0.
+
+  - id: accounts.no-empty-passwords
+    title: No account has an empty password
+    category: accounts
+    severity: high
+    observe: { kind: users.login, field: emptyPassword }
+    expect: { absent: true }
+    remediationHint: Lock the account (passwd -l) or give it a password.
+
+  # ---- firewall ----
+  - id: firewall.active
+    title: The firewall (UFW) is active
+    category: firewall
+    severity: medium
+    observe: { kind: ufw.status, field: active }
+    expect: { equals: true }
+    remediationHint: Enable UFW after allowing SSH (ufw allow 22/tcp; ufw enable).
+
+  - id: firewall.default-deny
+    title: The firewall denies incoming traffic by default
+    category: firewall
+    severity: high
+    observe: { kind: ufw.status, field: defaultIncoming }
+    expect: { equals: deny }
+    remediationHint: Set the default to deny incoming (ufw default deny incoming).
+
+  - id: firewall.fail2ban
+    title: fail2ban is running
+    category: firewall
+    severity: low
+    observe: { kind: fail2ban.status, field: active }
+    expect: { equals: true }
+    remediationHint: Install fail2ban and enable the sshd jail.
+
+  # ---- network ----
+  - id: network.own-name-resolves
+    title: The name of the machine resolves
+    category: network
+    severity: low
+    observe: { kind: dns.self, field: resolves }
+    expect: { equals: true }
+    remediationHint: Add the host name to /etc/hosts or to DNS.
+
+  - id: network.syncookies
+    title: SYN cookies are on
+    category: network
+    severity: low
+    observe: { kind: sysctl.value, params: { key: net.ipv4.tcp_syncookies }, field: value }
+    expect: { equals: "1" }
+    remediationHint: Set net.ipv4.tcp_syncookies = 1 in /etc/sysctl.d.
+
+  # ======== the node (the facts the node installer's verify action checks) ========
+
+  # ---- services ----
+  - id: node.docker-active
+    title: Docker is running
+    category: services
+    severity: high
+    observe: { kind: service.state, params: { unit: docker.service }, field: active }
+    expect: { equals: active }
+    remediationHint: Run the node installer step "docker" (sh install.sh docker).
+
+  - id: node.nginx-active
+    title: nginx is running
+    category: services
+    severity: high
+    observe: { kind: service.state, params: { unit: nginx.service }, field: active }
+    expect: { equals: active }
+    remediationHint: Run the node installer step "nginx" (sh install.sh nginx).
+
+  - id: node.haproxy-active
+    title: HAProxy is running
+    category: services
+    severity: high
+    observe: { kind: service.state, params: { unit: haproxy.service }, field: active }
+    expect: { equals: active }
+    remediationHint: Run the node installer step "haproxy" (sh install.sh haproxy).
+
+  - id: node.certs-reload-watcher
+    title: nginx is reloaded when a new certificate arrives
+    category: services
+    severity: medium
+    observe: { kind: service.state, params: { unit: sw-certs-reload.path }, field: active }
+    expect: { equals: active }
+    remediationHint: Run the node installer step "nginx" (sh install.sh nginx).
+
+  - id: node.api-acl-unit
+    title: The node API port rules are restored at boot
+    category: firewall
+    severity: high
+    observe: { kind: service.state, params: { unit: sw-node-api-acl.service }, field: active }
+    expect: { equals: active }
+    remediationHint: Run the node installer step "apiacl" (sh install.sh apiacl).
+
+  # ---- the node container ----
+  - id: node.container-running
+    title: The node container is running
+    category: node
+    severity: high
+    observe: { kind: docker.container, params: { name: remnanode }, field: state }
+    expect: { equals: running }
+    remediationHint: Run the node installer step "node" (sh install.sh node) and read the container log.
+
+  - id: node.container-restart-policy
+    title: The node container starts again after a reboot
+    category: node
+    severity: medium
+    observe: { kind: docker.container, params: { name: remnanode }, field: restartPolicy }
+    expect: { in: [always, unless-stopped] }
+    remediationHint: Run the node installer step "node" (sh install.sh node); the compose file sets restart policy.
+
+  - id: node.container-stable
+    title: The node container has run for at least a minute
+    category: node
+    severity: low
+    observe: { kind: docker.container, params: { name: remnanode }, field: uptimeSeconds }
+    expect: { atLeast: 60 }
+    remediationHint: A container that keeps restarting has a wrong SECRET_KEY or cannot reach the panel; read its log.
+
+  - id: node.container-secret-key
+    title: The node container has its secret key
+    category: node
+    severity: high
+    observe: { kind: docker.container, params: { name: remnanode }, field: envNames }
+    expect: { contains: SECRET_KEY }
+    remediationHint: Run the node installer step "node" (sh install.sh node) with the SECRET_KEY of the node from the panel.
+
+  - id: node.sni-verification
+    title: A foreign SNI is not shown the certificate of the node
+    category: node
+    severity: high
+    observe: { kind: docker.container, params: { name: remnanode }, field: envFlags }
+    expect: { contains: SNI_VERIFICATION=true }
+    remediationHint: Run the node installer step "node" (sh install.sh node); it sets SNI_VERIFICATION=true.
+
+  - id: node.image-tag
+    title: The node image has a version tag
+    category: node
+    severity: low
+    observe: { kind: docker.container, params: { name: remnanode }, field: tag }
+    expect: { present: true }
+    remediationHint: Pin the image to a version tag in the compose file.
+
+  # ---- ports ----
+  - id: node.port-443-haproxy
+    title: HAProxy listens on port 443
+    category: network
+    severity: high
+    observe: { kind: port.listener, params: { port: 443 }, field: processes }
+    expect: { contains: haproxy }
+    remediationHint: Run the node installer step "haproxy" (sh install.sh haproxy).
+
+  - id: node.port-80
+    title: nginx answers on port 80
+    category: network
+    severity: medium
+    observe: { kind: port.listener, params: { port: 80 }, field: listening }
+    expect: { equals: true }
+    remediationHint: Run the node installer step "nginx" (sh install.sh nginx).
+
+  - id: node.api-port-listens
+    title: The node API port is open
+    category: network
+    severity: high
+    observe: { kind: port.listener, params: { port: 62050 }, field: listening }
+    expect: { equals: true }
+    remediationHint: Run the node installer step "node" (sh install.sh node).
+
+  - id: node.decoy-listens
+    title: The default site listens on its local port
+    category: network
+    severity: high
+    observe: { kind: port.listener, params: { port: 8444 }, field: listening }
+    expect: { equals: true }
+    remediationHint: Run the node installer step "nginx" (sh install.sh nginx).
+
+  - id: node.decoy-private
+    title: The default site is not reachable from outside
+    category: network
+    severity: high
+    observe: { kind: port.listener, params: { port: 8444 }, field: publicly }
+    expect: { equals: false }
+    remediationHint: Run the node installer step "nginx" (sh install.sh nginx); the default site belongs on 127.0.0.1.
+
+  # ---- the node API port: Docker publishes around UFW ----
+  - id: node.api-chain-rules
+    title: The node API port has its rules in DOCKER-USER
+    category: firewall
+    severity: high
+    observe: { kind: iptables.chain, params: { chain: DOCKER-USER }, field: ruleCount }
+    expect: { atLeast: 2 }
+    remediationHint: Run the node installer step "apiacl" (sh install.sh apiacl); without it the node API port is open to everybody.
+
+  - id: node.api-chain-drop
+    title: Everybody but the panel is dropped on the node API port
+    category: firewall
+    severity: high
+    observe: { kind: iptables.chain, params: { chain: DOCKER-USER }, field: text }
+    expect: { matches: "--ctorigdstport 62050 .*-j DROP" }
+    remediationHint: Run the node installer step "apiacl" (sh install.sh apiacl).
+
+  # ---- what the node answers ----
+  - id: node.https-foreign-sni
+    title: HTTPS with a foreign SNI gets the default site (404)
+    category: web
+    severity: high
+    observe:
+      {
+        kind: http.local,
+        params: { port: 443, scheme: https, target: self, sni: sni-probe.invalid },
+        field: status,
+      }
+    expect: { equals: 404 }
+    remediationHint: Run the node installer step "haproxy" (sh install.sh haproxy); HAProxy must have a default backend.
+
+  - id: node.https-no-sni
+    title: HTTPS without SNI gets the default site (404)
+    category: web
+    severity: medium
+    observe: { kind: http.local, params: { port: 443, scheme: https, target: self }, field: status }
+    expect: { equals: 404 }
+    remediationHint: Run the node installer step "haproxy" (sh install.sh haproxy).
+
+  - id: node.http-by-address
+    title: HTTP by address gets the default site (404)
+    category: web
+    severity: medium
+    observe: { kind: http.local, params: { port: 80, scheme: http, target: self }, field: status }
+    expect: { equals: 404 }
+    remediationHint: Run the node installer step "nginx" (sh install.sh nginx); the name of the node must not be shown.
+
+  - id: node.nginx-config
+    title: The nginx configuration is valid
+    category: web
+    severity: high
+    observe: { kind: nginx.config, field: valid }
+    expect: { equals: true }
+    remediationHint: Run nginx -t and fix what it reports, or run the node installer step "nginx".
+
+  - id: node.haproxy-config
+    title: The HAProxy configuration is valid
+    category: web
+    severity: high
+    observe: { kind: haproxy.config, field: valid }
+    expect: { equals: true }
+    remediationHint: Run haproxy -c -f /etc/haproxy/haproxy.cfg and fix what it reports, or run the node installer step "haproxy".
+
+  - id: node.haproxy-default-backend
+    title: HAProxy has a default backend for foreign SNI
+    category: web
+    severity: high
+    observe: { kind: haproxy.config, field: defaultBackends }
+    expect: { contains: decoy_default }
+    remediationHint: Run the node installer step "haproxy" (sh install.sh haproxy).
+
+  # ---- certificate ----
+  - id: node.cert-present
+    title: The certificate file is there
+    category: tls
+    severity: high
+    observe: { kind: cert.file, params: { path: /opt/certs/fullchain.cer }, field: exists }
+    expect: { equals: true }
+    remediationHint: Deliver the certificate to /opt/certs (certificate sync), or run the node installer step "nginx" for a temporary one.
+
+  - id: node.cert-real
+    title: The certificate is not the temporary self-signed one
+    category: tls
+    severity: medium
+    observe: { kind: cert.file, params: { path: /opt/certs/fullchain.cer }, field: selfSigned }
+    expect: { equals: false }
+    remediationHint: The real certificate has not been delivered yet; check the certificate sync.
+
+  - id: node.cert-expiry-critical
+    title: The certificate has at least 14 days left
+    category: tls
+    severity: high
+    observe: { kind: cert.file, params: { path: /opt/certs/fullchain.cer }, field: daysLeft }
+    expect: { atLeast: 14 }
+    remediationHint: Renew the certificate and deliver it again.
+
+  - id: node.cert-expiry-warning
+    title: The certificate has at least 30 days left
+    category: tls
+    severity: medium
+    observe: { kind: cert.file, params: { path: /opt/certs/fullchain.cer }, field: daysLeft }
+    expect: { atLeast: 30 }
+    remediationHint: Renew the certificate; the renewal should have happened by now.
+
+  - id: node.cert-key-mode
+    title: The certificate key is readable by its group only
+    category: tls
+    severity: medium
+    observe: { kind: file.stat, params: { path: /opt/certs/private.key }, field: mode }
+    expect: { equals: "640" }
+    remediationHint: Run the node installer step "nginx" (sh install.sh nginx); it sets mode 640.
+
+  - id: node.certsync-account
+    title: The certificate receiver account exists
+    category: tls
+    severity: medium
+    observe: { kind: certsync.account, params: { user: certsync }, field: exists }
+    expect: { equals: true }
+    remediationHint: Run the node installer step "certsync" (sh install.sh certsync).
+
+  - id: node.certsync-restricted
+    title: The key of the certificate receiver can do nothing but receive
+    category: tls
+    severity: high
+    observe: { kind: certsync.account, params: { user: certsync }, field: restricted }
+    expect: { equals: true }
+    remediationHint: Run the node installer step "certsync" (sh install.sh certsync); the key must have restrict and a forced rrsync command.
+
+  # ---- system ----
+  - id: node.bbr
+    title: TCP congestion control is BBR
+    category: system
+    severity: low
+    observe: { kind: sysctl.value, params: { key: net.ipv4.tcp_congestion_control }, field: value }
+    expect: { equals: bbr }
+    remediationHint: Run the node installer step "system" (sh install.sh system).
+
+  - id: node.qdisc
+    title: The default queue discipline suits BBR
+    category: system
+    severity: low
+    observe: { kind: sysctl.value, params: { key: net.core.default_qdisc }, field: value }
+    expect: { in: [fq, fq_codel, cake] }
+    remediationHint: Run the node installer step "system" (sh install.sh system).
+
+  # ---- the installer's own record ----
+  - id: node.installer-journal
+    title: The node was set up with the node installer
+    category: installer
+    severity: low
+    observe: { kind: installer.journal, field: exists }
+    expect: { equals: true }
+    remediationHint: Nothing to fix if the node was set up another way; remove this check from a copy of the baseline.
+
+  - id: node.installer-verify-clean
+    title: The last verify of the installer found no failure
+    category: installer
+    severity: low
+    observe: { kind: installer.journal, field: verifyFail }
+    expect: { atMost: 0 }
+    remediationHint: Run the node installer action "verify" (sh install.sh verify) and fix what it reports.
+
+  - id: node.installer-verify-recent
+    title: The installer verified the node within the last 90 days
+    category: installer
+    severity: low
+    observe: { kind: installer.journal, field: verifyAgeSeconds }
+    expect: { ageLessThan: 90d }
+    remediationHint: Run the node installer action "verify" (sh install.sh verify).

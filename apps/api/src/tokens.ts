@@ -14,3 +14,5 @@ export const PLUGIN_NETWORK = Symbol('PLUGIN_NETWORK');
 export const CLOCK = Symbol('CLOCK');
 /** The clock of the panel snapshots (their time, the job's interval, the retention by day), in milliseconds since the epoch. */
 export const SNAPSHOT_CLOCK = Symbol('SNAPSHOT_CLOCK');
+/** The clock of the baseline checks' schedule (when a server is due), in milliseconds since the epoch. */
+export const CHECKS_CLOCK = Symbol('CHECKS_CLOCK');

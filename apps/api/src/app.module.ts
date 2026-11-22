@@ -19,12 +19,18 @@ import { TokensController } from './auth/tokens.controller.js';
 import { SessionsController } from './auth/sessions.controller.js';
 import { SetupController } from './auth/setup.controller.js';
 import { SetupService } from './auth/setup.service.js';
+import { BaselineController } from './baseline/baseline.controller.js';
+import { BaselinesService } from './baseline/baselines.service.js';
+import { CheckRunner } from './baseline/check-runner.service.js';
+import { CheckRunsService } from './baseline/check-runs.service.js';
+import { CheckScheduler } from './baseline/check-scheduler.service.js';
 import { CommandRunner } from './commands/command-runner.service.js';
 import { CommandRunsService } from './commands/command-runs.service.js';
 import { CommandsController } from './commands/commands.controller.js';
 import { ScriptsService } from './commands/scripts.service.js';
 import { type AppConfig } from './config.js';
 import {
+  CHECKS_CLOCK,
   CLOCK,
   CONFIG,
   DATABASE,
@@ -85,6 +91,8 @@ export interface AppOptions {
   readonly clock?: () => number;
   /** The clock of the panel snapshots (their time, the job's interval, the retention by day), so that tests need not wait. */
   readonly snapshotClock?: () => number;
+  /** The clock of the baseline checks' schedule (when a run is queued, when a server is due), so that tests need not wait. */
+  readonly checksClock?: () => number;
 }
 
 function checksFrom(config: AppConfig, database: Database | undefined): ReadinessCheck[] {
@@ -128,6 +136,7 @@ export class AppModule implements OnApplicationShutdown {
         ArtifactsController,
         PanelController,
         PanelSnapshotsController,
+        BaselineController,
       ],
       providers: [
         { provide: CONFIG, useValue: config },
@@ -168,6 +177,11 @@ export class AppModule implements OnApplicationShutdown {
         { provide: SNAPSHOT_CLOCK, useValue: options.snapshotClock ?? (() => Date.now()) },
         PanelSnapshotsService,
         PanelSnapshotScheduler,
+        { provide: CHECKS_CLOCK, useValue: options.checksClock ?? (() => Date.now()) },
+        BaselinesService,
+        CheckRunner,
+        CheckRunsService,
+        CheckScheduler,
         PluginRuntime,
         PluginBroker,
         PluginsService,

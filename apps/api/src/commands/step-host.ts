@@ -28,6 +28,8 @@ export function createGate(): Gate {
 export interface ProgramContext {
   readonly env: Readonly<Record<string, string>>;
   readonly script: string;
+  /** What the step was given on its standard input (empty when nothing). */
+  readonly stdin: string;
   readonly stepId: string;
   /** Aborted by `cancelStep`. */
   readonly signal: AbortSignal;
@@ -44,6 +46,7 @@ interface EmulatedStep {
   readonly key: string;
   readonly sha: string;
   readonly script: string;
+  readonly stdin: string;
   readonly env: Record<string, string>;
   /** The files of `<step dir>/secrets`: delivered with the launch, gone when the program ends by any route. */
   readonly secrets: Map<string, Buffer>;
@@ -121,6 +124,15 @@ export interface StepHostOptions {
   readonly launchGate?: Promise<void>;
   /** The launch fails with this message on its standard error and status 69, as when `sudo` or `setsid` is missing. */
   readonly launchFailure?: string;
+  /**
+   * Names the program for a script that has no `# fake:NAME` line (the baseline observation script is the real text, not a
+   * test script): it gets the script and the standard input of the step, which the baseline program reads as its plan.
+   */
+  readonly programFor?: (script: string) => string | undefined;
+  /** What `id -u` answers (1000 by default; 0 is root and needs no sudo). */
+  readonly uid?: number;
+  /** `sudo true` fails: the login has no working sudo. */
+  readonly sudoFails?: boolean;
 }
 
 export class StepHost {
@@ -198,6 +210,15 @@ export class StepHost {
         const newline = stdin.indexOf(0x0a);
         input = stdin.subarray(newline + 1);
       }
+    }
+    if (inner === 'id -u') {
+      reply(`${String(options.uid ?? 1000)}\n`);
+      return;
+    }
+    if (inner === 'true') {
+      // The probe of the baseline runner: does the login have a working sudo.
+      reply('', command.includes('swellwright-sudo') && options.sudoFails === true ? 1 : 0);
+      return;
     }
     if (command === 'printf %s "$HOME"') {
       // The SSH layer asks for the home of the login before it cancels or removes a step through sudo (sudo resets `HOME`).
@@ -306,6 +327,7 @@ export class StepHost {
       key,
       sha,
       script,
+      stdin: (frames.get('stdin') ?? Buffer.alloc(0)).toString('utf8'),
       env,
       secrets,
       root: useSudo === '1',
@@ -358,7 +380,8 @@ export class StepHost {
   }
 
   private async run(step: EmulatedStep, id: string, options: StepHostOptions): Promise<void> {
-    const name = /^# fake:(\S+)/mu.exec(step.script)?.[1] ?? '';
+    const name =
+      /^# fake:(\S+)/mu.exec(step.script)?.[1] ?? options.programFor?.(step.script) ?? '';
     const program = options.programs[name];
     this.running += 1;
     this.maxRunning = Math.max(this.maxRunning, this.running);
@@ -368,6 +391,7 @@ export class StepHost {
         code = await program({
           env: step.env,
           script: step.script,
+          stdin: step.stdin,
           stepId: id,
           signal: step.abort.signal,
           readSecret: (name) => step.secrets.get(name),

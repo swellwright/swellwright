@@ -1,6 +1,7 @@
 import { artifacts } from './artifacts.js';
 import { audit } from './audit.js';
 import { auth } from './auth.js';
+import { baseline } from './baseline.js';
 import { commands } from './commands.js';
 import { common } from './common.js';
 import { errors } from './errors.js';
@@ -37,4 +38,5 @@ export const en = {
   artifacts,
   panel,
   snapshots,
+  baseline,
 } as const;

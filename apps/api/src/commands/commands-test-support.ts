@@ -250,7 +250,13 @@ export class Harness {
 
   async host(
     programsOf: Record<string, Program>,
-    options: { launchGate?: Promise<void>; launchFailure?: string } = {},
+    options: {
+      launchGate?: Promise<void>;
+      launchFailure?: string;
+      programFor?: (script: string) => string | undefined;
+      uid?: number;
+      sudoFails?: boolean;
+    } = {},
   ): Promise<StepHost> {
     const host = await StepHost.start({
       users: { runner: { password: LOGIN } },

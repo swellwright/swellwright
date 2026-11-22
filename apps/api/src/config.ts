@@ -214,6 +214,23 @@ const EnvSchema = z.object({
     .default(24),
   /** The most one snapshot may hold before compression, in MiB; a panel that needs more is refused with 413. */
   SW_PANEL_SNAPSHOT_MAX_MIB: z.coerce.number().int().min(1).max(256).default(32),
+  /** Baseline checks (ADR 0045): how many runs are kept per server (the newest ones; older ones are deleted). */
+  SW_CHECKS_KEEP_RUNS: z.coerce.number().int().min(2).max(1000).default(30),
+  /** How many servers are checked at the same time, in one fleet run and over all runs. */
+  SW_CHECKS_PARALLELISM: z.coerce.number().int().min(1).max(50).default(3),
+  /** How often every server with a baseline is checked in the background, in hours. 0: never. */
+  SW_CHECKS_INTERVAL_HOURS: z.coerce
+    .number()
+    .min(0)
+    .max(720)
+    .refine((hours) => hours === 0 || hours >= 0.01, 'must be 0 (off) or at least 0.01')
+    .default(0),
+  /** One check of one server, from the connection to the last result, in seconds. */
+  SW_CHECKS_TIMEOUT_SECONDS: z.coerce.number().int().min(5).max(900).default(120),
+  /** How often the script on a server is looked at while it runs, in milliseconds. */
+  SW_CHECKS_POLL_MS: z.coerce.number().int().min(20).max(10_000).default(500),
+  /** How many runs one user may start per minute (a fleet run counts once). */
+  SW_CHECKS_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(10),
 });
 
 export interface AppConfig {
@@ -322,6 +339,16 @@ export interface AppConfig {
     readonly snapshotKeep: number;
     readonly snapshotIntervalMs: number;
     readonly snapshotMaxBytes: number;
+  };
+  /** Baseline checks of servers over SSH (ADR 0045). */
+  readonly checks: {
+    readonly keepRuns: number;
+    readonly parallelism: number;
+    /** 0: no background checks. */
+    readonly intervalMs: number;
+    readonly timeoutMs: number;
+    readonly pollMs: number;
+    readonly rateLimitPerMinute: number;
   };
 }
 
@@ -520,6 +547,14 @@ export function loadConfig(
       snapshotKeep: e.SW_PANEL_SNAPSHOT_KEEP,
       snapshotIntervalMs: Math.round(e.SW_PANEL_SNAPSHOT_INTERVAL_HOURS * 3_600_000),
       snapshotMaxBytes: e.SW_PANEL_SNAPSHOT_MAX_MIB * 1024 * 1024,
+    },
+    checks: {
+      keepRuns: e.SW_CHECKS_KEEP_RUNS,
+      parallelism: e.SW_CHECKS_PARALLELISM,
+      intervalMs: Math.round(e.SW_CHECKS_INTERVAL_HOURS * 3_600_000),
+      timeoutMs: e.SW_CHECKS_TIMEOUT_SECONDS * 1000,
+      pollMs: e.SW_CHECKS_POLL_MS,
+      rateLimitPerMinute: e.SW_CHECKS_RATE_LIMIT_PER_MINUTE,
     },
   };
 }

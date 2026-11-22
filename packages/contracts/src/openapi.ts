@@ -76,6 +76,45 @@ import {
   StringParameterSchema,
   UpdateScriptRequestSchema,
 } from './commands.js';
+import {
+  BaselineCategorySchema,
+  CheckSeveritySchema,
+  ExpectationSchema,
+  ObserveSchema,
+  BaselineCheckSchema,
+  BaselineDocumentSchema,
+  CheckStatusSchema,
+  ObservationStatusSchema,
+  CheckRunStateSchema,
+  CheckTriggerSchema,
+  ObservedValueSchema,
+  CheckResultViewSchema,
+  CheckCountsSchema,
+  CheckRunSummarySchema,
+  CheckRunViewSchema,
+  CheckRunListSchema,
+  DriftChangeSchema,
+  DriftItemSchema,
+  DriftCountsSchema,
+  CheckRunDiffSchema,
+  BaselineVersionInfoSchema,
+  BaselineAssignmentsSchema,
+  BaselineSummarySchema,
+  BaselineListSchema,
+  BaselineViewSchema,
+  CreateBaselineRequestSchema,
+  UpdateBaselineRequestSchema,
+  ValidateBaselineRequestSchema,
+  BaselineIssueSchema,
+  ValidateBaselineResultSchema,
+  SetBaselineAssignmentsRequestSchema,
+  ObservationCatalogueSchema,
+  StartServerBaselineRunRequestSchema,
+  StartBaselineRunsRequestSchema,
+  StartBaselineRunsResultSchema,
+  BaselineFleetItemSchema,
+  BaselineFleetSchema,
+} from './baselines.js';
 import { ApiErrorSchema, ErrorCodeSchema } from './errors.js';
 import {
   ConnectPanelRequestSchema,
@@ -227,7 +266,7 @@ import {
 } from './system.js';
 
 /** Version of the API description. Bump it with every contract change (oasdiff checks the rules). */
-export const OPENAPI_INFO_VERSION = '0.26.0';
+export const OPENAPI_INFO_VERSION = '0.28.0';
 
 /** Named schemas that appear under `components.schemas`. Every response schema must be listed here. */
 const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
@@ -432,6 +471,43 @@ const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
   PanelDiffNoteSchema,
   PanelDiffSideSchema,
   PanelDiffSchema,
+  BaselineCategorySchema,
+  CheckSeveritySchema,
+  ExpectationSchema,
+  ObserveSchema,
+  BaselineCheckSchema,
+  BaselineDocumentSchema,
+  CheckStatusSchema,
+  ObservationStatusSchema,
+  CheckRunStateSchema,
+  CheckTriggerSchema,
+  ObservedValueSchema,
+  CheckResultViewSchema,
+  CheckCountsSchema,
+  CheckRunSummarySchema,
+  CheckRunViewSchema,
+  CheckRunListSchema,
+  DriftChangeSchema,
+  DriftItemSchema,
+  DriftCountsSchema,
+  CheckRunDiffSchema,
+  BaselineVersionInfoSchema,
+  BaselineAssignmentsSchema,
+  BaselineSummarySchema,
+  BaselineListSchema,
+  BaselineViewSchema,
+  CreateBaselineRequestSchema,
+  UpdateBaselineRequestSchema,
+  ValidateBaselineRequestSchema,
+  BaselineIssueSchema,
+  ValidateBaselineResultSchema,
+  SetBaselineAssignmentsRequestSchema,
+  ObservationCatalogueSchema,
+  StartServerBaselineRunRequestSchema,
+  StartBaselineRunsRequestSchema,
+  StartBaselineRunsResultSchema,
+  BaselineFleetItemSchema,
+  BaselineFleetSchema,
 ];
 
 type Json = Record<string, unknown>;
@@ -605,6 +681,11 @@ export function buildOpenApi(): Json {
         name: 'commands',
         description:
           'The script library and runs of a script or a command on several servers at once, with the output of each server (ADR 0038). Writing scripts and starting or stopping runs need `servers:exec` and a fresh authenticator code; reading the history needs `servers:read`.',
+      },
+      {
+        name: 'baselines',
+        description:
+          'Baseline checks of servers over SSH (ADR 0045): documents that say what a healthy server looks like, the closed catalogue of read-only observations they use, runs that compare a server with its baseline, the drift between two runs and the state of the fleet. Starting a run needs `servers:exec` and a fresh authenticator code; editing a baseline needs `servers:write` and one; reading needs `servers:read`. A run changes nothing on a server.',
       },
       {
         name: 'panel',

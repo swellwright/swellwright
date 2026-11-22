@@ -10,6 +10,13 @@ import { LoaderModal } from '@swellwright/ui';
 
 import { MONACO_THEME_NAME, SCRIPT_EDITOR_OPTIONS } from './monaco-theme.js';
 
+/** A problem to underline: a line (1-based), a column when it is known, and what is wrong. */
+export interface EditorMarker {
+  readonly line: number;
+  readonly column: number | null;
+  readonly message: string;
+}
+
 export interface CodeEditorProps {
   value: string;
   onChange?: (value: string) => void;
@@ -20,6 +27,8 @@ export interface CodeEditorProps {
   height?: string;
   /** Accessible name of the editor (Monaco's own text area has none). */
   label: string;
+  /** Problems to underline, for example the issues of a validation. */
+  markers?: readonly EditorMarker[];
 }
 
 // The editor, Monaco and its worker are one chunk, loaded when the first editor is drawn.
@@ -33,6 +42,7 @@ export function CodeEditor({
   language = 'shell',
   height = '360px',
   label,
+  markers,
 }: CodeEditorProps) {
   return (
     <Box
@@ -49,6 +59,7 @@ export function CodeEditor({
       <Suspense fallback={<LoaderModal mih="100%" />}>
         <Editor
           language={language}
+          markers={markers ?? []}
           onChange={onChange}
           readOnly={readOnly}
           theme={MONACO_THEME_NAME}

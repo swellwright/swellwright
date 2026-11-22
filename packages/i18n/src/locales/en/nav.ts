@@ -7,6 +7,7 @@ export const nav = {
   nodes: 'Nodes',
   chains: 'Chains',
   dns: 'DNS',
+  baseline: 'Baseline',
   certificates: 'Certificates',
 
   operations: 'Operations',
