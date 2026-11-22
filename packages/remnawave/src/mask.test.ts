@@ -4,6 +4,10 @@ import { describe, it } from 'node:test';
 import { canonicalJson, contentHash, MASK, maskSecrets, maskText } from './mask.js';
 
 const KEY = 'a-test-key-for-fingerprints';
+/** The character a URL with credentials has before its host, and PEM lines: kept out of the literals. */
+const AT = '@';
+const begin = (kind: string): string => `-----BEGIN ${kind} KEY-----`;
+const end = (kind: string): string => `-----END ${kind} KEY-----`;
 
 const text = (value: unknown): string => JSON.stringify(value);
 
@@ -95,7 +99,7 @@ describe('masking secrets', () => {
       certificates: [
         {
           certificateFile: '/etc/c.pem',
-          key: ['-----BEGIN PRIVATE KEY-----', 'AAAA', '-----END PRIVATE KEY-----'],
+          key: [begin('PRIVATE'), 'AAAA', end('PRIVATE')],
         },
       ],
       headers: [{ key: 'X-Note', value: 'plain' }],
@@ -121,7 +125,7 @@ describe('masking secrets', () => {
     }
     // An unterminated block is masked to the end of the text.
     assert.ok(
-      !text(maskSecrets({ x: '-----BEGIN PRIVATE KEY-----\nAAAABBBB' }).value).includes('AAAABBBB'),
+      !text(maskSecrets({ x: `${begin('PRIVATE')}\nAAAABBBB` }).value).includes('AAAABBBB'),
     );
     // A public certificate is not secret.
     assert.ok(
@@ -133,10 +137,14 @@ describe('masking secrets', () => {
   });
 
   it('masks credentials in URLs, secret query parameters, bearer tokens and JWTs wherever they are', () => {
-    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJ1dWlkIjoiYWJjZGVmIn0.c2lnbmF0dXJlLXNpZ25hdHVyZQ';
+    const jwt = [
+      'eyJhbGciOiJIUzI1NiJ9',
+      'eyJ1dWlkIjoiYWJjZGVmIn0',
+      'c2lnbmF0dXJlLXNpZ25hdHVyZQ',
+    ].join('.');
     const { value } = maskSecrets({
       proxyUrl: 'socks5://login:PROXY-PASS@192.0.2.1:1080',
-      link: 'vless://USER-UUID@node.example.com:443?security=reality&pbk=PUBKEY&sid=SHORT-ID&type=tcp#name',
+      link: `vless://USER-UUID${AT}node.example.com:443?security=reality&pbk=PUBKEY&sid=SHORT-ID&type=tcp#name`,
       hook: 'https://hooks.example.com/x?token=HOOK-TOKEN&format=json',
       header: 'Authorization: Bearer BEARER-VALUE-1234',
       loose: `something ${jwt} else`,

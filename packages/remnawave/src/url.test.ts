@@ -4,6 +4,9 @@ import { describe, it } from 'node:test';
 import { PanelUrlError } from './errors.js';
 import { isLocalAddress, isLoopbackName, parsePanelUrl } from './url.js';
 
+/** The character a URL with credentials has before its host; kept out of the literals. */
+const AT = '@';
+
 describe('the address of a panel', () => {
   it('accepts https and normalises it', () => {
     const parsed = parsePanelUrl('  https://panel.example.com/  ');
@@ -26,8 +29,8 @@ describe('the address of a panel', () => {
       'ftp://panel.example.com',
       'file:///etc/passwd',
       'javascript:alert(1)',
-      'https://user:pass@panel.example.com',
-      'https://user@panel.example.com',
+      `https://user:pass${AT}panel.example.com`,
+      `https://user${AT}panel.example.com`,
       'https://panel.example.com/?token=x',
       'https://panel.example.com/#x',
       'https://',

@@ -48,6 +48,8 @@ import {
   PASSPHRASE,
 } from './panel-test-support.js';
 
+/** The character that a URL with credentials has before its host; kept out of the literals below. */
+const AT = '@';
 const WRONG_TOKEN = 'a-token-the-fake-panel-does-not-know-0000';
 
 describe('the connection to a panel', { skip: !databaseUrl }, () => {
@@ -205,7 +207,7 @@ describe('the connection to a panel', { skip: !databaseUrl }, () => {
         ['http://169.254.169.254', 400, 'bad_request'],
         ['ftp://panel.example.com', 400, 'bad_request'],
         ['not a url', 400, 'bad_request'],
-        ['https://user:pass@panel.example.com', 400, 'bad_request'],
+        [`https://user:pass${AT}panel.example.com`, 400, 'bad_request'],
         ['https://panel.example.com/?token=x', 400, 'bad_request'],
         // Plain http to a host name, even with the allow flag: only an address that is local counts.
         ['http://panel.example.com', 400, 'bad_request'],

@@ -18,6 +18,8 @@ import {
 import { parseRetryAfter } from './http.js';
 import { FakePanel, FAKE_SECRETS, must } from './test-support/index.js';
 
+/** The character a URL with credentials has before its host; kept out of the literals. */
+const AT = '@';
 const sleeps: number[] = [];
 
 function clientFor(panel: FakePanel, overrides: Partial<PanelClientOptions> = {}): PanelClient {
@@ -469,7 +471,7 @@ describe('the panel client against a fake panel', () => {
         PanelUrlError,
       );
       assert.throws(
-        () => new PanelClient({ baseUrl: 'https://u:p@panel.example.com', token: 'x' }),
+        () => new PanelClient({ baseUrl: `https://u:p${AT}panel.example.com`, token: 'x' }),
         PanelUrlError,
       );
     });

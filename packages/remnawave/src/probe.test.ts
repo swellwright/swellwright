@@ -32,7 +32,7 @@ describe('the version window', () => {
       'latest',
       '3.4',
       '3.4.x',
-      '3.4.11.1',
+      '3.4.11 beta',
       'v',
       '3..4',
       '-3.4.1',
