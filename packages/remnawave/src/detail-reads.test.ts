@@ -349,7 +349,7 @@ describe('the lists of the panel that leave bodies out, and the reads that fetch
         // The masks are there, and so are the neighbours of the secrets that are not secret.
         const hostileJson = must(templates.find((template) => template.name === 'Hostile Json'));
         assert.match(JSON.stringify(hostileJson.templateJson), /\[masked:[0-9a-f]{8}\]/u);
-        assert.ok(JSON.stringify(hostileJson.templateJson).includes('node-1.example.com'));
+        assert.match(JSON.stringify(hostileJson.templateJson), /"address":"node-1\.example\.com"/u);
         const hostileYaml = must(templates.find((template) => template.name === 'Hostile Yaml'));
         assert.ok(hostileYaml.templateYaml?.includes('type: trojan'));
         assert.match(hostileYaml.templateYaml ?? '', /\[masked:[0-9a-f]{8}\]/u);
