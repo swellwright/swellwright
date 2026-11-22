@@ -197,7 +197,12 @@ export const templateBodyPresent = defineRule({
       // The list of templates of the panel carries no bodies (3.4.11): a template whose body was not read is not a
       // template without a body, and is never reported as one.
       if (!template.bodyLoaded) {
-        emit({ code: 'not_loaded', severity: 'info', subject, params: { type: template.templateType } });
+        emit({
+          code: 'not_loaded',
+          severity: 'info',
+          subject,
+          params: { type: template.templateType },
+        });
         continue;
       }
       if (!hasBody(template)) {

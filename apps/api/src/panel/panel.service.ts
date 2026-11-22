@@ -31,7 +31,7 @@ import {
   type StoredState,
   viewOf,
 } from './connection-view.js';
-import { PanelCache } from './panel-cache.js';
+import { cacheKeyOf, PanelCache } from './panel-cache.js';
 import { lastErrorOf, panelException } from './panel-errors.js';
 import { tokenExpiry } from './token-expiry.js';
 
@@ -315,7 +315,8 @@ export class PanelService {
       }
     };
     for (const [key, value] of Object.entries(data)) {
-      put(key, value);
+      // The probe read the lists alone: the templates and plugins are kept as that, not as the full read.
+      put(cacheKeyOf(key, false), value);
     }
     put('health', system.health);
     put('userCounts', system.userCounts);

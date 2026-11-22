@@ -245,7 +245,8 @@ export const FINDING_TEXTS = {
         'The tag "{{tag}}" is also used in the profile "{{other}}"; tags must be unique across the panel.',
     },
     'inbound-port-clash': {
-      clash: 'The inbounds {{tags}} listen on the same port {{port}} and are active together on {{nodes}}.',
+      clash:
+        'The inbounds {{tags}} listen on the same port {{port}} and are active together on {{nodes}}.',
       possible_clash:
         'The inbounds {{tags}} listen on the same port {{port}}. No node has them active, so this matters only if they become active on one node.',
     },

@@ -15,7 +15,17 @@ import { lint } from './lint.js';
 import { type PanelModel } from './model.js';
 import { checkPackValue, resolvePack, type ResolvedPack } from './pack.js';
 import { reconcile } from './reconcile.js';
-import { at, healthyFleet, host, inbound, node, profile, realLayout, template, uid } from './test-model.js';
+import {
+  at,
+  healthyFleet,
+  host,
+  inbound,
+  node,
+  profile,
+  realLayout,
+  template,
+  uid,
+} from './test-model.js';
 
 // What the real panel (3.4.11) showed when the checks first ran against it, and a fake panel could not: the lists of
 // templates carry no bodies, a profile holds one inbound for each node and every node activates one of them, and a node
@@ -44,7 +54,11 @@ const reconciled = (model: PanelModel): ReconciliationRow[] =>
   reconcile({ model, pack: pack(), dns: new Map(), dnsSkipped: new Set(), inventory: null }).rows;
 
 /** The same model with a node changed. */
-const withNode = (model: PanelModel, index: number, change: Partial<PanelNodeView>): PanelModel => ({
+const withNode = (
+  model: PanelModel,
+  index: number,
+  change: Partial<PanelNodeView>,
+): PanelModel => ({
   ...model,
   nodes: model.nodes.map((candidate, i) => (i === index ? { ...candidate, ...change } : candidate)),
 });
@@ -56,7 +70,10 @@ describe('the layout of a real fleet', () => {
     assert.equal(fleet.nodes.length, 14);
     assert.equal(fleet.hosts.length, 35);
     assert.equal(fleet.templates.length, 10);
-    assert.deepEqual(fleet.profiles.map((p) => p.inbounds.length), [12, 1, 1]);
+    assert.deepEqual(
+      fleet.profiles.map((p) => p.inbounds.length),
+      [12, 1, 1],
+    );
     assert.ok(fleet.nodes.every((n) => n.configProfile.inbounds.length === 1));
     assert.ok(fleet.mainInbounds.every((i) => i.port === 443));
   });
@@ -111,7 +128,10 @@ describe('profile.inbound-port-clash on the common layout', () => {
   it('names every node that has the clash, once', () => {
     const [first, second] = fleet.mainInbounds;
     assert.ok(first !== undefined && second !== undefined);
-    const both = { uuid: fleet.mainProfile.uuid, inbounds: [first, second].map((i) => ({ uuid: i.uuid, tag: i.tag })) };
+    const both = {
+      uuid: fleet.mainProfile.uuid,
+      inbounds: [first, second].map((i) => ({ uuid: i.uuid, tag: i.tag })),
+    };
     const model = withNode(withNode(fleet, 0, { configProfile: both }), 4, { configProfile: both });
     const found = find(model, rule);
     assert.equal(found.length, 1);
@@ -245,7 +265,13 @@ describe('host.duplicate on the common layout', () => {
   it('sees through what does not select anything: the case of the address and the order of the lists', () => {
     const original = at(fleet.hosts, 1);
     const tagged = { ...original, tags: ['B', 'A'], uuid: uid(0x2f02) };
-    const retagged = { ...original, tags: ['A', 'B'], uuid: uid(0x2f03), remark: 'Same tags', sni: original.sni?.toUpperCase() ?? null };
+    const retagged = {
+      ...original,
+      tags: ['A', 'B'],
+      uuid: uid(0x2f03),
+      remark: 'Same tags',
+      sni: original.sni?.toUpperCase() ?? null,
+    };
     const rows = duplicates({ ...fleet, hosts: [tagged, retagged] });
     assert.equal(rows.length, 2);
   });
@@ -258,7 +284,11 @@ describe('host.duplicate on the common layout', () => {
 
   it('still reports three of one entry, with the others of each', () => {
     const original = at(fleet.hosts, 1);
-    const copies = [uid(0x2f05), uid(0x2f06)].map((id, i) => ({ ...original, uuid: id, remark: `Copy ${String(i)}` }));
+    const copies = [uid(0x2f05), uid(0x2f06)].map((id, i) => ({
+      ...original,
+      uuid: id,
+      remark: `Copy ${String(i)}`,
+    }));
     const rows = duplicates({ ...fleet, hosts: [...fleet.hosts, ...copies] });
     assert.equal(rows.length, 3);
     assert.ok(rows.every((row) => row.related.length === 2));
@@ -321,16 +351,29 @@ describe('host.sni-explicit on an inbound without security', () => {
   it('still reports it for a REALITY inbound, and for a host that forces TLS on a plain inbound', () => {
     const hosts = [
       host(1, 'reality', { profile: profileUuid, inbound: reality.uuid }, { sni: null }),
-      host(2, 'forced', { profile: profileUuid, inbound: plain.uuid }, { sni: null, securityLayer: 'TLS' }),
+      host(
+        2,
+        'forced',
+        { profile: profileUuid, inbound: plain.uuid },
+        { sni: null, securityLayer: 'TLS' },
+      ),
     ];
-    assert.deepEqual(find({ ...base, hosts }, rule).map((f) => f.object.name).sort(), ['forced', 'reality']);
+    assert.deepEqual(
+      find({ ...base, hosts }, rule)
+        .map((f) => f.object.name)
+        .sort(),
+      ['forced', 'reality'],
+    );
   });
 });
 
 describe('the impact calculator on the common layout', () => {
   const fleet = realLayout();
-  const impact = (kind: 'configProfile' | 'internalSquad', uuid: string, change: Record<string, unknown>) =>
-    calculateImpact({ model: fleet, pack: pack(), kind, uuid, change });
+  const impact = (
+    kind: 'configProfile' | 'internalSquad',
+    uuid: string,
+    change: Record<string, unknown>,
+  ) => calculateImpact({ model: fleet, pack: pack(), kind, uuid, change });
 
   it('restarts the twelve nodes of the profile that holds twelve inbounds, and one node for each of the others', () => {
     const edited = (profileRef: (typeof fleet.profiles)[number]) => {
@@ -364,8 +407,16 @@ describe('the impact calculator on the common layout', () => {
 describe('a template whose body was not read, in the impact calculator', () => {
   it('cannot tell whether the proposed body differs, says so, and counts the edit as a change', () => {
     const fleet = realLayout();
-    const unread = { ...fleet.selective, templateJson: null, templateYaml: null, bodyLoaded: false };
-    const model = { ...fleet, templates: fleet.templates.map((t) => (t.uuid === unread.uuid ? unread : t)) };
+    const unread = {
+      ...fleet.selective,
+      templateJson: null,
+      templateYaml: null,
+      bodyLoaded: false,
+    };
+    const model = {
+      ...fleet,
+      templates: fleet.templates.map((t) => (t.uuid === unread.uuid ? unread : t)),
+    };
     const report = calculateImpact({
       model,
       pack: pack(),

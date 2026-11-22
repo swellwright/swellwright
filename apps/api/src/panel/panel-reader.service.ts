@@ -33,7 +33,7 @@ import { CONFIG } from '../tokens.js';
 import { type Actor, VaultService } from '../vault/vault.service.js';
 import { PanelClients } from './clients.js';
 import { type ConnectionRow, tokenInfo, viewOf, warningsOf } from './connection-view.js';
-import { PanelCache } from './panel-cache.js';
+import { cacheKeyOf, PanelCache } from './panel-cache.js';
 import { panelException } from './panel-errors.js';
 import { PanelService } from './panel.service.js';
 
@@ -432,9 +432,14 @@ export class PanelReaderService {
       this.load('internalSquads', actor, (c) => c.internalSquads(), options),
       this.load('externalSquads', actor, (c) => c.externalSquads(), options),
       // Only counted here: the list is enough, and the bodies would cost a request each.
-      this.load('subscriptionTemplates:list', actor, (c) => c.subscriptionTemplates(), options),
+      this.load(
+        cacheKeyOf('subscriptionTemplates', false),
+        actor,
+        (c) => c.subscriptionTemplates(),
+        options,
+      ),
       this.load('snippets', actor, (c) => c.snippets(), options),
-      this.load('nodePlugins:list', actor, (c) => c.nodePlugins(), options),
+      this.load(cacheKeyOf('nodePlugins', false), actor, (c) => c.nodePlugins(), options),
     ]);
     // What a missing scope or a changed shape of one resource costs is that resource; anything else is the panel.
     for (const outcome of settled) {

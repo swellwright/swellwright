@@ -292,11 +292,7 @@ describe('the fake panel and the contract package of the panel', () => {
       GetSubscriptionSettingsCommand,
       { response: fixtures.subscriptionSettings },
     ],
-    [
-      'template (detail)',
-      GetSubscriptionTemplateCommand,
-      { response: first(fixtures.templates) },
-    ],
+    ['template (detail)', GetSubscriptionTemplateCommand, { response: first(fixtures.templates) }],
     ['node plugin (detail)', GetNodePluginCommand, { response: first(fixtures.nodePlugins) }],
     ['snippets', GetSnippetsCommand, { response: { total: 2, snippets: fixtures.snippets } }],
     [

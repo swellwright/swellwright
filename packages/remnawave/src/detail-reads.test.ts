@@ -61,8 +61,12 @@ function hostileTemplates(): Json[] {
           {
             tag: 'proxy',
             protocol: 'trojan',
-            settings: { servers: [{ address: 'node-1.example.com', password: HOSTILE.jsonPassword }] },
-            streamSettings: { wsSettings: { headers: { Authorization: `Bearer ${HOSTILE.jsonBearer}` } } },
+            settings: {
+              servers: [{ address: 'node-1.example.com', password: HOSTILE.jsonPassword }],
+            },
+            streamSettings: {
+              wsSettings: { headers: { Authorization: `Bearer ${HOSTILE.jsonBearer}` } },
+            },
           },
         ],
         remarks: { upstream: `https://example.com/api?token=${HOSTILE.jsonQuery}&x=1` },
@@ -315,10 +319,7 @@ describe('the lists of the panel that leave bodies out, and the reads that fetch
   });
 
   describe('the secrets in what the new reads return', () => {
-    const secrets = [
-      ...Object.values(FAKE_SECRETS).flat(),
-      ...Object.values(HOSTILE),
-    ];
+    const secrets = [...Object.values(FAKE_SECRETS).flat(), ...Object.values(HOSTILE)];
 
     it('never leave the client, in a body or in a request, whatever the body holds', async () => {
       const hostile = hostileTemplates();
@@ -328,7 +329,9 @@ describe('the lists of the panel that leave bodies out, and the reads that fetch
         viewPosition: 5,
         name: 'Hostile Plugin',
         tags: [],
-        pluginConfig: { endpoints: [{ url: 'https://hooks.example.com/x', apiKey: HOSTILE.pluginKey }] },
+        pluginConfig: {
+          endpoints: [{ url: 'https://hooks.example.com/x', apiKey: HOSTILE.pluginKey }],
+        },
       });
       try {
         const client = make();
@@ -347,7 +350,10 @@ describe('the lists of the panel that leave bodies out, and the reads that fetch
         const hostileYaml = must(templates.find((template) => template.name === 'Hostile Yaml'));
         assert.ok(hostileYaml.templateYaml?.includes('type: trojan'));
         assert.match(hostileYaml.templateYaml ?? '', /\[masked:[0-9a-f]{8}\]/u);
-        assert.equal(must(plugins.find((plugin) => plugin.name === 'Hostile Plugin')).configLoaded, true);
+        assert.equal(
+          must(plugins.find((plugin) => plugin.name === 'Hostile Plugin')).configLoaded,
+          true,
+        );
         // What went over the wire to the panel holds no secret either (the paths name uuids only).
         for (const request of panel.requests) {
           for (const secret of [...secrets, panel.token]) {
@@ -387,7 +393,9 @@ describe('the lists of the panel that leave bodies out, and the reads that fetch
       try {
         const after = buildSnapshotContent(await readPanelState(client), maskKeyIdOf(KEY));
         const was = must(templates.find((entry) => entry.id === uuid));
-        const now = must(must(after.kinds.subscriptionTemplates).find((entry) => entry.id === uuid));
+        const now = must(
+          must(after.kinds.subscriptionTemplates).find((entry) => entry.id === uuid),
+        );
         assert.notEqual(now.hash, was.hash, 'the object hash includes the body');
         const diff = diffSnapshotContents(before, after);
         assert.equal(diff.identical, false);

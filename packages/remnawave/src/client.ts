@@ -305,8 +305,10 @@ export class PanelClient implements PanelReader {
   }
 
   async subscriptionTemplatesWithBodies(): Promise<PanelSubscriptionTemplateView[]> {
-    return this.withDetails(await this.subscriptionTemplates(), (view) => view.bodyLoaded, (uuid) =>
-      this.subscriptionTemplate(uuid),
+    return this.withDetails(
+      await this.subscriptionTemplates(),
+      (view) => view.bodyLoaded,
+      (uuid) => this.subscriptionTemplate(uuid),
     );
   }
 
@@ -333,8 +335,10 @@ export class PanelClient implements PanelReader {
   }
 
   async nodePluginsWithConfigs(): Promise<PanelNodePluginView[]> {
-    return this.withDetails(await this.nodePlugins(), (view) => view.configLoaded, (uuid) =>
-      this.nodePlugin(uuid),
+    return this.withDetails(
+      await this.nodePlugins(),
+      (view) => view.configLoaded,
+      (uuid) => this.nodePlugin(uuid),
     );
   }
 

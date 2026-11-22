@@ -409,7 +409,10 @@ export function realLayout(): RealLayout {
       i + 1,
       `Node ${String(i + 1)}`,
       { uuid: profileRef, inbounds: [inb] },
-      { address: `n${String(i + 1)}.example.com`, ips: [{ ip: `192.0.2.${String(10 + i)}`, status: 'INBOUND' }] },
+      {
+        address: `n${String(i + 1)}.example.com`,
+        ips: [{ ip: `192.0.2.${String(10 + i)}`, status: 'INBOUND' }],
+      },
     ),
   );
 
@@ -440,13 +443,18 @@ export function realLayout(): RealLayout {
   for (let k = 0; k < 7; k += 1) {
     const { profile: profileRef, inbound: inb } = at(bindings, k);
     hosts.push(
-      host(100 + k, `Test ${String(k + 1)}`, { profile: profileRef, inbound: inb.uuid }, {
-        address: `192.0.2.${String(10 + k)}`,
-        sni: `n${String(k + 1)}.example.com`,
-        fingerprint: 'safari',
-        nodeUuids: [at(nodes, k).uuid],
-        tags: ['TEST'],
-      }),
+      host(
+        100 + k,
+        `Test ${String(k + 1)}`,
+        { profile: profileRef, inbound: inb.uuid },
+        {
+          address: `192.0.2.${String(10 + k)}`,
+          sni: `n${String(k + 1)}.example.com`,
+          fingerprint: 'safari',
+          nodeUuids: [at(nodes, k).uuid],
+          tags: ['TEST'],
+        },
+      ),
     );
   }
 
