@@ -258,6 +258,7 @@ export function template(
     templateType: type,
     templateJson: type === 'XRAY_JSON' ? { outbounds: [] } : null,
     templateYaml: type === 'XRAY_JSON' ? null : 'proxies: []\n',
+    bodyLoaded: true,
     hash: HASH,
     ...extra,
   };
@@ -270,7 +271,15 @@ export const snippet = (name: string): PanelSnippetView => ({
 });
 
 export function nodePlugin(n: number, name: string): PanelNodePluginView {
-  return { uuid: uid(0x6000 + n), name, viewPosition: n, tags: [], pluginConfig: null, hash: HASH };
+  return {
+    uuid: uid(0x6000 + n),
+    name,
+    viewPosition: n,
+    tags: [],
+    pluginConfig: null,
+    configLoaded: true,
+    hash: HASH,
+  };
 }
 
 export function summaryOf(p: ProfileInput): PanelConfigProfileSummary {

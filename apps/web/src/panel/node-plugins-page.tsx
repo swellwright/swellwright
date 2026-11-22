@@ -25,6 +25,7 @@ import { TbCode, TbEye, TbPackage } from 'react-icons/tb';
 
 import type { PanelNodePluginView } from '@swellwright/contracts';
 import {
+  Callout,
   CopyableDataListItem,
   CountryFlag,
   EmptyPageLayout,
@@ -173,12 +174,16 @@ function PluginBody({
         </SectionCard.Section>
       </SectionCard.Root>
 
-      <ConfigViewerCard
-        description={t('panel:nodePlugins.drawer.configHint')}
-        icon={TbCode}
-        title={t('panel:nodePlugins.drawer.config')}
-        value={jsonText(plugin.pluginConfig ?? {})}
-      />
+      {plugin.configLoaded ? (
+        <ConfigViewerCard
+          description={t('panel:nodePlugins.drawer.configHint')}
+          icon={TbCode}
+          title={t('panel:nodePlugins.drawer.config')}
+          value={jsonText(plugin.pluginConfig ?? {})}
+        />
+      ) : (
+        <Callout color="orange">{t('panel:nodePlugins.drawer.configNotLoaded')}</Callout>
+      )}
     </Stack>
   );
 }

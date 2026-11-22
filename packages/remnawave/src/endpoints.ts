@@ -14,11 +14,13 @@ import {
   InfraProvidersResponse,
   InternalSquadsResponse,
   MetadataResponse,
+  NodePluginResponse,
   NodePluginsResponse,
   NodesResponse,
   SnippetsResponse,
   StatsResponse,
   SubscriptionSettingsResponse,
+  SubscriptionTemplateResponse,
   SubscriptionTemplatesResponse,
 } from './schemas.js';
 
@@ -63,6 +65,12 @@ export const PANEL_ENDPOINTS = {
     '/api/subscription-templates',
     SubscriptionTemplatesResponse,
   ),
+  // The list of templates is documented "without content" (3.4.11): the bodies are in the detail only.
+  subscriptionTemplate: get(
+    'subscriptionTemplates.get',
+    '/api/subscription-templates/{uuid}',
+    SubscriptionTemplateResponse,
+  ),
   subscriptionSettings: get(
     'subscriptionSettings.get',
     '/api/subscription-settings',
@@ -70,6 +78,7 @@ export const PANEL_ENDPOINTS = {
   ),
   snippets: get('snippets.list', '/api/snippets', SnippetsResponse),
   nodePlugins: get('nodePlugins.list', '/api/node-plugins', NodePluginsResponse),
+  nodePlugin: get('nodePlugins.get', '/api/node-plugins/{uuid}', NodePluginResponse),
   infraProviders: get('infra.providers', '/api/infra-billing/providers', InfraProvidersResponse),
   infraBillingNodes: get('infra.billingNodes', '/api/infra-billing/nodes', BillingNodesResponse),
   infraBillingHistory: get('infra.history', '/api/infra-billing/history', BillingRecordsResponse),

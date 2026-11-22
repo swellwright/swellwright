@@ -144,11 +144,12 @@ export const RULE_TEXTS = {
     'body-present': {
       title: 'Template body readable',
       description:
-        'A subscription template of a type that has a body has one that parses as JSON or YAML.',
+        'A subscription template of a type that has a body has one that parses as JSON or YAML. A body that was not read (the panel leaves it out of its list) is never taken for a missing one.',
     },
     unused: {
       title: 'Unused templates',
-      description: 'Points out a subscription template that no external squad and no host uses.',
+      description:
+        'Points out a subscription template that no external squad and no host uses. The "Default" template of each type is not reported: the panel uses it on its own.',
     },
   },
   panel: {
@@ -284,6 +285,7 @@ export const FINDING_TEXTS = {
     },
     'body-present': {
       unreadable: 'The body of this {{type}} template is empty or could not be read as {{format}}.',
+      not_loaded: 'The body of this {{type}} template was not read, so it was not checked.',
     },
     unused: {
       unused: 'No external squad and no host uses this template.',
@@ -481,6 +483,8 @@ export const IMPACT_TEXTS = {
     node_inbounds_unknown:
       'Some active inbounds of the node are not among the inbounds of its new profile; they are dropped.',
     template_body_unreadable: 'The proposed template body is not valid {{format}}.',
+    template_body_not_loaded:
+      'The current body of this template was not read, so the calculation cannot tell whether the proposed body differs from it and counts the edit as a change.',
   },
 } as const;
 

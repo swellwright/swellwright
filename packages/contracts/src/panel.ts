@@ -430,6 +430,11 @@ export const PanelSubscriptionTemplateViewSchema = z
       .describe(
         'The YAML body, decoded and read back from its parsed form with every secret masked (comments are dropped). Null when the template has none or it could not be read.',
       ),
+    bodyLoaded: z
+      .boolean()
+      .describe(
+        'Whether the body above was read. The panel (3.4) leaves the bodies out of the list of templates, so a view that came from the list alone has bodyLoaded false and both body fields null: that says nothing about the template. A view read through the detail request has it true, and a null body is then a template without one. Not part of the hash.',
+      ),
     hash: Hash,
   })
   .meta({ id: 'PanelSubscriptionTemplateView' });
@@ -468,6 +473,11 @@ export const PanelNodePluginViewSchema = z
     viewPosition: z.number().int(),
     tags: z.array(z.string()),
     pluginConfig: Opaque.nullable(),
+    configLoaded: z
+      .boolean()
+      .describe(
+        'Whether pluginConfig was read. The list of node plugins may leave the configuration out (the same split as the templates); a view from the list alone has configLoaded false and pluginConfig null, which says nothing about the plugin. Not part of the hash.',
+      ),
     hash: Hash,
   })
   .meta({ id: 'PanelNodePluginView' });

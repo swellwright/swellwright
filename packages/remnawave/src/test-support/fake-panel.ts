@@ -52,6 +52,12 @@ export interface FakePanelOptions extends FixtureOptions {
   readonly port?: number;
   /** Let `GET /api/tokens` through, as the panel does for an administrator session but not for an API token. */
   readonly adminSession?: boolean;
+  /**
+   * Put the template bodies and the plugin configurations in the lists too. The real panel (3.4.11) does not: its list
+   * of templates is "without content" and has `templateJson` and `encodedTemplateYaml` null for every template, so
+   * that is what this fake does unless told otherwise.
+   */
+  readonly bodiesInLists?: boolean;
 }
 
 const matches = (match: Match, path: string): boolean =>
@@ -74,6 +80,7 @@ export class FakePanel {
   private readonly sockets = new Set<Socket>();
   private currentToken: string;
   private readonly adminSession: boolean;
+  private readonly bodiesInLists: boolean;
   private active = 0;
   /** The most requests that were being served at the same time. */
   peakConcurrency = 0;
@@ -86,6 +93,7 @@ export class FakePanel {
     this.fixtures = buildFixtures(options);
     this.currentToken = options.token ?? FAKE_TOKEN;
     this.adminSession = options.adminSession === true;
+    this.bodiesInLists = options.bodiesInLists === true;
     server.on('connection', (socket) => {
       this.sockets.add(socket);
       socket.on('close', () => this.sockets.delete(socket));
@@ -313,7 +321,15 @@ export class FakePanel {
         return;
       }
       case '/api/subscription-templates': {
-        ok({ total: f.templates.length, templates: f.templates });
+        // As the real panel does: the list carries no bodies (read them with the detail request).
+        const templates = this.bodiesInLists
+          ? f.templates
+          : f.templates.map((template) => ({
+              ...template,
+              templateJson: null,
+              encodedTemplateYaml: null,
+            }));
+        ok({ total: f.templates.length, templates });
         return;
       }
       case '/api/subscription-settings': {
@@ -325,7 +341,10 @@ export class FakePanel {
         return;
       }
       case '/api/node-plugins': {
-        ok({ total: f.nodePlugins.length, nodePlugins: f.nodePlugins });
+        const nodePlugins = this.bodiesInLists
+          ? f.nodePlugins
+          : f.nodePlugins.map((plugin) => ({ ...plugin, pluginConfig: null }));
+        ok({ total: f.nodePlugins.length, nodePlugins });
         return;
       }
       case '/api/infra-billing/providers': {
@@ -373,6 +392,22 @@ export class FakePanel {
           path,
           message: 'Config profile not found',
           errorCode: 'A001',
+        });
+        return;
+      }
+      ok(found);
+      return;
+    }
+    const detail = /^\/api\/(subscription-templates|node-plugins)\/([0-9a-f-]{36})$/u.exec(path);
+    if (detail) {
+      const templates = detail[1] === 'subscription-templates';
+      const found = (templates ? f.templates : f.nodePlugins).find((o) => o['uuid'] === detail[2]);
+      if (!found) {
+        send(404, {
+          timestamp: new Date().toISOString(),
+          path,
+          message: templates ? 'Subscription template not found' : 'Node plugin not found',
+          errorCode: templates ? 'A170' : 'A220',
         });
         return;
       }

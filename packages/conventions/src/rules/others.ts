@@ -180,7 +180,7 @@ export const templateBodyPresent = defineRule({
   kind: 'subscriptionTemplate',
   defaultSeverity: 'error',
   needs: ['subscriptionTemplates'],
-  codes: ['unreadable'],
+  codes: ['unreadable', 'not_loaded'],
   params: z.strictObject({
     types: z
       .array(z.string().min(1).max(40))
@@ -190,14 +190,24 @@ export const templateBodyPresent = defineRule({
   }),
   run({ model, emit }, { types }) {
     for (const template of model.templates) {
-      if (types.includes(template.templateType) && !hasBody(template)) {
+      if (!types.includes(template.templateType)) {
+        continue;
+      }
+      const subject = subjects.template(template);
+      // The list of templates of the panel carries no bodies (3.4.11): a template whose body was not read is not a
+      // template without a body, and is never reported as one.
+      if (!template.bodyLoaded) {
+        emit({ code: 'not_loaded', severity: 'info', subject, params: { type: template.templateType } });
+        continue;
+      }
+      if (!hasBody(template)) {
         const format =
           template.templateType === 'XRAY_JSON' || template.templateType === 'SINGBOX'
             ? 'JSON'
             : 'YAML';
         emit({
           code: 'unreadable',
-          subject: subjects.template(template),
+          subject,
           params: { format, type: template.templateType },
           fields: [format === 'JSON' ? '/templateJson' : '/templateYaml'],
         });
@@ -212,8 +222,16 @@ export const templateUnused = defineRule({
   defaultSeverity: 'info',
   needs: ['subscriptionTemplates', 'externalSquads', 'hosts'],
   codes: ['unused'],
-  params: z.strictObject({}),
-  run({ model, emit }) {
+  params: z.strictObject({
+    ignoreNames: z
+      .array(z.string().min(1).max(100))
+      .max(20)
+      .default(['Default'])
+      .describe(
+        'Template names that are never reported: the panel uses its "Default" template of each type on its own, for every squad and host that names none.',
+      ),
+  }),
+  run({ model, emit }, { ignoreNames }) {
     const used = new Set<string>();
     for (const squad of model.externalSquads) {
       for (const template of squad.templates) {
@@ -226,7 +244,7 @@ export const templateUnused = defineRule({
       }
     }
     for (const template of model.templates) {
-      if (!used.has(template.uuid)) {
+      if (!used.has(template.uuid) && !ignoreNames.includes(template.name)) {
         emit({ code: 'unused', subject: subjects.template(template) });
       }
     }

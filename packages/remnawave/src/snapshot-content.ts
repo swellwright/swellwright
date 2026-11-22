@@ -98,11 +98,12 @@ export const projections = {
   }),
   externalSquad: (view: PanelExternalSquadView) =>
     without(view, ['membersCount', 'createdAt', 'updatedAt', 'hash']),
-  template: (view: PanelSubscriptionTemplateView) => without(view, ['hash']),
+  // `bodyLoaded` says how the view was read, not what the template is: it is not what the hash covers.
+  template: (view: PanelSubscriptionTemplateView) => without(view, ['hash', 'bodyLoaded']),
   settings: (view: PanelSubscriptionSettingsView) =>
     without(view, ['createdAt', 'updatedAt', 'hash']),
   snippet: (view: PanelSnippetView) => without(view, ['hash']),
-  plugin: (view: PanelNodePluginView) => without(view, ['hash']),
+  plugin: (view: PanelNodePluginView) => without(view, ['hash', 'configLoaded']),
   provider: (view: PanelInfraProviderView) => ({
     name: view.name,
     loginUrl: view.loginUrl,

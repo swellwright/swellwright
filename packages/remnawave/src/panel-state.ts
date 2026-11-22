@@ -28,7 +28,8 @@ import {
 import { assessPanelVersion } from './version.js';
 
 // Everything a snapshot is made of, read from the panel in one go (ADR 0043): the views of the adapters for every kind
-// of object, with the configuration of every config profile (the list does not carry it), and for each kind whether
+// of object, with the configuration of every config profile, the body of every subscription template and the
+// configuration of every node plugin (the lists do not carry them; each is read with its detail request), and for each kind whether
 // it could be read. A kind the token has no scope for, or that the panel answers in a shape this release does not
 // know, is left out and says why; a panel that is down, refuses the token or asks to slow down fails the whole read.
 
@@ -119,10 +120,10 @@ export async function readPanelState(reader: PanelReader): Promise<PanelState> {
     { key: 'configProfiles', read: () => readProfiles(reader) },
     { key: 'internalSquads', read: () => reader.internalSquads() },
     { key: 'externalSquads', read: () => reader.externalSquads() },
-    { key: 'subscriptionTemplates', read: () => reader.subscriptionTemplates() },
+    { key: 'subscriptionTemplates', read: () => reader.subscriptionTemplatesWithBodies() },
     { key: 'subscriptionSettings', read: () => reader.subscriptionSettings() },
     { key: 'snippets', read: () => reader.snippets() },
-    { key: 'nodePlugins', read: () => reader.nodePlugins() },
+    { key: 'nodePlugins', read: () => reader.nodePluginsWithConfigs() },
     { key: 'infra', read: () => reader.infra() },
   ];
   const settled = await Promise.allSettled(readings.map((reading) => reading.read()));
