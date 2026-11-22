@@ -84,7 +84,7 @@ fail_on() { printf '%s\n' "$1" >>"$STATE/fail"; }
 make_stubs() {
     mkdir -p "$STATE/stubs"
     # Commands that only record.
-    for _c in hostnamectl modprobe journalctl chown add-apt-repository rsync python3 sleep flock sudo; do
+    for _c in hostnamectl modprobe journalctl chown add-apt-repository rsync python3 sleep flock; do
         mkstub "$_c" <<'EOF'
 exit 0
 EOF
@@ -98,22 +98,60 @@ EOF
     mkstub install <<EOF
 exec "$_real_install" "\$@"
 EOF
-    # stat reports the mode written in FILE.mode when there is one (file systems that cannot hold a mode), the real one otherwise.
+    # stat [-L] -c FORMAT FILE reports the mode written in FILE.mode when there is one (file systems that cannot hold a mode, and
+    # the tests that need a mode the file does not have), the real one otherwise. The owner is FILE.owner when there is one;
+    # a file in the home of a user of the fake system belongs to that user (user id 1000 unless uid_NAME says otherwise), any other file to
+    # whoever really owns it (the user that runs the suite, which is the user the installer sees through `id -u`).
     mkstub stat <<EOF
-if [ "\${1:-}" = -c ] && [ "\${2:-}" = %a ] && [ -f "\${3:-}.mode" ]; then cat "\$3.mode"; exit 0; fi
+_fmt=; _prev=; _f=
+for _x in "\$@"; do
+    [ "\$_prev" = -c ] && _fmt=\$_x
+    _prev=\$_x; _f=\$_x
+done
+case "\$_fmt" in
+    %a) if [ -f "\$_f.mode" ]; then cat "\$_f.mode"; exit 0; fi ;;
+    %u)
+        if [ -f "\$_f.owner" ]; then cat "\$_f.owner"; exit 0; fi
+        case "\$_f" in
+            "\$STUB_R"/home/*)
+                _n=\${_f#"\$STUB_R"/home/}; _n=\${_n%%/*}
+                if [ -f "\$STUB_STATE/uid_\$_n" ]; then cat "\$STUB_STATE/uid_\$_n"; else echo 1000; fi
+                exit 0 ;;
+        esac ;;
+esac
 exec "$(command -v stat)" "\$@"
 EOF
+    # id NAME: is there such a user. id -Gn NAME: its groups (its own, sudo for the members, and what groups_NAME adds).
     mkstub id <<EOF
 case "\${1:-}" in
+    -Gn)
+        grep -qx "\$2" "\$STUB_STATE/users" 2>/dev/null || exit 1
+        printf '%s' "\$2"
+        grep -qx "\$2" "\$STUB_STATE/sudo_members" 2>/dev/null && printf ' sudo'
+        [ -f "\$STUB_STATE/groups_\$2" ] && printf ' %s' "\$(cat "\$STUB_STATE/groups_\$2")"
+        printf '\n'; exit 0 ;;
     ''|-*) exec "$(command -v id)" "\$@" ;;
 esac
 grep -qx "\$1" "\$STUB_STATE/users" 2>/dev/null
 EOF
+    # The users of the fake system are the lines of "$STUB_STATE/users". A user has user id 1000, group id 1000 and the shell
+    # "$R/bin/bash" unless uid_NAME, gid_NAME or shell_NAME say otherwise; shadow_NAME is what follows the name on its line of
+    # /etc/shadow (no file: no entry).
     mkstub getent <<'EOF'
+_pw_line() {
+    _u=1000; [ -f "$STUB_STATE/uid_$1" ] && _u=$(cat "$STUB_STATE/uid_$1")
+    _g=$_u; [ -f "$STUB_STATE/gid_$1" ] && _g=$(cat "$STUB_STATE/gid_$1")
+    _s=$STUB_R/bin/bash; [ -f "$STUB_STATE/shell_$1" ] && _s=$(cat "$STUB_STATE/shell_$1")
+    printf '%s:x:%s:%s::%s/home/%s:%s\n' "$1" "$_u" "$_g" "$STUB_R" "$1" "$_s"
+}
 case "$1" in
     passwd)
+        if [ -z "${2:-}" ]; then while IFS= read -r _n; do _pw_line "$_n"; done <"$STUB_STATE/users"; exit 0; fi
         grep -qx "$2" "$STUB_STATE/users" 2>/dev/null || exit 2
-        printf '%s:x:1000:1000::%s/home/%s:/bin/bash\n' "$2" "$STUB_R" "$2" ;;
+        _pw_line "$2" ;;
+    shadow)
+        [ -f "$STUB_STATE/shadow_$2" ] || exit 2
+        printf '%s:%s\n' "$2" "$(cat "$STUB_STATE/shadow_$2")" ;;
     group)
         _m=$(tr '\n' ',' <"$STUB_STATE/sudo_members" 2>/dev/null | sed 's/,$//')
         printf 'sudo:x:27:%s\n' "$_m" ;;
@@ -128,12 +166,14 @@ EOF
 for _a in "$@"; do _u=$_a; done
 echo "$_u" >>"$STUB_STATE/users"
 mkdir -p "$STUB_R/home/$_u"
+chmod 755 "$STUB_R/home/$_u"
 exit 0
 EOF
     mkstub adduser <<'EOF'
 for _a in "$@"; do _u=$_a; done
 echo "$_u" >>"$STUB_STATE/users"
 mkdir -p "$STUB_R/home/$_u"
+chmod 755 "$STUB_R/home/$_u"
 exit 0
 EOF
     mkstub usermod <<'EOF'
@@ -169,9 +209,32 @@ case "$1" in
 esac
 exit 0
 EOF
+    # sshd -T [-C user=NAME,...] prints sshd_T.NAME, else sshd_T, else what a stock configuration says.
     mkstub sshd <<'EOF'
 if [ "${1:-}" = -T ]; then
-    if [ -f "$STUB_STATE/sshd_T" ]; then cat "$STUB_STATE/sshd_T"; else printf 'port 22\npermitrootlogin yes\npasswordauthentication yes\n'; fi
+    _u=
+    case "${3:-}" in user=*) _u=${3#user=}; _u=${_u%%,*} ;; esac
+    if [ -n "$_u" ] && [ -f "$STUB_STATE/sshd_T.$_u" ]; then cat "$STUB_STATE/sshd_T.$_u"
+    elif [ -f "$STUB_STATE/sshd_T" ]; then cat "$STUB_STATE/sshd_T"
+    else printf 'port 22\npermitrootlogin yes\npasswordauthentication yes\npubkeyauthentication yes\nusepam yes\nstrictmodes yes\nauthorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2\nauthenticationmethods any\n'; fi
+fi
+exit 0
+EOF
+    # sudo -n -l -U NAME lists what NAME may run: sudo_l_NAME, else "may run everything" (with a password).
+    mkstub sudo <<'EOF'
+if [ "${1:-}" = -n ] && [ "${2:-}" = -l ] && [ "${3:-}" = -U ]; then
+    if [ -f "$STUB_STATE/sudo_l_$4" ]; then cat "$STUB_STATE/sudo_l_$4"
+    else printf 'User %s may run the following commands on node1:\n    (ALL : ALL) ALL\n' "$4"; fi
+fi
+exit 0
+EOF
+    # ssh-keygen -l -f FILE: a line that looks like a public key (a known type and a long enough base64 blob) has a fingerprint.
+    mkstub ssh-keygen <<'EOF'
+if [ "${1:-}" = -l ] && [ "${2:-}" = -f ]; then
+    if grep -Eq '^(ssh-(ed25519|rsa)|ecdsa-sha2-nistp(256|384|521)) AAAA[A-Za-z0-9+/]{16,}={0,3}( .*)?$' "$3" 2>/dev/null; then
+        echo "256 SHA256:stub comment (ED25519)"; exit 0
+    fi
+    echo "$3 is not a public key file." >&2; exit 255
 fi
 exit 0
 EOF
@@ -357,8 +420,8 @@ healthy_state() {
     printf 'CN = node1.example.com\n' >"$STATE/cert_subject"
     printf 'CN = Example CA\n' >"$STATE/cert_issuer"
     printf 'notAfter=Jan  1 00:00:00 2099 GMT\n' >"$STATE/cert_end"
-    printf 'certsync\nadmin\n' >"$STATE/users"
-    printf 'admin\n' >"$STATE/sudo_members"
+    printf 'certsync\n' >"$STATE/users"; : >"$STATE/sudo_members"; : >"$STATE/haspw"
+    add_admin admin
     mkdir -p "$R/home/certsync/.ssh" "$R/opt/certs" "$R/etc/haproxy"
     printf 'command="rrsync /opt/certs/",restrict ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAMPLEEXAM sender@example\n' >"$R/home/certsync/.ssh/authorized_keys"
     printf 'CERT\n' >"$R/opt/certs/fullchain.cer"
@@ -366,6 +429,16 @@ healthy_state() {
     chmod 640 "$R/opt/certs/private.key" 2>/dev/null
     printf '# stub\n' >"$R/etc/haproxy/haproxy.cfg"
     have docker nginx haproxy fail2ban-client ufw
+}
+
+# add_admin NAME [KEY LINE]: an administrator that counts: in the sudo group, with a password, a home only it can write, a
+# ~/.ssh and a key, and sudo installed. A test breaks one thing at a time.
+add_admin() {
+    echo "$1" >>"$STATE/users"; echo "$1" >>"$STATE/sudo_members"; echo "$1" >>"$STATE/haspw"
+    mkdir -p "$R/home/$1/.ssh"
+    printf '%s\n' "${2:-$KEY1}" >"$R/home/$1/.ssh/authorized_keys"
+    chmod 755 "$R/home/$1"; chmod 700 "$R/home/$1/.ssh"; chmod 600 "$R/home/$1/.ssh/authorized_keys"
+    have sudo ssh-keygen
 }
 
 # setup_env: a fresh fake system for one test.
@@ -383,7 +456,11 @@ setup_env() {
     set_os ubuntu
     make_stubs
     have hostnamectl modprobe journalctl chown add-apt-repository rsync python3 sleep flock chmod install id getent useradd adduser usermod passwd chpasswd systemctl sshd
-    have iptables openssl gpg curl apt-get hostname pgrep dpkg ip ss sysctl timedatectl rrsync stat
+    have iptables openssl gpg curl apt-get hostname pgrep dpkg ip ss sysctl timedatectl rrsync stat ssh-keygen
+    # The login shell of the fake accounts.
+    mkdir -p "$R/bin"
+    printf '#!/bin/sh\n' >"$R/bin/bash"
+    chmod +x "$R/bin/bash"
     # The installer sees only the stubs and the basic tools (CORE): a real docker, nginx or sudo on the machine that runs the
     # suite must not be found by `command -v`, let alone run.
     SUT_PATH=$BIN:$CORE

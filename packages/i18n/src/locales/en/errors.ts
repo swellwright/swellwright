@@ -9,6 +9,10 @@ export const errors = {
   stepUpRequired: 'Confirm with a code from your authenticator, then try again.',
   notReady: 'The server cannot sign anyone in yet: it has no database.',
   vaultSealed: 'The vault is sealed. Unseal it with the passphrase first.',
+  secretExpired:
+    'The secret "{{name}}" has expired. Renew its expiry or replace it in the vault, then try again.',
+  secretExpiredUnnamed:
+    'A secret has expired. Renew its expiry or replace it in the vault, then try again.',
   validation: 'Some of the values are not valid.',
   server: 'Something went wrong on the server. Try again.',
   generic: 'Something went wrong. Try again.',
@@ -32,6 +36,14 @@ export const errors = {
       'The panel answered in a shape this release does not know. Its version may have changed the API.',
     contractChangedAt:
       'The panel answered in a shape this release does not know: {{endpoint}}, field {{field}}. Its version may have changed the API.',
+  },
+  /** Snapshots of the panel (ADR 0043). */
+  snapshot: {
+    otherPanel:
+      'This snapshot is of another panel than the connected one, so it cannot be compared with it.',
+    tooLarge:
+      'The panel holds more than one snapshot may keep. The limit is set by the installation.',
+    corrupt: 'The stored content of this snapshot cannot be read. Delete it and take another one.',
   },
   ssh: {
     hostKeyNotPinned:

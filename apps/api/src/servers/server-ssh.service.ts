@@ -345,6 +345,7 @@ export class ServerSshService {
       );
     }
     const tried: string[] = [];
+    let expired: CodedHttpException | null = null;
     for (const entry of info.access) {
       const started = performance.now();
       try {
@@ -356,11 +357,18 @@ export class ServerSshService {
         );
         return await this.storeFacts(actor, id, entry.id, collected, started, meta);
       } catch (error) {
+        if (error instanceof CodedHttpException && error.apiCode === 'secret_expired') {
+          // The entry names a secret that expired: nothing was sent with it; the next entry may work.
+          expired = error;
+          tried.push(`${entry.id}:${error.apiCode}`);
+          continue;
+        }
         if (
           error instanceof CodedHttpException &&
           (error.apiCode === 'ssh_auth_failed' || error.apiCode === 'ssh_key_invalid')
         ) {
           // This entry does not log in; the next one may.
+          expired = null;
           tried.push(`${entry.id}:${error.apiCode}`);
           continue;
         }
@@ -369,6 +377,10 @@ export class ServerSshService {
         }
         throw error;
       }
+    }
+    if (expired !== null && tried.every((entry) => entry.endsWith(':secret_expired'))) {
+      // Every entry was refused for an expired secret: nothing was attempted, so there is nothing to record.
+      throw expired;
     }
     await this.recordRefreshFailure(actor, id, null, 'ssh_auth_failed', meta);
     throw new CodedHttpException(

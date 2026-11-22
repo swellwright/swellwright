@@ -49,6 +49,7 @@ esac
 . "$HERE/t-params.sh"
 . "$HERE/t-steps.sh"
 . "$HERE/t-flow.sh"
+. "$HERE/t-access.sh"
 
 FILTER=${1:-}
 PASS=0; FAILED=0; SKIPPED=0

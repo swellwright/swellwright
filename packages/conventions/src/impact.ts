@@ -246,7 +246,11 @@ export function editableForm(
 ): { target: CheckObjectRef; editable: Record<string, unknown>; masked: boolean } {
   const { editable, ref } = editableOf(kind, model, uuid);
   const form = structuredClone(editable.current);
-  return { target: ref, editable: form, masked: /\[masked(?::[0-9a-f]{8})?\]/u.test(canonicalJson(form)) };
+  return {
+    target: ref,
+    editable: form,
+    masked: /\[masked(?::[0-9a-f]{8})?\]/u.test(canonicalJson(form)),
+  };
 }
 
 // ---- typed proposals --------------------------------------------------------------------------------------------

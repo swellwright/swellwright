@@ -12,3 +12,14 @@ export {
 export type { FixtureOptions, Json, PanelFixtures } from './fixtures.js';
 export { applyChecksScenario, CHECKS_ZONE } from './fixtures-checks.js';
 export { must } from './must.js';
+export {
+  addClient,
+  addProfileInbound,
+  changeHostAddress,
+  changeRuntimeOnly,
+  changeTemplateBody,
+  removeNode,
+  reorderNodeTags,
+  ROTATED_SECRETS,
+  rotateRealityKey,
+} from './snapshot-mutations.js';

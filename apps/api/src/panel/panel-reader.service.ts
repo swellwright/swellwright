@@ -20,8 +20,10 @@ import {
   type PanelHealth,
   PanelError,
   type PanelReader,
+  type PanelState,
   type PanelSystemVersion,
   type PanelUserCounts,
+  readPanelState,
 } from '@swellwright/remnawave';
 
 import { WindowLimiter } from '../auth/rate-limit.js';
@@ -95,8 +97,9 @@ export class PanelReaderService {
     this.refreshLimiter = new WindowLimiter(config.panel.refreshRateLimitPerMinute, 60_000);
   }
 
-  private limitRefresh(actor: Actor): void {
-    if (!this.refreshLimiter.hit(actor.id)) {
+  private limitRefresh(actor: Actor | null): void {
+    // The background job has no person to limit: it runs on its own interval.
+    if (actor !== null && !this.refreshLimiter.hit(actor.id)) {
       throw new RateLimitedException(
         60,
         'Too many forced reads of the panel. Try again in a minute, or read without refresh.',
@@ -119,7 +122,7 @@ export class PanelReaderService {
 
   private async load<T>(
     key: string,
-    actor: Actor,
+    actor: Actor | null,
     loader: (client: PanelReader) => Promise<T>,
     options: Options = {},
   ): Promise<Read<T>> {
@@ -381,6 +384,22 @@ export class PanelReaderService {
       cached: reads.length > 0 && reads.every((read) => read.cached),
       connectionId: row.id,
     };
+  }
+
+  // ---- everything a snapshot holds ---------------------------------------------------------------------------------
+
+  /**
+   * Every kind of object a snapshot holds, read through one client (ADR 0043). With `refresh` the panel is asked again
+   * (a person's forced read counts against the limit of that person; the background job has no actor and no limit);
+   * without it the memory of this server may answer, which is what a comparison with "the panel now" uses.
+   */
+  state(actor: Actor | null, refresh: boolean): Promise<Read<PanelState>> {
+    return this.load('state', actor, (c) => readPanelState(c), { refresh });
+  }
+
+  /** The row of the connection and the identifier of the key that masks what is read: what a snapshot is stamped with. */
+  async stamp(): Promise<{ readonly connection: ConnectionRow; readonly maskKeyId: string }> {
+    return { connection: await this.usable(), maskKeyId: this.clients.maskKeyId };
   }
 
   // ---- the overview ------------------------------------------------------------------------------------------------

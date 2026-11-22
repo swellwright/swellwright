@@ -52,6 +52,15 @@ export const overview = {
     tokenDays_other: '{{count}} дня',
     tokenExpired: 'Истёк',
     tokenNoExpiry: 'Нет даты истечения',
+    snapshot: 'Последний снимок',
+    snapshotNone: 'Пока нет',
+    snapshotNoneHint: 'Сделайте его на странице «Снимки»',
+    snapshotChanges_one: 'С тех пор изменился {{count}} объект',
+    snapshotChanges_few: 'С тех пор изменились {{count}} объекта',
+    snapshotChanges_many: 'С тех пор изменились {{count}} объектов',
+    snapshotChanges_other: 'С тех пор изменились {{count}} объекта',
+    snapshotSame: 'Панель такая же, как была',
+    snapshotUnknown: 'С панелью ещё не сравнивали',
   },
 
   checks: {

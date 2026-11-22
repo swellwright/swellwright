@@ -95,6 +95,15 @@ import {
   PanelTestResultSchema,
 } from './panel.js';
 import {
+  CreatePanelSnapshotRequestSchema,
+  PanelDiffQuerySchema,
+  PanelDiffSchema,
+  PanelSnapshotListQuerySchema,
+  PanelSnapshotListSchema,
+  PanelSnapshotParamsSchema,
+  PanelSnapshotSummarySchema,
+} from './panel-snapshots.js';
+import {
   EnablePluginRequestSchema,
   PluginConfigViewSchema,
   PluginGatewayReplySchema,
@@ -584,7 +593,8 @@ export const listSecretsRoute = defineRoute({
   path: '/secrets',
   tags: ['vault'],
   summary: 'List the secrets, without their values',
-  description: 'Works while the vault is sealed: names, types and dates are not secret.',
+  description:
+    'Works while the vault is sealed: names, types and dates are not secret. `expired` and `expiresInDays` are worked out by the server clock.',
   auth: 'any',
   permission: 'vault:read',
   responses: { 200: { description: 'The secrets.', schema: SecretListSchema } },
@@ -612,7 +622,7 @@ export const updateSecretRoute = defineRoute({
   tags: ['vault'],
   summary: 'Rename a secret, change its details or replace its value',
   description:
-    'A new `value` needs the vault open and moves the version forward; the old value is not kept. Renaming and the details work while sealed.',
+    'A new `value` needs the vault open and moves the version forward; the old value is not kept. Renaming and the details work while sealed. Setting a later `expiresAt` renews an expired secret; setting `null` removes the expiry.',
   auth: 'session',
   permission: 'vault:manage',
   stepUp: true,
@@ -642,7 +652,7 @@ export const revealSecretRoute = defineRoute({
   tags: ['vault'],
   summary: 'Show the value of a secret',
   description:
-    'The only way a value leaves the vault. Needs the vault open, the reveal permission and a fresh second factor, and is recorded before the value is sent.',
+    'The only way a value leaves the vault. Needs the vault open, the reveal permission and a fresh second factor, and is recorded before the value is sent. An expired secret can still be revealed (to read it and rotate it); the answer says `expired: true`.',
   auth: 'session',
   permission: 'vault:reveal',
   stepUp: true,
@@ -1200,7 +1210,7 @@ export const removeAccessRoute = defineRoute({
 });
 
 const SSH_ERRORS =
-  'Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), 423 `vault_sealed`, 429 `rate_limited`.';
+  'Errors: 404 (no such server or entry), 409 `host_key_not_pinned` (nothing is pinned yet), `host_key_mismatch` (the server shows another key than the pinned one: `details` has `expected` and `actual`), `address_not_allowed` (the outbound policy refuses the address), `secret_expired` (a secret the access entry names has expired: nothing was sent with it; `details` has `secretId` and `secretName`; renew its expiry or replace the secret), 423 `vault_sealed`, 429 `rate_limited`.';
 
 export const scanHostKeyRoute = defineRoute({
   operationId: 'scanHostKey',
@@ -1273,7 +1283,7 @@ export const getFactsRoute = defineRoute({
 });
 
 const RUN_ERRORS =
-  'Errors: 400 `validation_failed` (the body, or a parameter value that does not fit its definition: `details` names it), 404 (no such script or server), 409 `confirmation_required` (the level of the run is not `read` and `confirmedLevel` is missing or different; `details.level` says which), 429 `rate_limited`. A server that cannot be used (no pinned host key, no access entry) is not an error of the request: its target is `skipped` with the reason, and the others run.';
+  'Errors: 400 `validation_failed` (the body, or a parameter value that does not fit its definition: `details` names it), 404 (no such script or server), 403 `forbidden` (`secrets` is given and the role lacks `vault:reveal`), 409 `confirmation_required` (the level of the run is not `read` and `confirmedLevel` is missing or different; `details.level` says which), 409 `secret_expired` (a secret in `secrets` has expired: nothing was queued; `details` names it), 423 `vault_sealed` (`secrets` is given and the vault is closed: nothing was queued), 429 `rate_limited`. A server that cannot be used (no pinned host key, no access entry) is not an error of the request: its target is `skipped` with the reason, and the others run.';
 
 export const listScriptsRoute = defineRoute({
   operationId: 'listScripts',
@@ -1351,7 +1361,7 @@ export const createCommandRunRoute = defineRoute({
   path: '/command-runs',
   tags: ['commands'],
   summary: 'Run a script or a command on several servers',
-  description: `Queues a run and returns at once; the servers are worked on in the background, at most \`SW_COMMAND_CONCURRENCY\` at a time, each as a target of its own with its own state, exit status and output: one server failing never fails another. The script runs on the server as a detached step, so it survives a dropped connection and a restart of this API. Values of parameters reach it only as environment variables. The host key must be pinned and the address policy applies. A run whose level is not \`read\` must be confirmed (\`confirmedLevel\`); the engine's approvals come in a later phase. Output can hold secrets: whoever may read servers may read it. ${RUN_ERRORS}`,
+  description: `Queues a run and returns at once; the servers are worked on in the background, at most \`SW_COMMAND_CONCURRENCY\` at a time, each as a target of its own with its own state, exit status and output: one server failing never fails another. The script runs on the server as a detached step, so it survives a dropped connection and a restart of this API. Values of parameters reach it only as environment variables. A vault secret is handed over differently: with \`secrets\` (or a \`secret\` parameter of the script) the runner writes it to a file below the step directory (mode 0600, never in a command line, the environment, the script or the stored run), points \`<NAME>_FILE\` at it and removes it when the script ends, whatever the way; where the output holds the value it shows \`[secret NAME]\` instead (best effort: a script can transform a value). That needs \`vault:reveal\` as well, because a script can print what it reads. The host key must be pinned and the address policy applies. A run whose level is not \`read\` must be confirmed (\`confirmedLevel\`); the engine's approvals come in a later phase. Output can hold secrets: whoever may read servers may read it. ${RUN_ERRORS}`,
   auth: 'session',
   permission: 'servers:exec',
   stepUp: true,
@@ -1960,6 +1970,102 @@ export const calculatePanelImpactRoute = defineRoute({
   responses: { 200: { description: 'The impact.', schema: ImpactReportSchema } },
 });
 
+const SNAPSHOT_ERRORS =
+  'Reading the live panel can fail with the codes of the panel reads: 409 `panel_not_connected`, 409 `panel_unsupported_version`, 502 `panel_unauthorized`, 502 `panel_forbidden`, 502 `panel_unreachable`, 502 `panel_contract_changed`, 504 `panel_timeout`, 429 `panel_rate_limited`, and 423 `vault_sealed` while the vault that holds the token is sealed.';
+
+export const listPanelSnapshotsRoute = defineRoute({
+  operationId: 'listPanelSnapshots',
+  method: 'get',
+  path: '/panel/snapshots',
+  tags: ['panel'],
+  summary: 'The snapshots of the panel',
+  description:
+    'Newest first, without their content. `settings` says how often the background job takes one and how many are kept. Reading does not call the panel, and works while no panel is connected (the snapshots of a panel that was disconnected are kept).',
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: PanelSnapshotListQuerySchema },
+  responses: { 200: { description: 'One page of snapshots.', schema: PanelSnapshotListSchema } },
+});
+
+export const createPanelSnapshotRoute = defineRoute({
+  operationId: 'createPanelSnapshot',
+  method: 'post',
+  path: '/panel/snapshots',
+  tags: ['panel'],
+  summary: 'Take a snapshot of the panel now',
+  description: `Reads every kind of object the token may read (nodes, hosts, config profiles with their configuration, squads, subscription templates and settings, snippets, node plugins, infrastructure billing) from the panel itself, not from the memory of this server, masks every secret, and keeps the result compressed, with a hash per object and one for the whole. A kind the token cannot read is left out and said so in \`coverage\`. Counts as one forced read of the panel for the rate limit. Recorded as \`panel.snapshot.created\` (counts and hashes, never an object). Afterwards the retention policy removes what is beyond \`SW_PANEL_SNAPSHOT_KEEP\` snapshots, except the newest of each of the last 14 days. 413 \`snapshot_too_large\` when the content passes the size limit. ${SNAPSHOT_ERRORS}`,
+  auth: 'session',
+  permission: 'panel:write',
+  request: { body: CreatePanelSnapshotRequestSchema },
+  responses: { 201: { description: 'The snapshot.', schema: PanelSnapshotSummarySchema } },
+});
+
+export const getPanelSnapshotRoute = defineRoute({
+  operationId: 'getPanelSnapshot',
+  method: 'get',
+  path: '/panel/snapshots/{id}',
+  tags: ['panel'],
+  summary: 'One snapshot',
+  description:
+    'Who took it, when, from which panel version, how many objects of each kind it holds, what the token could not read, and the hashes. The content itself is in the export and in a diff. 404 when there is no such snapshot.',
+  auth: 'any',
+  permission: 'panel:read',
+  request: { params: PanelSnapshotParamsSchema },
+  responses: { 200: { description: 'The snapshot.', schema: PanelSnapshotSummarySchema } },
+});
+
+export const deletePanelSnapshotRoute = defineRoute({
+  operationId: 'deletePanelSnapshot',
+  method: 'delete',
+  path: '/panel/snapshots/{id}',
+  tags: ['panel'],
+  summary: 'Delete a snapshot',
+  description:
+    'Removes the snapshot and its content from this server; nothing is changed on the panel. Needs a fresh second factor. Recorded as `panel.snapshot.deleted`. 404 when there is no such snapshot.',
+  auth: 'session',
+  permission: 'panel:write',
+  stepUp: true,
+  request: { params: PanelSnapshotParamsSchema },
+  responses: { 204: { description: 'Deleted.', schema: z.undefined(), empty: true } },
+});
+
+export const diffPanelSnapshotRoute = defineRoute({
+  operationId: 'diffPanelSnapshot',
+  method: 'get',
+  path: '/panel/snapshots/{id}/diff',
+  tags: ['panel'],
+  summary: 'What differs between a snapshot and the live panel or another snapshot',
+  description: `Seen from the snapshot in the path to \`against\`. Objects are matched by uuid (a snippet by name) and compared field by field; an array of objects is matched by its natural key (\`tag\`, \`uuid\`, \`name\`) where it has one, an array that is a set is compared without regard to order, runtime state and timestamps are left out, and a list of clients is only counted. A secret that was rotated shows as changed with \`masked: true\`, never as a value. "No differences" is a result (\`identical: true\`). With \`against=live\` the panel is read through the memory of this server (\`refresh=true\` asks it again; rate limited per user), and the result is kept on the snapshot as the answer to "what changed since". 409 \`snapshot_other_panel\` when the snapshot is from a panel that is not the connected one. ${SNAPSHOT_ERRORS} 404 when a snapshot does not exist.`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { params: PanelSnapshotParamsSchema, query: PanelDiffQuerySchema },
+  responses: { 200: { description: 'The differences.', schema: PanelDiffSchema } },
+});
+
+export const exportPanelSnapshotRoute = defineRoute({
+  operationId: 'exportPanelSnapshot',
+  method: 'get',
+  path: '/panel/snapshots/{id}/export',
+  tags: ['panel'],
+  summary: 'Download a snapshot as a JSON file',
+  description:
+    'The whole snapshot as it is stored: the summary and, per kind, every object with its hash and its masked configuration. No unmasked value exists anywhere in it, so a file like this can be kept in a repository or attached to a ticket; a secret is a keyed fingerprint that says whether it changed. 404 when there is no such snapshot.',
+  auth: 'any',
+  permission: 'panel:read',
+  request: { params: PanelSnapshotParamsSchema },
+  responses: {
+    200: {
+      description: 'The file.',
+      schema: z.unknown(),
+      binary: {
+        headers: {
+          'Content-Disposition': 'An attachment named after the date and the id of the snapshot.',
+        },
+      },
+    },
+  },
+});
+
 /** Routes any signed-in user may call without a permission. Everything else under `session` names one. */
 export const ROUTES_OPEN_TO_ANY_SESSION: readonly string[] = [
   'getMe',
@@ -2100,6 +2206,12 @@ export const routes = [
   runReconciliationRoute,
   getImpactTargetRoute,
   calculatePanelImpactRoute,
+  listPanelSnapshotsRoute,
+  createPanelSnapshotRoute,
+  getPanelSnapshotRoute,
+  deletePanelSnapshotRoute,
+  diffPanelSnapshotRoute,
+  exportPanelSnapshotRoute,
 ] as const;
 
 /** Errors every route may return, documented once. */

@@ -1,5 +1,6 @@
 import type { TFunction } from 'i18next';
 
+import { SecretExpiredDetailsSchema } from '@swellwright/contracts';
 import type { Namespace } from '@swellwright/i18n';
 
 import { ApiRequestError, ApiUnreachableError, StepUpCancelledError } from '../api.js';
@@ -45,6 +46,13 @@ export function describeError(
         return whenForbidden ?? t('errors:forbidden');
       case 'vault_sealed':
         return t('errors:vaultSealed');
+      case 'secret_expired': {
+        // The server names the secret (never its value): say which one has to be renewed.
+        const named = SecretExpiredDetailsSchema.safeParse(error.details);
+        return named.success
+          ? t('errors:secretExpired', { name: named.data.secretName })
+          : t('errors:secretExpiredUnnamed');
+      }
       case 'step_up_required':
         return t('errors:stepUpRequired');
       case 'not_ready':
@@ -73,6 +81,13 @@ export function describeError(
           ? t('errors:panel.contractChangedAt', where)
           : t('errors:panel.contractChanged');
       }
+      // Snapshots of the panel (ADR 0043).
+      case 'snapshot_other_panel':
+        return t('errors:snapshot.otherPanel');
+      case 'snapshot_too_large':
+        return t('errors:snapshot.tooLarge');
+      case 'snapshot_corrupt':
+        return t('errors:snapshot.corrupt');
       case 'address_not_allowed':
         return t('errors:addressNotAllowed');
       case 'conflict':

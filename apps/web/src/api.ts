@@ -55,6 +55,13 @@ import {
   PanelNodePluginListSchema,
   type PanelOverview,
   PanelOverviewSchema,
+  type PanelDiff,
+  PanelDiffSchema,
+  type PanelSnapshotList,
+  PanelSnapshotListSchema,
+  type PanelSnapshotListQuery,
+  type PanelSnapshotSummary,
+  PanelSnapshotSummarySchema,
   type PanelSnippetList,
   PanelSnippetListSchema,
   type PanelSubscriptionSettingsAnswer,
@@ -764,6 +771,48 @@ export const listPanelNodePlugins = (refresh = false): Promise<PanelNodePluginLi
 
 export const getPanelInfra = (refresh = false): Promise<PanelInfraAnswer> =>
   send('GET', `/panel/infra${refreshQuery(refresh)}`, undefined, PanelInfraAnswerSchema);
+
+// ---- snapshots of the panel (ADR 0043) -------------------------------------------------------------------------------
+
+/** One page of the snapshots of the connected panel, newest first (`panel:read`). Never calls the panel. */
+export const listPanelSnapshots = (
+  query: PanelSnapshotListQuery = {},
+): Promise<PanelSnapshotList> =>
+  send('GET', `/panel/snapshots${queryString(query)}`, undefined, PanelSnapshotListSchema);
+
+/** Reads the panel and keeps what it holds as a snapshot (`panel:write`). A forced read of the panel. */
+export const createPanelSnapshot = (label?: string): Promise<PanelSnapshotSummary> =>
+  send(
+    'POST',
+    '/panel/snapshots',
+    label === undefined ? {} : { label },
+    PanelSnapshotSummarySchema,
+  );
+
+/** Deletes a snapshot (`panel:write`, needs a fresh confirmation with a code). */
+export const deletePanelSnapshot = (id: string): Promise<void> =>
+  send('DELETE', `/panel/snapshots/${id}`, undefined, undefined);
+
+/** What differs between a snapshot and the live panel (`'live'`) or another snapshot (its id). */
+export const diffPanelSnapshot = (
+  id: string,
+  against: string,
+  options: { refresh?: boolean; includeUnchanged?: boolean } = {},
+): Promise<PanelDiff> =>
+  send(
+    'GET',
+    `/panel/snapshots/${id}/diff${queryString({
+      against,
+      ...(options.refresh === true ? { refresh: 'true' } : {}),
+      ...(options.includeUnchanged === true ? { includeUnchanged: 'true' } : {}),
+    })}`,
+    undefined,
+    PanelDiffSchema,
+  );
+
+/** Where a snapshot is downloaded from as a JSON file: the browser follows it, with the session cookie. */
+export const panelSnapshotExportPath = (id: string): string =>
+  `${BASE}/panel/snapshots/${id}/export`;
 
 /** The current session, or null when nobody is signed in. */
 export async function getMe(): Promise<SessionInfo | null> {

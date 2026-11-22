@@ -201,7 +201,11 @@ function SecretPicker({
   const known = SECRET_TYPES.find((candidate) => candidate === type);
   const options = choices.secrets
     .filter((secret) => secret.type === type)
-    .map((secret) => ({ value: secret.id, label: secret.name }));
+    .map((secret) => ({
+      value: secret.id,
+      // A plugin is not given an expired secret (ADR 0042): the list says which ones those are.
+      label: secret.expired ? `${secret.name}${t('vault:expiry.expiredSuffix')}` : secret.name,
+    }));
   // What is bound but not in the list (deleted, or of another kind) stays visible, so it is not silently dropped.
   if (bound !== null && !options.some((option) => option.value === bound)) {
     options.unshift({ value: bound, label: t('settings.secretMissing', { id: shortId(bound) }) });

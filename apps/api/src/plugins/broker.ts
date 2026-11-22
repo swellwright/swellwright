@@ -11,12 +11,17 @@ import {
 
 import { AuditService } from '../audit/audit.service.js';
 import { requireDatabase } from '../auth/context.js';
+import { CodedHttpException } from '../http.js';
 import { DATABASE } from '../tokens.js';
 import { VaultService } from '../vault/vault.service.js';
 
 /** Why the core would not do what a plugin asked, in words the plugin author can act on. */
 export class PluginBrokerError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** The stable code of the API error behind it, when there is one (`secret_expired`). */
+    readonly code?: string,
+  ) {
     super(message);
     this.name = 'PluginBrokerError';
   }
@@ -121,10 +126,14 @@ export class PluginBroker {
     }
     let value: string;
     try {
-      value = await this.vault.readForPlugin(bound, type);
+      value = await this.vault.readForPlugin(bound, type, { kind: 'plugin', id: context.id });
     } catch (error) {
+      const code = error instanceof CodedHttpException ? error.apiCode : undefined;
+      const text = error instanceof Error ? error.message : 'The secret could not be read.';
+      // A plugin sees only the text: an expired secret starts it with the stable code, so that it can tell (ADR 0042).
       throw new PluginBrokerError(
-        error instanceof Error ? error.message : 'The secret could not be read.',
+        code === 'secret_expired' ? `secret_expired: ${text}` : text,
+        code,
       );
     }
     this.noteUse(context.id, field, bound);

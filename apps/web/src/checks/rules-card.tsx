@@ -208,7 +208,7 @@ export function RulesCard() {
         id: 'kind',
         header: t('checks:ui.conventions.rules.columns.kind'),
         accessorFn: (rule) => rule.kind,
-        size: 190,
+        size: 240,
         filterVariant: 'select',
         mantineFilterSelectProps: {
           data: [...new Set((data ?? []).map((rule) => rule.kind))].map((kind) => ({

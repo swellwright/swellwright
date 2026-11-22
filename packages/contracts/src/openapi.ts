@@ -105,10 +105,13 @@ import {
   EnumParameterSchema,
   IntegerParameterSchema,
   ParameterValuesSchema,
+  RunSecretRequestSchema,
+  RunSecretViewSchema,
   ScriptListSchema,
   ScriptParameterSchema,
   ScriptSummarySchema,
   ScriptViewSchema,
+  SecretParameterSchema,
   StringParameterSchema,
   UpdateScriptRequestSchema,
 } from './commands.js';
@@ -156,6 +159,22 @@ import {
   PanelVersionSupportSchema,
   PanelWarningSchema,
 } from './panel.js';
+import {
+  CreatePanelSnapshotRequestSchema,
+  PanelDiffCountsSchema,
+  PanelDiffNoteSchema,
+  PanelDiffObjectSchema,
+  PanelDiffObjectStatusSchema,
+  PanelDiffSchema,
+  PanelDiffSideSchema,
+  PanelFieldChangeSchema,
+  PanelSnapshotCoverageSchema,
+  PanelSnapshotKindSchema,
+  PanelSnapshotListSchema,
+  PanelSnapshotObjectKindSchema,
+  PanelSnapshotSettingsSchema,
+  PanelSnapshotSummarySchema,
+} from './panel-snapshots.js';
 import {
   EnablePluginRequestSchema,
   PluginApprovalSchema,
@@ -247,7 +266,7 @@ import {
 } from './system.js';
 
 /** Version of the API description. Bump it with every contract change (oasdiff checks the rules). */
-export const OPENAPI_INFO_VERSION = '0.25.0';
+export const OPENAPI_INFO_VERSION = '0.27.0';
 
 /** Named schemas that appear under `components.schemas`. Every response schema must be listed here. */
 const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
@@ -359,8 +378,11 @@ const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
   IntegerParameterSchema,
   EnumParameterSchema,
   BooleanParameterSchema,
+  SecretParameterSchema,
   ScriptParameterSchema,
   ParameterValuesSchema,
+  RunSecretRequestSchema,
+  RunSecretViewSchema,
   ScriptSummarySchema,
   ScriptViewSchema,
   ScriptListSchema,
@@ -472,6 +494,20 @@ const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
   ImpactRuleIdSchema,
   RiskLevelSchema,
   ImpactReportSchema,
+  PanelSnapshotKindSchema,
+  PanelSnapshotObjectKindSchema,
+  PanelSnapshotCoverageSchema,
+  PanelSnapshotSummarySchema,
+  PanelSnapshotSettingsSchema,
+  PanelSnapshotListSchema,
+  CreatePanelSnapshotRequestSchema,
+  PanelDiffObjectStatusSchema,
+  PanelFieldChangeSchema,
+  PanelDiffObjectSchema,
+  PanelDiffCountsSchema,
+  PanelDiffNoteSchema,
+  PanelDiffSideSchema,
+  PanelDiffSchema,
 ];
 
 type Json = Record<string, unknown>;
@@ -649,7 +685,7 @@ export function buildOpenApi(): Json {
       {
         name: 'panel',
         description:
-          'The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server.',
+          'The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server. Snapshots of the panel and the diff between two of them (ADR 0043) are kept masked as well.',
       },
     ],
     paths,

@@ -220,6 +220,7 @@ export function ScriptsPage({ permissions }: { permissions: readonly Permission[
         target={target}
       />
       <RunDialog
+        canReveal={permissions.includes('vault:reveal')}
         chooseServers
         key={openings}
         initialScriptId={running}

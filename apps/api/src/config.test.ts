@@ -286,3 +286,38 @@ describe('update check configuration', () => {
     }
   });
 });
+
+describe('snapshot configuration', () => {
+  it('keeps 50 snapshots, takes one a day and allows 32 MiB by default', () => {
+    const { panel } = loadConfig({}, 'v');
+    assert.equal(panel.snapshotKeep, 50);
+    assert.equal(panel.snapshotIntervalMs, 24 * 3_600_000);
+    assert.equal(panel.snapshotMaxBytes, 32 * 1024 * 1024);
+  });
+
+  it('switches the job off with 0, reads fractions of an hour, and bounds every value', () => {
+    assert.equal(
+      loadConfig({ SW_PANEL_SNAPSHOT_INTERVAL_HOURS: '0' }, 'v').panel.snapshotIntervalMs,
+      0,
+    );
+    assert.equal(
+      loadConfig({ SW_PANEL_SNAPSHOT_INTERVAL_HOURS: '0.5' }, 'v').panel.snapshotIntervalMs,
+      1_800_000,
+    );
+    assert.equal(loadConfig({ SW_PANEL_SNAPSHOT_KEEP: '7' }, 'v').panel.snapshotKeep, 7);
+    assert.equal(
+      loadConfig({ SW_PANEL_SNAPSHOT_MAX_MIB: '1' }, 'v').panel.snapshotMaxBytes,
+      1024 * 1024,
+    );
+    for (const bad of [
+      { SW_PANEL_SNAPSHOT_KEEP: '0' },
+      { SW_PANEL_SNAPSHOT_KEEP: '1001' },
+      { SW_PANEL_SNAPSHOT_INTERVAL_HOURS: '-1' },
+      { SW_PANEL_SNAPSHOT_INTERVAL_HOURS: '0.001' },
+      { SW_PANEL_SNAPSHOT_INTERVAL_HOURS: '721' },
+      { SW_PANEL_SNAPSHOT_MAX_MIB: '0' },
+    ]) {
+      assert.throws(() => loadConfig(bad, 'v'), /Invalid configuration/u, JSON.stringify(bad));
+    }
+  });
+});

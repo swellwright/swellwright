@@ -71,7 +71,7 @@ function Findings({ run }: { run: ConventionRun }) {
         id: 'kind',
         header: t('checks:ui.conventions.findings.filterKind'),
         accessorFn: (finding) => finding.object.kind,
-        size: 190,
+        size: 240,
         filterVariant: 'select',
         mantineFilterSelectProps: {
           data: KINDS.map((value) => ({ value, label: t(`checks:ui.kind.${value}`) })),

@@ -222,7 +222,12 @@ export class ChecksService {
     const read = await this.reader.readForChecks(actor, false);
     const missing = NEEDS[query.kind].filter((kind) => read.unavailable.includes(kind));
     if (missing.length > 0) {
-      throw new CodedHttpException(502, 'panel_forbidden', `The token cannot read ${missing.join(' and ')}, which this needs.`, { resources: missing });
+      throw new CodedHttpException(
+        502,
+        'panel_forbidden',
+        `The token cannot read ${missing.join(' and ')}, which this needs.`,
+        { resources: missing },
+      );
     }
     try {
       return editableForm(toModel(read), query.kind, query.uuid);

@@ -740,12 +740,19 @@ export const ImpactTargetSchema = z
     target: CheckObjectRefSchema,
     editable: z
       .record(z.string(), z.unknown())
-      .describe('The editable form of the object, as `POST /panel/impact` takes a change for it, with every secret masked.'),
-    masked: z.boolean().describe('True when the form holds masked values: they stand for secrets that a dry run cannot change.'),
+      .describe(
+        'The editable form of the object, as `POST /panel/impact` takes a change for it, with every secret masked.',
+      ),
+    masked: z
+      .boolean()
+      .describe(
+        'True when the form holds masked values: they stand for secrets that a dry run cannot change.',
+      ),
   })
   .meta({
     id: 'ImpactTarget',
-    description: 'The object a change is for, in the form a change is written against: the starting point of an editor.',
+    description:
+      'The object a change is for, in the form a change is written against: the starting point of an editor.',
   });
 export type ImpactTarget = z.infer<typeof ImpactTargetSchema>;
 

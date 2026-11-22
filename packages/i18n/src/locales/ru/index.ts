@@ -13,6 +13,7 @@ import { roles } from './roles.js';
 import { servers } from './servers.js';
 import { sessions } from './sessions.js';
 import { shell } from './shell.js';
+import { snapshots } from './snapshots.js';
 import { tokens } from './tokens.js';
 import { users } from './users.js';
 import { vault } from './vault.js';
@@ -36,4 +37,5 @@ export const ru = {
   artifacts,
   panel,
   checks,
+  snapshots,
 } as const;

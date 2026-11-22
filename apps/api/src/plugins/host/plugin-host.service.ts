@@ -333,6 +333,9 @@ export class PluginHostService implements OnApplicationShutdown {
       ) {
         throw new PluginCallError(message, 'not_configured');
       }
+      if (error instanceof PluginBrokerError && error.code === 'secret_expired') {
+        throw new PluginCallError(message, 'secret_expired');
+      }
       throw new PluginCallError(message, error instanceof NetworkRefused ? 'refused' : 'failed');
     } finally {
       if (timer !== undefined) {

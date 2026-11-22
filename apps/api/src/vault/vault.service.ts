@@ -11,26 +11,29 @@ import {
   type OnApplicationShutdown,
   UnauthorizedException,
 } from '@nestjs/common';
-import type {
-  ChangeVaultPassphraseRequest,
-  ConfirmPassphraseRequest,
-  CreateSecretRequest,
-  RevealedSecret,
-  SecretList,
-  SecretView,
-  UnsealVaultRequest,
-  UpdateSecretRequest,
-  VaultInitialized,
-  VaultRotated,
-  VaultStatus,
+import {
+  type ChangeVaultPassphraseRequest,
+  type ConfirmPassphraseRequest,
+  type CreateSecretRequest,
+  type RevealedSecret,
+  type SecretList,
+  type SecretType,
+  type SecretView,
+  type UnsealVaultRequest,
+  type UpdateSecretRequest,
+  type VaultInitialized,
+  type VaultRotated,
+  type VaultStatus,
+  RUN_SECRET_TYPES,
 } from '@swellwright/contracts';
 import { type Database, Prisma, type Secret, type VaultMeta } from '@swellwright/db';
 
 import { AuditService } from '../audit/audit.service.js';
 import { type RequestMeta, requireDatabase } from '../auth/context.js';
 import { WindowLimiter } from '../auth/rate-limit.js';
-import { RateLimitedException, VaultSealedException } from '../http.js';
-import { DATABASE, VAULT_KDF } from '../tokens.js';
+import { RateLimitedException, SecretExpiredException, VaultSealedException } from '../http.js';
+import { CLOCK, DATABASE, VAULT_KDF } from '../tokens.js';
+import { expiryView, isExpired } from './expiry.js';
 import { deriveKey, KDF_SALT_BYTES, type KdfParams } from './kdf.js';
 import {
   decryptSecret,
@@ -49,11 +52,19 @@ import { Serial } from './serial.js';
 
 /** An arbitrary constant: one transaction at a time may set the vault up. */
 const VAULT_LOCK_KEY = 7_761_237;
+/**
+ * An arbitrary constant: making a run that is handed secrets, replacing a value and deleting a secret take turns, so a
+ * value cannot be replaced between the moment a run is queued with it and the moment it is looked at again (ADR 0042).
+ */
+export const SECRET_USE_LOCK_KEY = 7_761_242;
 /** Rotations run one at a time with the database too, in case a second process ever shares the vault. */
 const ROTATION_TX = { timeout: 60_000, maxWait: 10_000 } as const;
 /** Ten failed tries in fifteen minutes block every further try (a success does not count). */
 const UNSEAL_ATTEMPTS = 10;
 const UNSEAL_WINDOW_MS = 15 * 60_000;
+
+/** A refused use of an expired secret is recorded once per secret in this window, however often it is tried. */
+const REFUSAL_NOTE_WINDOW_MS = 10 * 60_000;
 
 /** Who did it. The vault has no server command: every caller is a signed-in user. */
 export interface Actor {
@@ -61,7 +72,58 @@ export interface Actor {
   readonly name: string;
 }
 
-export function toSecretView(row: Secret): SecretView {
+/**
+ * Whatever takes a secret's value to use it (ADR 0042): a server login, a plugin, a command run. The kind and the id
+ * are what the audit record of a refusal says; a value is never given without one.
+ */
+export interface SecretConsumer {
+  readonly kind: 'server_access' | 'plugin' | 'panel' | 'command_run';
+  readonly id: string;
+}
+
+export interface UseOptions {
+  /**
+   * A use that began before the expiry may go on: following a script that is already running on a server must not stop
+   * because the credential of the connection expired meanwhile. Only the runner, for a target whose step has started.
+   */
+  readonly allowExpired?: boolean;
+}
+
+/** What a consumer needs to take a value: which secret, of which kinds, and the words of the two ordinary failures. */
+interface UseRequest {
+  readonly id: string;
+  readonly types: readonly SecretType[];
+  readonly consumer: SecretConsumer;
+  readonly options: UseOptions | undefined;
+  /** The version of the value the caller means, when it knows one: another version is refused before it is decrypted. */
+  readonly version?: number;
+  readonly missing: string;
+  readonly wrongKind: (row: Secret) => string;
+}
+
+/** What a run was handed: the name the script knows it by, the secret, and the value for as long as the caller needs it. */
+export interface RunSecretValue {
+  readonly name: string;
+  readonly secretId: string;
+  readonly secretName: string;
+  readonly version: number;
+  readonly value: string;
+}
+
+/** What `readForRun` is asked for: the secret, and the version of it that the run was queued with, if it is known. */
+export interface RunSecretRequest {
+  readonly name: string;
+  readonly secretId: string;
+  readonly version?: number;
+}
+
+/** The value of a secret that was taken for a consumer, with the row it came from. */
+export interface TakenSecret {
+  readonly value: string;
+  readonly row: Secret;
+}
+
+export function toSecretView(row: Secret, nowMs: number): SecretView {
   return {
     id: row.id,
     name: row.name,
@@ -69,6 +131,7 @@ export function toSecretView(row: Secret): SecretView {
     description: row.description,
     version: row.version,
     expiresAt: row.expiresAt?.toISOString() ?? null,
+    ...expiryView(row.expiresAt, nowMs),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     valueChangedAt: row.valueChangedAt.toISOString(),
@@ -88,11 +151,14 @@ export class VaultService implements OnApplicationShutdown {
   private readonly attempts = new WindowLimiter(UNSEAL_ATTEMPTS, UNSEAL_WINDOW_MS);
   private kek: Buffer | null = null;
   private readonly serial = new Serial();
+  /** When a refused use of each secret was last recorded. */
+  private readonly refusals = new Map<string, number>();
 
   constructor(
     @Inject(DATABASE) private readonly database: Database | undefined,
     @Inject(AuditService) private readonly audit: AuditService,
     @Inject(VAULT_KDF) private readonly kdf: KdfParams,
+    @Inject(CLOCK) private readonly now: () => number,
   ) {}
 
   private get db(): Database['client'] {
@@ -269,7 +335,8 @@ export class VaultService implements OnApplicationShutdown {
 
   async list(): Promise<SecretList> {
     const rows = await this.db.secret.findMany({ orderBy: { name: 'asc' } });
-    return { secrets: rows.map(toSecretView) };
+    const now = this.now();
+    return { secrets: rows.map((row) => toSecretView(row, now)) };
   }
 
   /** Needs the vault open. The value is encrypted before it reaches the database and is not returned again. */
@@ -326,11 +393,11 @@ export class VaultService implements OnApplicationShutdown {
           tx,
         );
         if (inside) {
-          await inside(tx, toSecretView(created));
+          await inside(tx, toSecretView(created, this.now()));
         }
         return created;
       });
-      return toSecretView(row);
+      return toSecretView(row, this.now());
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConflictException('A secret with that name exists already.');
@@ -358,6 +425,9 @@ export class VaultService implements OnApplicationShutdown {
     const kek = body.value === undefined ? null : this.openKey();
     try {
       const row = await this.db.$transaction(async (tx) => {
+        if (body.value !== undefined) {
+          await this.refuseWhileHandedToRun(tx, id, 'replaced');
+        }
         const current = await tx.secret.findUnique({ where: { id } });
         if (!current) {
           throw new NotFoundException('There is no such secret.');
@@ -413,7 +483,7 @@ export class VaultService implements OnApplicationShutdown {
         );
         return tx.secret.findUniqueOrThrow({ where: { id } });
       });
-      return toSecretView(row);
+      return toSecretView(row, this.now());
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConflictException('A secret with that name exists already.');
@@ -455,6 +525,29 @@ export class VaultService implements OnApplicationShutdown {
     );
   }
 
+  /**
+   * A secret that a command run which is not over was handed is neither replaced nor deleted: the runner takes the
+   * value out of the output by looking for the value it delivered, so that value must stay what it was until the run
+   * has ended (ADR 0042). The finished history lets go of the secret; a run keeps its name.
+   */
+  private async refuseWhileHandedToRun(
+    tx: Pick<Prisma.TransactionClient, 'commandRunSecret' | '$executeRaw'>,
+    id: string,
+    what: 'replaced' | 'deleted',
+  ): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SECRET_USE_LOCK_KEY})`;
+    const active = await tx.commandRunSecret.findMany({
+      where: { secretId: id, run: { state: { in: ['pending', 'running'] } } },
+      select: { runId: true },
+      take: 3,
+    });
+    if (active.length > 0) {
+      throw new ConflictException(
+        `This secret was handed to a command run that is still going, so it cannot be ${what} until the run has ended.`,
+      );
+    }
+  }
+
   /** Works while the vault is sealed: nothing is decrypted. */
   async remove(actor: Actor, id: string, meta: RequestMeta): Promise<void> {
     try {
@@ -464,6 +557,7 @@ export class VaultService implements OnApplicationShutdown {
           throw new NotFoundException('There is no such secret.');
         }
         await this.refuseWhileInUse(tx, id);
+        await this.refuseWhileHandedToRun(tx, id, 'deleted');
         await tx.secret.delete({ where: { id } });
         await this.audit.record(
           {
@@ -490,25 +584,21 @@ export class VaultService implements OnApplicationShutdown {
   }
 
   /**
-   * The value of a secret for a plugin that was bound to it (ADR 0029). Not a reveal: no person asked, so there is
-   * no `secret.revealed`; the broker records the plugin's use instead. The type must be the one the plugin
-   * declared, so a plugin cannot be pointed at a secret of another kind.
+   * The one door through which the value of a secret goes to something that uses it (ADR 0042). The order is fixed: a
+   * sealed vault answers 423 first, then the secret must exist and be of a kind this consumer may have, then its expiry
+   * must not have passed (409 `secret_expired`, recorded once per ten minutes), and only then is the value decrypted.
+   * Not a reveal: no person asked, so there is no `secret.revealed`; the operation that uses the value records its own
+   * use. The consumers below say which kinds they take and in which words they fail; none of them decides "expired".
    */
-  readForPlugin(id: string, type: string): Promise<string> {
+  private takeValue(request: UseRequest): Promise<TakenSecret> {
     return this.serial.run(async () => {
-      const kek = this.openKey();
-      const row = await this.db.secret.findUnique({ where: { id } });
-      if (!row) {
-        throw new NotFoundException('The secret chosen for this setting no longer exists.');
-      }
-      if (row.type !== type) {
-        throw new ConflictException('The secret chosen for this setting is not of the right kind.');
-      }
+      const { kek, row } = await this.admit(request);
       try {
-        return decryptSecret(kek, { id, version: row.version, type: row.type }, row);
+        const value = decryptSecret(kek, { id: row.id, version: row.version, type: row.type }, row);
+        return { value, row };
       } catch {
         this.logger.error(
-          `secret ${id} did not decrypt: the stored blobs do not match their context`,
+          `secret ${row.id} did not decrypt: the stored blobs do not match their context`,
         );
         throw new InternalServerErrorException('The secret could not be decrypted.');
       }
@@ -516,62 +606,231 @@ export class VaultService implements OnApplicationShutdown {
   }
 
   /**
-   * The value of a secret for a connection to a server (ADR 0037). Not a reveal: no person asked, so there is no
-   * `secret.revealed`; the operation that connects records its own use (`server.access.verified`, `server.facts.
-   * refreshed`). The type must be the one the access method needs, so an entry cannot be pointed at a secret of
-   * another kind. The caller keeps the value in memory for the length of the call and nowhere else.
+   * Everything `takeValue` decides before a value is decrypted, in the order it decides it: the vault must be open, the
+   * secret must exist, be of a kind the consumer may have and not have expired. Must run inside `serial`.
    */
-  readForServer(id: string, type: 'ssh_password' | 'ssh_key'): Promise<string> {
-    return this.serial.run(async () => {
-      const kek = this.openKey();
-      const row = await this.db.secret.findUnique({ where: { id } });
-      if (!row) {
-        throw new NotFoundException('The secret that this access entry names no longer exists.');
+  private async admit(request: UseRequest): Promise<{ kek: Buffer; row: Secret }> {
+    const kek = this.openKey();
+    const row = await this.db.secret.findUnique({ where: { id: request.id } });
+    if (!row) {
+      throw new NotFoundException(request.missing);
+    }
+    if (!request.types.includes(row.type)) {
+      throw new ConflictException(request.wrongKind(row));
+    }
+    if (request.version !== undefined && row.version !== request.version) {
+      throw new ConflictException(
+        `The secret "${row.name}" was replaced after the run was queued, so it is not the value that was meant.`,
+      );
+    }
+    if (
+      request.options?.allowExpired !== true &&
+      row.expiresAt !== null &&
+      isExpired(row.expiresAt, this.now())
+    ) {
+      await this.noteRefusal(row, request.consumer);
+      throw new SecretExpiredException({ id: row.id, name: row.name, expiresAt: row.expiresAt });
+    }
+    return { kek, row };
+  }
+
+  /** Records that an expired secret was asked for, at most once per secret per ten minutes. No value, ever. */
+  private async noteRefusal(row: Secret, consumer: SecretConsumer): Promise<void> {
+    const now = this.now();
+    const last = this.refusals.get(row.id);
+    if (last !== undefined && now - last < REFUSAL_NOTE_WINDOW_MS) {
+      return;
+    }
+    if (this.refusals.size > 1000) {
+      for (const [id, at] of this.refusals) {
+        if (now - at >= REFUSAL_NOTE_WINDOW_MS) {
+          this.refusals.delete(id);
+        }
       }
-      if (row.type !== type) {
-        throw new ConflictException(
-          `The secret "${row.name}" is not of the kind "${type}" that this access entry needs.`,
-        );
-      }
-      try {
-        return decryptSecret(kek, { id, version: row.version, type: row.type }, row);
-      } catch {
-        this.logger.error(
-          `secret ${id} did not decrypt: the stored blobs do not match their context`,
-        );
-        throw new InternalServerErrorException('The secret could not be decrypted.');
-      }
+    }
+    this.refusals.set(row.id, now);
+    await this.audit.note({
+      action: 'secret.use_refused',
+      outcome: 'denied',
+      actor: null,
+      object: { type: 'secret', id: row.id },
+      details: {
+        reason: 'expired',
+        secret_type: row.type,
+        consumer: consumer.kind,
+        consumer_id: consumer.id,
+      },
+      meta: { ip: undefined, requestId: undefined },
     });
+  }
+
+  /**
+   * The value of a secret for a plugin that was bound to it (ADR 0029). The type must be the one the plugin declared,
+   * so a plugin cannot be pointed at a secret of another kind. The broker records the plugin's use.
+   */
+  async readForPlugin(
+    id: string,
+    type: SecretType,
+    consumer: SecretConsumer,
+    options?: UseOptions,
+  ): Promise<string> {
+    const taken = await this.takeValue({
+      id,
+      types: [type],
+      consumer,
+      options,
+      missing: 'The secret chosen for this setting no longer exists.',
+      wrongKind: () => 'The secret chosen for this setting is not of the right kind.',
+    });
+    return taken.value;
+  }
+
+  /**
+   * The value of a secret for a connection to a server (ADR 0037). The type must be the one the access method needs, so
+   * an entry cannot be pointed at a secret of another kind. The operation that connects records its own use
+   * (`server.access.verified`, `server.facts.refreshed`). The caller keeps the value in memory for the length of the call
+   * and nowhere else.
+   */
+  async readForServer(
+    id: string,
+    type: 'ssh_password' | 'ssh_key',
+    consumer: SecretConsumer,
+    options?: UseOptions,
+  ): Promise<string> {
+    const taken = await this.takeValue({
+      id,
+      types: [type],
+      consumer,
+      options,
+      missing: 'The secret that this access entry names no longer exists.',
+      wrongKind: (row) =>
+        `The secret "${row.name}" is not of the kind "${type}" that this access entry needs.`,
+    });
+    return taken.value;
   }
 
   /**
    * The API token of a panel for the connection to it (ADR 0041). Not a reveal: no person asked, and the connection
-   * records its own checks (`panel.connected`, `panel.tested`). The secret must be of kind `panel_token`.
+   * records its own checks (`panel.connected`, `panel.tested`). The secret must be of kind `panel_token`; an expired one
+   * is refused like any other (ADR 0042). `connection` is the id of the panel connection, for the record of a refusal.
    */
-  readForPanel(id: string): Promise<string> {
+  async readForPanel(id: string, connection?: string, options?: UseOptions): Promise<string> {
+    const taken = await this.takeValue({
+      id,
+      types: ['panel_token'],
+      consumer: { kind: 'panel', id: connection ?? id },
+      options,
+      missing: 'The secret that holds the token of the panel no longer exists.',
+      wrongKind: (row) =>
+        `The secret "${row.name}" is not of the kind "panel_token" that a panel connection needs.`,
+    });
+    return taken.value;
+  }
+
+  /**
+   * The values of the secrets a command run was handed (ADR 0042), for delivery to a server and for taking them out of
+   * its output. Only the kinds in `RUN_SECRET_TYPES`. The expiry rule applies like everywhere else; a run that has
+   * started is followed to its end with `allowExpired`. When the version the run was queued with is known, a value that
+   * was replaced since is refused (409): what would be delivered, and what the output is scrubbed of, must be what was
+   * meant. The caller keeps the values for the length of one operation and nowhere else.
+   */
+  async readForRun(
+    entries: readonly RunSecretRequest[],
+    consumer: SecretConsumer,
+    options?: UseOptions,
+  ): Promise<RunSecretValue[]> {
+    const values: RunSecretValue[] = [];
+    for (const entry of entries) {
+      const taken = await this.takeValue({
+        id: entry.secretId,
+        types: RUN_SECRET_TYPES,
+        consumer,
+        options,
+        ...(entry.version === undefined ? {} : { version: entry.version }),
+        missing: `The secret handed to ${entry.name} no longer exists.`,
+        wrongKind: (row) =>
+          `The secret "${row.name}" is a ${row.type.replaceAll('_', ' ')}, which cannot be handed to a run.`,
+      });
+      values.push({
+        name: entry.name,
+        secretId: taken.row.id,
+        secretName: taken.row.name,
+        version: taken.row.version,
+        value: taken.value,
+      });
+    }
+    return values;
+  }
+
+  /**
+   * What a run that is being made may be handed (ADR 0042): the same decisions as `readForRun` (a sealed vault is 423, a
+   * missing secret, one of a kind a run cannot have or one that expired is refused) without decrypting anything, and the
+   * version of each secret, so that the run can say which value it meant.
+   */
+  inspectForRun(
+    entries: readonly { readonly name: string; readonly secretId: string }[],
+    consumer: SecretConsumer,
+  ): Promise<
+    { name: string; secretId: string; secretName: string; type: SecretType; version: number }[]
+  > {
     return this.serial.run(async () => {
-      const kek = this.openKey();
-      return this.readPanelToken(kek, id);
+      const found: {
+        name: string;
+        secretId: string;
+        secretName: string;
+        type: SecretType;
+        version: number;
+      }[] = [];
+      for (const entry of entries) {
+        const { row } = await this.admit({
+          id: entry.secretId,
+          types: RUN_SECRET_TYPES,
+          consumer,
+          options: undefined,
+          missing: `The secret chosen for ${entry.name} does not exist.`,
+          wrongKind: (secret) =>
+            `The secret "${secret.name}" is a ${secret.type.replaceAll('_', ' ')}, which cannot be handed to a run.`,
+        });
+        found.push({
+          name: entry.name,
+          secretId: row.id,
+          secretName: row.name,
+          type: row.type,
+          version: row.version,
+        });
+      }
+      return found;
     });
   }
 
-  private async readPanelToken(kek: Buffer, id: string): Promise<string> {
-    const row = await this.db.secret.findUnique({ where: { id } });
-    if (!row) {
-      throw new NotFoundException('The secret that holds the token of the panel no longer exists.');
-    }
-    if (row.type !== 'panel_token') {
-      throw new ConflictException(
-        `The secret "${row.name}" is not of the kind "panel_token" that a panel connection needs.`,
-      );
-    }
-    try {
-      return decryptSecret(kek, { id, version: row.version, type: row.type }, row);
-    } catch {
-      this.logger.error(
-        `secret ${id} did not decrypt: the stored blobs do not match their context`,
-      );
-      throw new InternalServerErrorException('The secret could not be decrypted.');
+  /**
+   * Inside the transaction that makes a run: looks at the secrets once more, under the lock that replacing and deleting
+   * a secret take too, so that what the run is queued with is still what is there when it is committed.
+   */
+  async recheckForRun(
+    tx: Pick<Prisma.TransactionClient, 'secret' | '$executeRaw'>,
+    entries: readonly { readonly secretId: string; readonly version: number }[],
+  ): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SECRET_USE_LOCK_KEY})`;
+    const rows = await tx.secret.findMany({
+      where: { id: { in: entries.map((entry) => entry.secretId) } },
+    });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    for (const entry of entries) {
+      const row = byId.get(entry.secretId);
+      if (!row) {
+        throw new ConflictException(
+          'A secret chosen for the run was deleted meanwhile. Try again.',
+        );
+      }
+      if (row.version !== entry.version) {
+        throw new ConflictException(
+          `The secret "${row.name}" was replaced while the run was being made. Try again.`,
+        );
+      }
+      if (row.expiresAt !== null && isExpired(row.expiresAt, this.now())) {
+        throw new SecretExpiredException({ id: row.id, name: row.name, expiresAt: row.expiresAt });
+      }
     }
   }
 
@@ -604,7 +863,14 @@ export class VaultService implements OnApplicationShutdown {
       details: { secret_type: row.type, version: row.version },
       meta,
     });
-    return { id, name: row.name, type: row.type, version: row.version, value };
+    return {
+      id,
+      name: row.name,
+      type: row.type,
+      version: row.version,
+      expired: isExpired(row.expiresAt, this.now()),
+      value,
+    };
   }
 
   private async storedMeta(): Promise<VaultMeta> {

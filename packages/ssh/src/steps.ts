@@ -12,7 +12,10 @@ import {
   assertEnvName,
   assertNoNul,
   assertStepId,
+  assertStepSecretName,
   defaultStepBaseDir,
+  MAX_STEP_SECRET_BYTES,
+  MAX_STEP_SECRETS,
   remoteDirWord,
   shellQuote,
 } from './shell.js';
@@ -21,6 +24,7 @@ import {
   LAUNCH_SCRIPT,
   READ_SCRIPT,
   REMOVE_SCRIPT,
+  SECRETS_REMOVE_SCRIPT,
   STATUS_SCRIPT,
   WRAPPER_SCRIPT,
 } from './step-scripts.js';
@@ -85,6 +89,12 @@ function frame(name: string, data: Buffer | undefined): string {
   return `FRAME ${name} ${sha256Hex(data)}\n${lines.map((line) => `${line}\n`).join('')}.\n`;
 }
 
+/** One secret as the launch program reads it: `SECRET NAME sha256`, the value in base64 lines, a line with a dot. */
+function secretFrame(name: string, data: Buffer): string {
+  const lines = data.toString('base64').match(/.{1,76}/gu) ?? [];
+  return `SECRET ${name} ${sha256Hex(data)}\n${lines.map((line) => `${line}\n`).join('')}.\n`;
+}
+
 function sudoLine(sudo: SudoOptions | undefined): string {
   if (sudo === undefined) return '';
   const password = sudo.password ?? '';
@@ -109,9 +119,10 @@ function snippet(text: string, secrets: readonly (string | undefined)[]): string
  * with the same script the call attaches to it (nothing is started twice); with a different script it fails with
  * `SshStepError` code `ssh_step_conflict`.
  *
- * The script, its input and its environment travel on the standard input of one command, so they never appear in a
- * command line; with `sudo` the password is the first line of that input and is handled as described in
- * `sudo-wrap.ts`. The job is started under `setsid` with every descriptor redirected, so it survives the SSH
+ * The script, its input, its environment and its secrets travel on the standard input of one command, so they never
+ * appear in a command line; with `sudo` the password is the first line of that input and is handled as described in
+ * `sudo-wrap.ts`. A secret becomes a file the script reads through `<NAME>_FILE` and the wrapper removes when the
+ * script ends (see `DetachedStepSpec.secrets`). The job is started under `setsid` with every descriptor redirected, so it survives the SSH
  * connection ending and never holds the channel open.
  */
 export async function startDetachedStep(
@@ -131,13 +142,38 @@ export async function startDetachedStep(
     if (stdin.length > MAX_STDIN_BYTES)
       throw new SshInputError('A step input is limited to 2 MiB.');
   }
+  const secretEntries = Object.entries(spec.secrets ?? {});
+  if (secretEntries.length > MAX_STEP_SECRETS) {
+    throw new SshInputError(`A step takes at most ${String(MAX_STEP_SECRETS)} secrets.`);
+  }
+  const secretFrames = secretEntries.map(([name, value]) => {
+    assertStepSecretName(name);
+    assertNoNul(value, 'A secret');
+    const data = Buffer.from(value, 'utf8');
+    if (data.length > MAX_STEP_SECRET_BYTES) {
+      throw new SshInputError(
+        `A secret is limited to ${String(MAX_STEP_SECRET_BYTES / 1024)} KiB.`,
+      );
+    }
+    return secretFrame(name, data);
+  });
   let env: Buffer | undefined;
-  if (spec.env !== undefined && Object.keys(spec.env).length > 0) {
-    const lines = Object.entries(spec.env).map(([name, value]) => {
+  const envEntries = Object.entries(spec.env ?? {});
+  if (envEntries.length > 0 || secretEntries.length > 0) {
+    const lines = envEntries.map(([name, value]) => {
       assertEnvName(name);
       assertNoNul(value, 'An environment value');
       return `export ${name}=${shellQuote(value)}\n`;
     });
+    // The script finds each secret by `<NAME>_FILE`. The path is built by the shell of the wrapper from the step's own
+    // directory (the names were checked above), so no caller text is part of it.
+    for (const [name] of secretEntries) {
+      const variable = `${name}_FILE`;
+      if (spec.env !== undefined && Object.hasOwn(spec.env, variable)) {
+        throw new SshInputError(`The environment already has ${variable}.`);
+      }
+      lines.push(`export ${variable}="$SWELLWRIGHT_STEP_DIR/secrets/${name}"\n`);
+    }
     env = Buffer.from(lines.join(''), 'utf8');
   }
   const baseDir = stepBaseDir(connection, spec.baseDir);
@@ -146,7 +182,7 @@ export async function startDetachedStep(
   const password = spec.sudo?.password;
 
   const payload = Buffer.from(
-    `${sudoLine(spec.sudo)}SWSTEP/1\n${frame('script', script)}${frame('stdin', stdin)}${frame('env', env)}${frame('run', Buffer.from(WRAPPER_SCRIPT, 'utf8'))}`,
+    `${sudoLine(spec.sudo)}SWSTEP/1\n${frame('script', script)}${frame('stdin', stdin)}${frame('env', env)}${frame('run', Buffer.from(WRAPPER_SCRIPT, 'utf8'))}${secretFrames.join('')}`,
     'utf8',
   );
   const command = `sh -c ${shellQuote(LAUNCH_SCRIPT)} swellwright-launch ${baseWord} ${shellQuote(spec.id)} ${shellQuote(scriptSha)} ${spec.sudo === undefined ? '0' : '1'}`;
@@ -455,6 +491,40 @@ export async function removeStep(
     throw new SshStepError(
       'ssh_step_failed',
       `Step "${id}" could not be removed: ${snippet(result.stderr, [options.sudo?.password])}`,
+    );
+  }
+  return outcome === 'removed';
+}
+
+export interface RemoveStepSecretsOptions {
+  baseDir?: string;
+  /** Needed to remove the secrets of a step that runs as root when the SSH user is not root. */
+  sudo?: SudoOptions;
+}
+
+/**
+ * Removes the secrets of a step (ADR 0042) and nothing else: the record of the step, its output and its exit marker stay.
+ * For a step whose wrapper was killed, so that nothing removed them: the status read removes what the login user may,
+ * and this removes the rest through sudo. Returns whether the step exists.
+ */
+export async function removeStepSecrets(
+  connection: SshConnection,
+  id: string,
+  options: RemoveStepSecretsOptions = {},
+): Promise<boolean> {
+  assertStepId(id);
+  const base = stepBaseDir(connection, options.baseDir);
+  const baseWord = await sudoBaseWord(connection, base, options.sudo);
+  const command = `sh -c ${shellQuote(SECRETS_REMOVE_SCRIPT)} swellwright-rmsecrets ${baseWord} ${shellQuote(id)}`;
+  const result = await connection.exec(command, {
+    timeoutMs: CONTROL_EXEC_TIMEOUT_MS,
+    ...(options.sudo === undefined ? {} : { sudo: options.sudo }),
+  });
+  const outcome = resultOf(result.stdout);
+  if (result.code !== 0 || outcome === undefined) {
+    throw new SshStepError(
+      'ssh_step_failed',
+      `The secrets of step "${id}" could not be removed: ${snippet(result.stderr, [options.sudo?.password])}`,
     );
   }
   return outcome === 'removed';

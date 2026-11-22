@@ -19,10 +19,14 @@ import {
   PiUsersDuotone,
   PiWarningCircle,
 } from 'react-icons/pi';
-import { TbBraces, TbPlugConnected, TbRefresh } from 'react-icons/tb';
+import { TbBraces, TbCamera, TbPlugConnected, TbRefresh } from 'react-icons/tb';
 import { Link } from 'react-router';
 
-import type { ConventionLastRun, PanelOverview } from '@swellwright/contracts';
+import type {
+  ConventionLastRun,
+  PanelOverview,
+  PanelSnapshotSummary,
+} from '@swellwright/contracts';
 import {
   MetricCard,
   MetricSection,
@@ -31,13 +35,14 @@ import {
   SectionCard,
 } from '@swellwright/ui';
 
-import { getPanelConnection, getPanelOverview } from '../api.js';
+import { getPanelConnection, getPanelOverview, listPanelSnapshots } from '../api.js';
 import { getLastConventionRun } from '../checks/checks-api.js';
 import { checksKey } from '../checks/checks-data.js';
 import { useFullDate, useNumber } from '../format.js';
 import { ROUTES } from '../routes.js';
 import { useConsole } from '../shell/console-context.js';
 import { PanelReadFailure, panelKey, usePanelRead } from './panel-data.js';
+import { useRelativeTime } from './snapshot-parts.js';
 
 const count = (value: number | null, format: (value: number) => string): string =>
   value === null ? '–' : format(value);
@@ -49,11 +54,14 @@ const sub = (text: string | undefined): { subtitle?: string } =>
 /** The cards of the block, as a list: `MetricSection` gives each its place in the grid and its entrance. */
 function useOverviewCards(
   overview: PanelOverview | undefined,
+  /** The newest snapshot: a snapshot, null when there is none yet, undefined while it is not known. */
+  snapshot: PanelSnapshotSummary | null | undefined,
   last: ConventionLastRun | undefined,
 ): ReactNode[] {
   const { t } = useTranslation(['overview', 'checks']);
   const number = useNumber();
   const formatDate = useFullDate();
+  const relative = useRelativeTime();
   if (overview === undefined) {
     return [];
   }
@@ -187,6 +195,35 @@ function useOverviewCards(
             : t('panel.tokenDays', { count: daysLeft })
       }
     />,
+    // The last snapshot and what changed since, as the server last found it (the Overview never asks the panel for it).
+    ...(snapshot === undefined
+      ? []
+      : [
+          <MetricCard
+            key="snapshot"
+            icon={TbCamera}
+            iconColor={
+              snapshot === null
+                ? 'gray'
+                : snapshot.changesSince === null
+                  ? 'cyan'
+                  : snapshot.changesSince > 0
+                    ? 'orange'
+                    : 'teal'
+            }
+            subtitle={
+              snapshot === null
+                ? t('panel.snapshotNoneHint')
+                : snapshot.changesSince === null
+                  ? t('panel.snapshotUnknown')
+                  : snapshot.changesSince === 0
+                    ? t('panel.snapshotSame')
+                    : t('panel.snapshotChanges', { count: snapshot.changesSince })
+            }
+            title={t('panel.snapshot')}
+            value={snapshot === null ? t('panel.snapshotNone') : relative(snapshot.createdAt)}
+          />,
+        ]),
   ];
 }
 
@@ -205,6 +242,14 @@ export function PanelOverviewBlock() {
   });
   const connected = connection.data !== undefined && connection.data.state !== 'unconfigured';
   const overview = usePanelRead(panelKey('overview'), getPanelOverview, connected);
+  // Read from this server's own records: it does not call the panel.
+  const latest = useQuery({
+    queryKey: panelKey('snapshots', 'latest'),
+    queryFn: () => listPanelSnapshots({ limit: 1 }),
+    enabled: connected && canRead,
+    retry: false,
+    refetchInterval: 60_000,
+  });
   // What the last run of the checks found, if one was run: the block never runs the checks itself.
   const last = useQuery({
     queryKey: checksKey('last'),
@@ -213,7 +258,11 @@ export function PanelOverviewBlock() {
     refetchOnWindowFocus: false,
     enabled: connected && canRead,
   });
-  const cards = useOverviewCards(overview.query.data, last.data);
+  const cards = useOverviewCards(
+    overview.query.data,
+    latest.data === undefined ? undefined : (latest.data.snapshots[0] ?? null),
+    last.data,
+  );
 
   if (!canRead || connection.isPending || connection.isError) {
     // The connection is read quietly: the page has its own failures to show, and this block is not worth another.

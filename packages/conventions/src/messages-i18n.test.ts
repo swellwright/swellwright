@@ -10,7 +10,9 @@ import { MESSAGES } from './messages.js';
 // texts, in the language of the user. These tests keep the two apart in no way: every text exists in both, the English
 // ones are the same, and every placeholder of a text is in its translation.
 
-type Tree = { readonly [key: string]: string | Tree };
+interface Tree {
+  readonly [key: string]: string | Tree;
+}
 
 function flatten(tree: Tree, path: string[] = []): Map<string, string> {
   const out = new Map<string, string>();
@@ -33,7 +35,7 @@ const placeholders = (text: string): string[] =>
 
 /** What the engine says: its texts, and the descriptions of the parameters of every rule. */
 function engineTexts(): Map<string, string> {
-  const texts = flatten(MESSAGES as unknown as Tree);
+  const texts = flatten(MESSAGES);
   for (const rule of RULES) {
     for (const param of rule.paramInfo) {
       texts.set(`rules.${rule.id}.params.${param.name}`, param.description);
@@ -44,8 +46,14 @@ function engineTexts(): Map<string, string> {
 
 /** What the console has under the keys of the engine (everything in the namespace but `ui`). */
 function consoleTexts(language: 'en' | 'ru'): Map<string, string> {
-  const { ui: _ui, ...engine } = resources[language].checks as unknown as Tree & { ui: Tree };
-  return flatten(engine as Tree);
+  const all: Tree = resources[language].checks;
+  const engine: Record<string, string | Tree> = {};
+  for (const [key, value] of Object.entries(all)) {
+    if (key !== 'ui') {
+      engine[key] = value;
+    }
+  }
+  return flatten(engine);
 }
 
 describe('the texts of the engine and the console', () => {

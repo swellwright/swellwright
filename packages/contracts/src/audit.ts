@@ -34,6 +34,8 @@ export const AUDIT_ACTIONS = [
   'secret.updated',
   'secret.deleted',
   'secret.revealed',
+  'secret.use_refused',
+  'secret.used_in_run',
   'authz.denied',
   'audit.chain.verified',
   'audit.exported',
@@ -79,6 +81,8 @@ export const AUDIT_ACTIONS = [
   'panel.state.changed',
   'panel.convention_pack.saved',
   'panel.convention_pack.reset',
+  'panel.snapshot.created',
+  'panel.snapshot.deleted',
 ] as const;
 export const AuditActionSchema = z.enum(AUDIT_ACTIONS).meta({ id: 'AuditAction' });
 export type AuditAction = z.infer<typeof AuditActionSchema>;

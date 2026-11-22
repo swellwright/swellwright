@@ -984,7 +984,11 @@ describe('the impact calculator over the API', { skip: !databaseUrl }, () => {
       const form = ImpactTargetSchema.parse(reply.body);
       assert.equal(form.target.uuid, uuid);
       assert.equal(form.target.kind, kind);
-      assertClean([JSON.stringify(reply.body)], forbiddenTexts(booted.tokens), `the form of a ${kind}`);
+      assertClean(
+        [JSON.stringify(reply.body)],
+        forbiddenTexts(booted.tokens),
+        `the form of a ${kind}`,
+      );
       const back = await impact({ kind, uuid, change: form.editable });
       assert.equal(back.changed, false, kind);
       assert.deepEqual(back.restarts, [], kind);
@@ -1007,11 +1011,7 @@ describe('the impact calculator over the API', { skip: !databaseUrl }, () => {
       'kind=host',
       '',
     ]) {
-      assert.equal(
-        (await booted.owner.get(`/panel/impact/target?${query}`)).status,
-        400,
-        query,
-      );
+      assert.equal((await booted.owner.get(`/panel/impact/target?${query}`)).status, 400, query);
     }
   });
 

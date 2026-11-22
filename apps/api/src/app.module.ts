@@ -26,13 +26,14 @@ import { CommandsController } from './commands/commands.controller.js';
 import { ScriptsService } from './commands/scripts.service.js';
 import { type AppConfig } from './config.js';
 import {
+  CLOCK,
   CONFIG,
   DATABASE,
   DNS_QUERY,
   PASSWORD_HASHER,
   PLUGIN_NETWORK,
   SECRET_BOX,
-  UPDATES_CLOCK,
+  SNAPSHOT_CLOCK,
   VAULT_KDF,
 } from './tokens.js';
 import {
@@ -54,6 +55,9 @@ import { PanelController } from './panel/panel.controller.js';
 import { PanelMonitorService } from './panel/panel-monitor.service.js';
 import { PanelReaderService } from './panel/panel-reader.service.js';
 import { PanelService } from './panel/panel.service.js';
+import { PanelSnapshotScheduler } from './panel/snapshots/snapshot-scheduler.service.js';
+import { PanelSnapshotsController } from './panel/snapshots/snapshots.controller.js';
+import { PanelSnapshotsService } from './panel/snapshots/snapshots.service.js';
 import { PluginBroker } from './plugins/broker.js';
 import { PluginNetwork } from './plugins/host/network.js';
 import { PluginHostService } from './plugins/host/plugin-host.service.js';
@@ -89,6 +93,8 @@ export interface AppOptions {
   readonly clock?: () => number;
   /** Answers the DNS questions of the reconciliation, replaced in tests so that no real name is looked up. */
   readonly dnsQuery?: DnsQuery;
+  /** The clock of the panel snapshots (their time, the job's interval, the retention by day), so that tests need not wait. */
+  readonly snapshotClock?: () => number;
 }
 
 function checksFrom(config: AppConfig, database: Database | undefined): ReadinessCheck[] {
@@ -132,6 +138,7 @@ export class AppModule implements OnApplicationShutdown {
         ArtifactsController,
         PanelController,
         ChecksController,
+        PanelSnapshotsController,
       ],
       providers: [
         { provide: CONFIG, useValue: config },
@@ -141,7 +148,7 @@ export class AppModule implements OnApplicationShutdown {
           useValue: options.readinessChecks ?? checksFrom(config, database),
         },
         ReadinessService,
-        { provide: UPDATES_CLOCK, useValue: options.clock ?? (() => Date.now()) },
+        { provide: CLOCK, useValue: options.clock ?? (() => Date.now()) },
         UpdatesService,
         {
           provide: PASSWORD_HASHER,
@@ -178,6 +185,9 @@ export class AppModule implements OnApplicationShutdown {
           useValue:
             options.dnsQuery ?? nodeDnsQuery(config.checks.dnsServers, config.checks.dnsTimeoutMs),
         },
+        { provide: SNAPSHOT_CLOCK, useValue: options.snapshotClock ?? (() => Date.now()) },
+        PanelSnapshotsService,
+        PanelSnapshotScheduler,
         PluginRuntime,
         PluginBroker,
         PluginsService,

@@ -46,6 +46,13 @@ export const overview = {
     tokenDays_other: '{{count}} days',
     tokenExpired: 'Expired',
     tokenNoExpiry: 'No expiry date',
+    snapshot: 'Last snapshot',
+    snapshotNone: 'None yet',
+    snapshotNoneHint: 'Take one on the Snapshots page',
+    snapshotChanges_one: '{{count}} object changed since',
+    snapshotChanges_other: '{{count}} objects changed since',
+    snapshotSame: 'The panel is as it was',
+    snapshotUnknown: 'Not compared with the panel yet',
   },
 
   checks: {

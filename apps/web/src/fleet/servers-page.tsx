@@ -135,6 +135,7 @@ export function ServersPage({ permissions }: { permissions: readonly Permission[
             visibleIds={visibleIds}
           />
           <RunDialog
+            canReveal={permissions.includes('vault:reveal')}
             chooseServers={false}
             key={openings}
             initialServerIds={selected}

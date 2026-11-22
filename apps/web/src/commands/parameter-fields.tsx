@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Group,
+  MultiSelect,
   NumberInput,
   Select,
   Stack,
@@ -14,13 +15,17 @@ import {
 } from '@mantine/core';
 import { IconPlus } from '@tabler/icons-react';
 import { useTranslation } from 'react-i18next';
-import { TbTrash } from 'react-icons/tb';
+import { TbKey, TbTrash } from 'react-icons/tb';
 
 import {
   type ParameterIssue,
   type ParameterValues,
   PARAMETER_NAME_PATTERN,
+  parameterSecretName,
+  RUN_SECRET_TYPES,
+  type RunSecretType,
   type ScriptParameter,
+  type SecretView,
   MAX_SCRIPT_PARAMETERS,
   MAX_STRING_PARAMETER_LENGTH,
 } from '@swellwright/contracts';
@@ -33,7 +38,8 @@ export type ParameterInput = Record<string, string | number | boolean>;
 export function initialInput(parameters: readonly ScriptParameter[]): ParameterInput {
   const input: ParameterInput = {};
   for (const parameter of parameters) {
-    if (parameter.default !== undefined) {
+    // A secret is chosen by a person: it has no default.
+    if (parameter.type !== 'secret' && parameter.default !== undefined) {
       input[parameter.name] = parameter.default;
     }
   }
@@ -47,6 +53,8 @@ export function ParameterValueFields({
   issues,
   onChange,
   disabled = false,
+  secrets = [],
+  canPickSecret = false,
 }: {
   parameters: readonly ScriptParameter[];
   input: ParameterInput;
@@ -54,8 +62,12 @@ export function ParameterValueFields({
   issues: readonly ParameterIssue[];
   onChange: (name: string, value: string | number | boolean) => void;
   disabled?: boolean;
+  /** The secrets of the vault a `secret` parameter may offer (names only). */
+  secrets?: readonly SecretView[];
+  /** The role may hand a secret to a run (the permission to reveal): without it the choice is shown but closed. */
+  canPickSecret?: boolean;
 }) {
-  const { t } = useTranslation('commands');
+  const { t } = useTranslation(['commands', 'vault']);
   const errorOf = (name: string): string | undefined =>
     issues.find((issue) => issue.name === name)?.message;
   return (
@@ -82,7 +94,11 @@ export function ParameterValueFields({
                 value={typeof current === 'string' ? current : ''}
                 {...(parameter.pattern === undefined
                   ? {}
-                  : { placeholder: t('parameters.patternHint', { pattern: parameter.pattern }) })}
+                  : {
+                      placeholder: t('commands:parameters.patternHint', {
+                        pattern: parameter.pattern,
+                      }),
+                    })}
               />
             );
           case 'integer':
@@ -114,6 +130,38 @@ export function ParameterValueFields({
                 value={typeof current === 'string' ? current : null}
               />
             );
+          case 'secret': {
+            const kinds: readonly string[] = parameter.secretTypes;
+            const options = secrets
+              .filter((secret) => kinds.includes(secret.type))
+              .map((secret) => ({
+                value: secret.id,
+                label: secret.expired
+                  ? `${secret.name}${t('vault:expiry.expiredSuffix')}`
+                  : secret.name,
+              }));
+            return (
+              <Select
+                {...common}
+                {...(canPickSecret
+                  ? {}
+                  : { description: t('commands:run.secrets.parameterForbidden') })}
+                data={options}
+                disabled={disabled || !canPickSecret}
+                key={parameter.name}
+                leftSection={<TbKey size={16} />}
+                nothingFoundMessage={t('commands:run.secrets.nothing')}
+                onChange={(value) => {
+                  if (value !== null) {
+                    onChange(parameter.name, value);
+                  }
+                }}
+                placeholder={t('commands:run.secrets.placeholder')}
+                searchable
+                value={typeof current === 'string' ? current : null}
+              />
+            );
+          }
           case 'boolean':
             return (
               <Switch
@@ -164,6 +212,8 @@ export interface ParameterDraft {
   defaultNumber: number | string;
   defaultBoolean: boolean;
   hasDefaultBoolean: boolean;
+  /** The kinds of vault secret a `secret` parameter offers. */
+  secretTypes: RunSecretType[];
 }
 
 export const blankDraft = (): ParameterDraft => ({
@@ -181,6 +231,7 @@ export const blankDraft = (): ParameterDraft => ({
   defaultNumber: '',
   defaultBoolean: false,
   hasDefaultBoolean: false,
+  secretTypes: ['generic'],
 });
 
 export function draftOf(parameter: ScriptParameter): ParameterDraft {
@@ -215,6 +266,8 @@ export function draftOf(parameter: ScriptParameter): ParameterDraft {
         defaultBoolean: parameter.default === true,
         hasDefaultBoolean: parameter.default !== undefined,
       };
+    case 'secret':
+      return { ...draft, secretTypes: [...parameter.secretTypes] };
   }
 }
 
@@ -258,10 +311,12 @@ export function definitionOf(draft: ParameterDraft): unknown {
         type: 'boolean',
         ...(draft.hasDefaultBoolean ? { default: draft.defaultBoolean } : {}),
       };
+    case 'secret':
+      return { ...common, type: 'secret', secretTypes: draft.secretTypes };
   }
 }
 
-const TYPES = ['string', 'integer', 'enum', 'boolean'] as const;
+const TYPES = ['string', 'integer', 'enum', 'boolean', 'secret'] as const;
 
 /** The editor of a script's parameter definitions: a card for each, with the fields its type needs. */
 export function ParameterBuilder({
@@ -276,7 +331,7 @@ export function ParameterBuilder({
   onChange: (drafts: ParameterDraft[]) => void;
   disabled?: boolean;
 }) {
-  const { t } = useTranslation('commands');
+  const { t } = useTranslation(['commands', 'vault']);
   const update = (index: number, patch: Partial<ParameterDraft>) => {
     onChange(drafts.map((draft, at) => (at === index ? { ...draft, ...patch } : draft)));
   };
@@ -303,7 +358,9 @@ export function ParameterBuilder({
                   </Badge>
                   {draft.name.trim() === '' ? null : (
                     <Text c="dimmed" ff="monospace" size="xs">
-                      {`SW_PARAM_${draft.name.trim().toUpperCase()}`}
+                      {draft.type === 'secret'
+                        ? `${parameterSecretName(draft.name.trim())}_FILE`
+                        : `SW_PARAM_${draft.name.trim().toUpperCase()}`}
                     </Text>
                   )}
                 </Group>
@@ -472,6 +529,25 @@ export function ParameterBuilder({
                     value={draft.defaultText === '' ? null : draft.defaultText}
                   />
                 </Group>
+              ) : null}
+              {draft.type === 'secret' ? (
+                <MultiSelect
+                  data={RUN_SECRET_TYPES.map((type) => ({
+                    value: type,
+                    label: t(`vault:types.${type}`),
+                  }))}
+                  description={t('commands:parameters.secretTypesDescription', {
+                    name: `${draft.name.trim() === '' ? 'NAME' : parameterSecretName(draft.name.trim())}_FILE`,
+                  })}
+                  disabled={disabled}
+                  label={t('commands:parameters.secretTypes')}
+                  onChange={(values) => {
+                    update(index, {
+                      secretTypes: RUN_SECRET_TYPES.filter((type) => values.includes(type)),
+                    });
+                  }}
+                  value={draft.secretTypes}
+                />
               ) : null}
               {draft.type === 'boolean' ? (
                 <Group gap="lg">

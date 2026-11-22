@@ -117,6 +117,19 @@ function buildManifest(script) {
   const nodeNames = params.filter((p) => p.group === 'node').map((p) => p.name);
   if (constantOf(script, 'PARAM_NAMES') !== nodeNames.join(' '))
     fail('PARAM_NAMES does not list the parameters of the group node, in order');
+  // Every secret can be given as a file: the script lists its secrets (SECRET_PARAMS), and each has a declared NAME_FILE
+  // parameter, which is not itself a secret (it is a path), so that a caller can hand a secret over without putting it in an
+  // environment variable.
+  const secrets = params.filter((p) => p.secret).map((p) => p.name);
+  if (constantOf(script, 'SECRET_PARAMS') !== secrets.join(' '))
+    fail(
+      `SECRET_PARAMS is "${constantOf(script, 'SECRET_PARAMS')}" but the parameters with secret: true are "${secrets.join(' ')}"`,
+    );
+  for (const n of secrets) {
+    const file = params.find((p) => p.name === `${n}_FILE`);
+    if (file === undefined) fail(`secret parameter ${n}: ${n}_FILE is not declared`);
+    if (file.secret) fail(`${n}_FILE is a path, not a secret`);
+  }
   const saved = constantOf(script, 'SAVED_PARAMS').split(' ').filter(Boolean);
   for (const n of saved)
     if (!nodeNames.includes(n))
