@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { isIP } from 'node:net';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -217,6 +218,17 @@ const EnvSchema = z.object({
   SW_PANEL_CONSOLE_RATE_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(30),
   /** The most of an answer the console returns, in KiB (after masking); the rest is cut and the answer says so. */
   SW_PANEL_CONSOLE_MAX_BODY_KIB: z.coerce.number().int().min(16).max(16_384).default(1024),
+  /**
+   * The checks of the panel (ADR 0044). The reconciliation looks names up in DNS: how long one name may take, how many
+   * different names one run may look up, how many lookups run at once, how long an answer is kept, which servers to ask
+   * (empty: the resolver of this machine), and how often a person may start a reconciliation per minute.
+   */
+  SW_CHECKS_DNS_TIMEOUT_SECONDS: z.coerce.number().min(0.2).max(30).default(3),
+  SW_CHECKS_DNS_MAX_NAMES: z.coerce.number().int().min(1).max(2000).default(200),
+  SW_CHECKS_DNS_CONCURRENCY: z.coerce.number().int().min(1).max(32).default(8),
+  SW_CHECKS_DNS_CACHE_SECONDS: z.coerce.number().int().min(0).max(3600).default(60),
+  SW_CHECKS_DNS_SERVERS: optionalString,
+  SW_CHECKS_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(12),
   /** Snapshots of the panel (ADR 0043): how many are kept at least (the newest of each of the last 14 days is kept as well). */
   SW_PANEL_SNAPSHOT_KEEP: z.coerce.number().int().min(1).max(1000).default(50),
   /** How often the background job takes a snapshot while a panel is connected and the vault is open, in hours. 0: never. */
@@ -345,6 +357,42 @@ export interface AppConfig {
     readonly snapshotIntervalMs: number;
     readonly snapshotMaxBytes: number;
   };
+  /** The checks of the panel: DNS for the reconciliation (ADR 0044). */
+  readonly checks: {
+    readonly dnsTimeoutMs: number;
+    readonly dnsMaxNames: number;
+    readonly dnsConcurrency: number;
+    readonly dnsCacheMs: number;
+    /** Addresses of the DNS servers to ask; empty: the system resolver. */
+    readonly dnsServers: readonly string[];
+    readonly rateLimitPerMinute: number;
+  };
+}
+
+/** The DNS servers of `SW_CHECKS_DNS_SERVERS`: a comma-separated list of IP addresses (with an optional port), or nothing. */
+function dnsServersOf(value: string | undefined): string[] {
+  if (value === undefined || value.trim() === '') {
+    return [];
+  }
+  const servers = value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry !== '');
+  for (const server of servers) {
+    // An address as it is, or `1.2.3.4:53`, or `[2001:db8::1]:53`.
+    const host =
+      isIP(server) !== 0
+        ? server
+        : server.startsWith('[')
+          ? server.slice(1, Math.max(1, server.indexOf(']')))
+          : server.replace(/:\d+$/u, '');
+    if (isIP(host) === 0) {
+      throw new Error(
+        `Invalid configuration: SW_CHECKS_DNS_SERVERS holds "${server}", which is not an IP address.`,
+      );
+    }
+  }
+  return servers;
 }
 
 /** What comes out of the template must be an http(s) URL: a typo is refused at start. */
@@ -548,6 +596,14 @@ export function loadConfig(
       snapshotKeep: e.SW_PANEL_SNAPSHOT_KEEP,
       snapshotIntervalMs: Math.round(e.SW_PANEL_SNAPSHOT_INTERVAL_HOURS * 3_600_000),
       snapshotMaxBytes: e.SW_PANEL_SNAPSHOT_MAX_MIB * 1024 * 1024,
+    },
+    checks: {
+      dnsTimeoutMs: Math.round(e.SW_CHECKS_DNS_TIMEOUT_SECONDS * 1000),
+      dnsMaxNames: e.SW_CHECKS_DNS_MAX_NAMES,
+      dnsConcurrency: e.SW_CHECKS_DNS_CONCURRENCY,
+      dnsCacheMs: e.SW_CHECKS_DNS_CACHE_SECONDS * 1000,
+      dnsServers: dnsServersOf(e.SW_CHECKS_DNS_SERVERS),
+      rateLimitPerMinute: e.SW_CHECKS_RATE_LIMIT_PER_MINUTE,
     },
   };
 }

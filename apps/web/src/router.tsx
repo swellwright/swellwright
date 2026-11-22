@@ -79,6 +79,9 @@ const SnippetsPage = lazy(() =>
 const ApiConsolePage = lazy(() =>
   import('./panel/api-console/api-console-page.js').then((m) => ({ default: m.ApiConsolePage })),
 );
+const ChecksPage = lazy(() =>
+  import('./checks/checks-page.js').then((m) => ({ default: m.ChecksPage })),
+);
 const SnapshotsPage = lazy(() =>
   import('./panel/snapshots-page.js').then((m) => ({ default: m.SnapshotsPage })),
 );
@@ -292,6 +295,12 @@ function NodePluginsRoute() {
   return <PanelRoute page={<NodePluginsPage />} title={t('nodePlugins')} />;
 }
 
+function ChecksRoute() {
+  const { t } = useTranslation('nav');
+  const { session } = useConsole();
+  return <PanelRoute page={<ChecksPage permissions={session.permissions} />} title={t('checks')} />;
+}
+
 function SnippetsRoute() {
   const { t } = useTranslation('nav');
   return <PanelRoute page={<SnippetsPage />} title={t('snippets')} />;
@@ -350,6 +359,7 @@ export const routes: RouteObject[] = [
           { path: relative(D.PANEL.TEMPLATES), element: <TemplatesRoute /> },
           { path: relative(D.PANEL.SNIPPETS), element: <SnippetsRoute /> },
           { path: relative(D.PANEL.NODE_PLUGINS), element: <NodePluginsRoute /> },
+          { path: relative(D.PANEL.CHECKS), element: <ChecksRoute /> },
           { path: relative(D.PANEL.SNAPSHOTS), element: <SnapshotsRoute /> },
           { path: relative(D.PANEL.API_CONSOLE), element: <ApiConsoleRoute /> },
           { path: relative(D.SECURITY.ROOT), element: <AreaIndex area="security" /> },

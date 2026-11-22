@@ -10,6 +10,7 @@ export {
   fakeUuid,
 } from './fixtures.js';
 export type { FixtureOptions, Json, PanelFixtures } from './fixtures.js';
+export { applyChecksScenario, CHECKS_ZONE } from './fixtures-checks.js';
 export {
   buildConsoleFixtures,
   fakeAccessTexts,

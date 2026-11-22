@@ -60,15 +60,19 @@ These facts are built into the impact calculator and the policies:
 - If a node's API port is open only to the panel's address, changing that address makes the nodes unreachable for the panel (clients keep working).
 - In recent Xray versions, the REALITY server sends clients without X25519MLKEM768 to the target: `chrome`, `firefox` and `safari` are acceptable (observed behavior; check against Xray releases).
 
+**Built in Phase 3 (ADR 0044):** the restart rules above are the table of the impact calculator (`IMPACT_RULES`, version `3.4`), and each rule carries its **basis**: `observed` (seen on a real panel), `documented` or `assumed` (reasoned, not seen), so the reader knows how far to trust it; a panel of another release line gets a warning. The rules about secrets, chains and the service user are policies of the convention packs and the plan flow, not of the calculator.
+
 ## 6. Naming conventions (defaults, configurable)
 - By default: node names `CC-NN`; domain `{cc}{n}.<base>`; host remark `🇳🇱 🎯 XX-01 - selective routing` and `🌐 ... - global mode`; hop hosts of the form `🇦🇦 🠢 🇧🇧 ...`.
 - Hosts: `address` = node IP, `sni` = node domain (explicit), port 443, `fingerprint` per policy, subscription types and templates copied from a sample.
 - Squad and profile names: letters, digits, space, `_`, `-`.
 - By default, test objects are marked with 🧪 (the marker is configurable) and protected from bulk edits.
 
+**Built in Phase 3 (ADR 0044):** these defaults describe a typical installation and are **not in the code**. The built-in convention pack lists every rule with its parameters and holds no installation data (no domain, no marker, no pattern); an installation writes its own pack (naming patterns, the marker of test objects as a scope, the reserved `vlessRouteId` ranges, what a host's address, SNI and port must be), saved in versions and exchanged as a file. `examples/conventions/convention-pack.example.yaml` is a pack with placeholders to start from; `docs/en/conventions.md` documents the format.
+
 ## 7. Extending Remnawave's capabilities (what the administrator gets beyond automation)
-1. A convention linter and real-time reconciliation of hosts with nodes.
-2. An impact calculator and a "dry run" for any edit.
+1. A convention linter and real-time reconciliation of hosts with nodes. (Phase 3, ADR 0044: check only; DNS is looked up under limits.)
+2. An impact calculator and a "dry run" for any edit. (Phase 3, ADR 0044.)
 3. Canary and wave rollouts of profiles, templates and images.
 4. Snapshots, diff and restore of individual objects, export to YAML (GitOps).
 5. A builder for hops and multi-hop chains, a topology graph.

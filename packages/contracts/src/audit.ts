@@ -79,6 +79,8 @@ export const AUDIT_ACTIONS = [
   'panel.disconnected',
   'panel.tested',
   'panel.state.changed',
+  'panel.convention_pack.saved',
+  'panel.convention_pack.reset',
   'panel.snapshot.created',
   'panel.snapshot.deleted',
   'panel.console.request',

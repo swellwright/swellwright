@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.27.0",
+    "version": "0.28.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -6008,6 +6008,539 @@
         "x-sw-permission": "panel:read"
       }
     },
+    "/panel/checks/rules": {
+      "get": {
+        "operationId": "getConventionRules",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The convention rules and how they are set",
+        "responses": {
+          "200": {
+            "description": "The rules.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConventionRuleCatalog"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every rule the convention linter knows (id, what it checks, the kinds of finding it makes, its parameters and their defaults, what it needs to be readable) with the settings in force: switched on or off, the severity, the parameters and the scope that the active convention pack gives it. Also the checks of the reconciliation and whether the pack switches them on. Does not call the panel.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/checks/convention": {
+      "get": {
+        "operationId": "runConventionChecks",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Check the panel against the conventions",
+        "responses": {
+          "200": {
+            "description": "The findings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConventionRun"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Reads the nodes, hosts, config profiles, squads, templates and snippets (through the memory of this server) and runs the active convention pack, or the built-in one when none was saved. Answers the findings (each with the object, the rule, a message and its key for the console, the fields involved and a fix hint that nothing applies), most severe first, with counts. A rule that needs a kind of object the token cannot read is listed under `skipped`; a rule that fails is listed under `failed` and the others still run. Not recorded in the audit log. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed. The checks read the panel (nothing else) through the memory of this server; `refresh=true` asks the panel again.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of using the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/checks/convention/last": {
+      "get": {
+        "operationId": "getLastConventionRun",
+        "tags": [
+          "panel"
+        ],
+        "summary": "What the last convention run found",
+        "responses": {
+          "200": {
+            "description": "The last run.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConventionLastRun"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The counts of the most recent run, from the memory of this server, for a dashboard that must not run the checks on every load. Null fields when nothing ran since the server started. Does not call the panel.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/checks/convention-pack": {
+      "get": {
+        "operationId": "getConventionPack",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The convention pack in use",
+        "responses": {
+          "200": {
+            "description": "The pack.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConventionPackView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The active pack as a document and as the YAML it was written in, or a rendering of the built-in pack when none was saved (`pack.source` is `built-in`). With `version`, a pack from the history. A pack holds no secret: it is rules, patterns and thresholds. 404 for a version that does not exist.",
+        "parameters": [
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "A version from the history; the active pack when not given.",
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      },
+      "put": {
+        "operationId": "putConventionPack",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Save a convention pack",
+        "responses": {
+          "200": {
+            "description": "The saved pack.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConventionPackView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Validates the pack (the shape, every rule id, every parameter, every pattern: a pattern outside the safe subset is refused) and saves it as the next version, which becomes the active one; the earlier versions stay in the history. `expectedVersion` makes it safe against two editors: when the active version is another one the answer is 409 `conflict`. A pack that is not valid is 400 `validation_failed` and the issues are in `details.issues`. Needs `panel:write` and a fresh second factor. Recorded as `panel.convention_pack.saved` (the name, the version, the hash and counts, not the document).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveConventionPackRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:write",
+        "x-sw-step-up": true
+      },
+      "delete": {
+        "operationId": "resetConventionPack",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Go back to the built-in convention pack",
+        "responses": {
+          "204": {
+            "description": "The built-in pack applies."
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Deactivates the saved pack; the built-in pack applies again. The saved versions stay in the history. Needs `panel:write` and a fresh second factor. Recorded as `panel.convention_pack.reset`. 404 when no saved pack is active.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:write",
+        "x-sw-step-up": true
+      }
+    },
+    "/panel/checks/convention-pack/versions": {
+      "get": {
+        "operationId": "listConventionPackVersions",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The history of the convention pack",
+        "responses": {
+          "200": {
+            "description": "The versions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConventionPackVersionList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every saved version, newest first: who saved it, when, why and which one is active.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/checks/convention-pack/validate": {
+      "post": {
+        "operationId": "validateConventionPack",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Validate a convention pack without saving it",
+        "responses": {
+          "200": {
+            "description": "The result.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConventionPackValidation"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The same validation as saving: syntax (with the line and column of a YAML error), the shape, rule ids (an unknown id is a warning, since a pack may be written for a newer release), parameters and patterns. Answers 200 with the issues whether or not the pack is valid. Saves nothing and does not call the panel.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ValidateConventionPackRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/checks/reconciliation": {
+      "get": {
+        "operationId": "runReconciliation",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Reconcile hosts, nodes and the server inventory",
+        "responses": {
+          "200": {
+            "description": "The report.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReconciliationReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Compares each host with the node that serves its inbound (address, SNI, port), each node address with DNS (A and AAAA, CNAME chains followed up to a limit; looked up through a resolver of this server, with a timeout, a cap on names per run and a short memory), and each node with the server inventory (by address, by what the names resolve to, and by hostname), and reports drift: rows with the two sides, the status (`ok`, `drift`, `missing`, `extra`, `unknown`), the reason and a fix hint. \"Check only\": nothing is written. The inventory part needs `servers:read` as well; without it that part is left out (`inventory.available` is false). A name that does not resolve in time is a row, not an error. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed. The checks read the panel (nothing else) through the memory of this server; `refresh=true` asks the panel again. Also 429 `rate_limited` when asked again with `refresh=true` too often.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of using the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/impact/target": {
+      "get": {
+        "operationId": "getImpactTarget",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The editable form of an object, for a dry run",
+        "responses": {
+          "200": {
+            "description": "The editable form.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactTarget"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The object as a change to it is written against: for a config profile `{ name, tags, config }`, for an internal squad `{ name, tags, inbounds }`, for a host its fields without `uuid` and `hash`, for a node `{ name, address, port, isDisabled, tags, note, configProfile }`, for a subscription template `{ name, tags, templateJson, templateYaml }`. Every secret in it is masked. 404 when the panel has no such object. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed. The checks read the panel (nothing else) through the memory of this server; `refresh=true` asks the panel again.",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ImpactKind"
+            }
+          },
+          {
+            "name": "uuid",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/impact": {
+      "post": {
+        "operationId": "calculatePanelImpact",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Dry run of a change: what it would restart and break",
+        "responses": {
+          "200": {
+            "description": "The impact.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImpactReport"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Computes what a proposed change would do, from what the panel reported, and sends nothing to the panel. `change` is a partial object as the panel API takes it for an update, or a JSON Patch (RFC 6902) applied to the editable form of the object. Editable forms: config profile `{ name, config }` (the configuration as `GET /panel/config-profiles/{uuid}` shows it, masked); internal squad `{ name, tags, inbounds }` (inbounds by uuid or tag); host the fields of `GET /panel/hosts` without `uuid` and `hash`; node `{ name, address, port, isDisabled, tags, note, configProfile: { activeConfigProfileUuid, activeInbounds } }`; subscription template `{ name, tags, templateJson, templateYaml }`. The answer says which nodes restart Xray and by which rule (editing a shared profile restarts all its nodes, even when one inbound changed), the hosts, squads and templates that are affected, the references that would dangle, the users who may notice, a risk level with reasons, a safer way when there is one, and the convention findings the change would introduce or resolve. Secrets are masked: a masked value means \"unchanged\", any other value in its place counts as a change of a secret; no value of the request is repeated in the answer. Not recorded in the audit log. Kinds: configProfile, internalSquad, host, node, subscriptionTemplate. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed. The checks read the panel (nothing else) through the memory of this server; `refresh=true` asks the panel again. Also 404 when the object does not exist, 400 `validation_failed` when the change cannot be applied.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImpactRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
     "/panel/snapshots": {
       "get": {
         "operationId": "listPanelSnapshots",
@@ -7252,6 +7785,8 @@
           "panel.disconnected",
           "panel.tested",
           "panel.state.changed",
+          "panel.convention_pack.saved",
+          "panel.convention_pack.reset",
           "panel.snapshot.created",
           "panel.snapshot.deleted",
           "panel.console.request"
@@ -15850,6 +16385,2454 @@
           "fetchedAt"
         ],
         "additionalProperties": false
+      },
+      "CheckSeverity": {
+        "type": "string",
+        "enum": [
+          "error",
+          "warning",
+          "info"
+        ]
+      },
+      "CheckObjectKind": {
+        "type": "string",
+        "enum": [
+          "panel",
+          "host",
+          "node",
+          "configProfile",
+          "inbound",
+          "internalSquad",
+          "externalSquad",
+          "subscriptionTemplate",
+          "snippet",
+          "nodePlugin",
+          "server"
+        ],
+        "description": "The kind of object a finding or a row is about."
+      },
+      "CheckObjectRef": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/CheckObjectKind"
+          },
+          "uuid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for the panel itself."
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "kind",
+          "uuid",
+          "name"
+        ],
+        "additionalProperties": false
+      },
+      "CheckFixHint": {
+        "type": "object",
+        "properties": {
+          "op": {
+            "type": "string",
+            "enum": [
+              "replace",
+              "add",
+              "remove"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "A JSON Pointer (RFC 6901) into the editable form of the object, the one the panel API takes, for example `/address`."
+          },
+          "from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 500
+                }
+              }
+            ],
+            "description": "What it is now; null when there is nothing (add)."
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "maxItems": 100,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "maxLength": 500
+                }
+              }
+            ],
+            "description": "What it would become; null when it would go (remove)."
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "required": [
+          "op",
+          "path",
+          "from",
+          "to"
+        ],
+        "additionalProperties": false,
+        "description": "What a later write would change to resolve the finding. Informational: this release never writes to the panel."
+      },
+      "PackScope": {
+        "type": "object",
+        "properties": {
+          "tags": {
+            "description": "Only objects that carry at least one of these tags.",
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "excludeTags": {
+            "description": "Not the objects that carry any of these tags (for example a tag for test objects).",
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            }
+          },
+          "match": {
+            "description": "Only objects whose name (the remark of a host) matches this pattern entirely. The pattern language is the safe subset described in `docs/en/conventions.md`.",
+            "type": "string",
+            "maxLength": 256
+          },
+          "exclude": {
+            "description": "Not the objects whose name matches this pattern entirely (for example a marker of test objects).",
+            "type": "string",
+            "maxLength": 256
+          }
+        },
+        "additionalProperties": false,
+        "description": "Which objects a rule applies to. A rule that has its own scope uses only that; otherwise the scope of the pack applies. Nothing set: every object."
+      },
+      "PackRuleConfig": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "description": "`false` switches the rule off.",
+            "type": "boolean"
+          },
+          "severity": {
+            "description": "Replaces the severity of every finding of the rule.",
+            "$ref": "#/components/schemas/CheckSeverity"
+          },
+          "params": {
+            "description": "The parameters of this rule; each rule says which it takes (`GET /panel/checks/rules`).",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "additionalProperties": {}
+          },
+          "scope": {
+            "$ref": "#/components/schemas/PackScope"
+          },
+          "note": {
+            "description": "Why this rule is set this way. Shown with the rule.",
+            "type": "string",
+            "maxLength": 300
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReconciliationCheck": {
+        "type": "string",
+        "enum": [
+          "host.address",
+          "host.sni",
+          "host.port",
+          "host.node",
+          "host.duplicate",
+          "node.dns",
+          "node.disabled-resolving",
+          "node.duplicate",
+          "node.server",
+          "server.node",
+          "server.duplicate"
+        ]
+      },
+      "ReconciliationSettings": {
+        "type": "object",
+        "properties": {
+          "hostAddress": {
+            "description": "What the `address` of a host must be, compared with the node that serves it. `node` (default): the address of the node or an IP it resolves to, as a name or as an IP. `node-ip`: an IP of the node. `node-address`: exactly the address the panel has for the node. `none`: not checked.",
+            "type": "string",
+            "enum": [
+              "node",
+              "node-ip",
+              "node-address",
+              "none"
+            ]
+          },
+          "hostSni": {
+            "description": "What the `sni` of a host must be. `none` (default): not checked. `node-address`: the address of the node, when that is a name.",
+            "type": "string",
+            "enum": [
+              "none",
+              "node-address"
+            ]
+          },
+          "hostPort": {
+            "description": "What the `port` of a host must be. `none` (default): not checked (a front end often listens on another port than the inbound). `inbound`: the port of its inbound.",
+            "type": "string",
+            "enum": [
+              "none",
+              "inbound"
+            ]
+          },
+          "dns": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "description": "`false`: no name is looked up; checks that need a lookup say \"unknown\".",
+                "type": "boolean"
+              },
+              "maxTtlSeconds": {
+                "description": "A record with a longer time to live is reported with a hint (default 3600).",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 86400
+              }
+            },
+            "additionalProperties": false
+          },
+          "inventory": {
+            "type": "object",
+            "properties": {
+              "matchBy": {
+                "description": "How a node is matched with a server of the inventory (default: all three).",
+                "minItems": 1,
+                "maxItems": 3,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "address",
+                    "dns",
+                    "hostname"
+                  ]
+                }
+              },
+              "reportUnmanaged": {
+                "description": "A node of the panel that no server of the inventory matches is `missing` (default true).",
+                "type": "boolean"
+              },
+              "reportExtra": {
+                "description": "A server of the inventory that no node matches is `extra` (default true). Retired servers are never reported.",
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          },
+          "checks": {
+            "description": "Switches single checks off (`enabled: false`).",
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/ReconciliationCheck"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "scope": {
+            "description": "Hosts, nodes and servers that reconciliation leaves out.",
+            "$ref": "#/components/schemas/PackScope"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ImpactSettings": {
+        "type": "object",
+        "properties": {
+          "highRiskRestartNodes": {
+            "description": "A change that restarts at least this many nodes is high risk (default 3).",
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "highRiskRestartShare": {
+            "description": "A change that restarts at least this share of the running nodes is high risk (default 0.5).",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "additionalProperties": false
+      },
+      "ConventionPackDocument": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "const": "swellwright.conventions/v1"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 1000
+          },
+          "scope": {
+            "description": "The scope of every rule that has none of its own.",
+            "$ref": "#/components/schemas/PackScope"
+          },
+          "rules": {
+            "description": "Settings by rule id. A rule that is not named keeps its defaults.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PackRuleConfig"
+            }
+          },
+          "reconciliation": {
+            "$ref": "#/components/schemas/ReconciliationSettings"
+          },
+          "impact": {
+            "$ref": "#/components/schemas/ImpactSettings"
+          }
+        },
+        "required": [
+          "format",
+          "name"
+        ],
+        "additionalProperties": false,
+        "description": "A set of conventions as data: which rules run, how severe they are, their parameters, whom they apply to, and what reconciliation and the impact calculator expect. Unknown keys are refused, so a typo does not pass as a setting."
+      },
+      "PackRef": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": [
+              "built-in",
+              "custom"
+            ]
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null for the built-in pack."
+          },
+          "name": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 of the canonical JSON of the document."
+          }
+        },
+        "required": [
+          "source",
+          "version",
+          "name",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionPackView": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/PackRef"
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdBy": {
+            "description": "The login of the user who saved it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "description": "Whether this version is the one in use."
+          },
+          "document": {
+            "$ref": "#/components/schemas/ConventionPackDocument"
+          },
+          "yaml": {
+            "type": "string",
+            "description": "The pack as the user wrote it, or a rendering of the built-in one."
+          }
+        },
+        "required": [
+          "pack",
+          "description",
+          "comment",
+          "createdAt",
+          "createdBy",
+          "active",
+          "document",
+          "yaml"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionPackVersion": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "name": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "createdBy": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "version",
+          "name",
+          "hash",
+          "active",
+          "comment",
+          "createdAt",
+          "createdBy"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionPackVersionList": {
+        "type": "object",
+        "properties": {
+          "versions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConventionPackVersion"
+            },
+            "description": "Newest first."
+          }
+        },
+        "required": [
+          "versions"
+        ],
+        "additionalProperties": false
+      },
+      "SaveConventionPackRequest": {
+        "type": "object",
+        "properties": {
+          "yaml": {
+            "description": "The pack as YAML (JSON is YAML too). Kept as written, with its comments.",
+            "type": "string",
+            "maxLength": 262144
+          },
+          "document": {
+            "description": "The pack as a JSON object, instead of `yaml`.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          },
+          "comment": {
+            "description": "Why it changes. Kept in the history.",
+            "type": "string",
+            "maxLength": 500
+          },
+          "expectedVersion": {
+            "description": "The version the editor started from; `null` for \"no pack was saved yet\". When the active pack is another one, the answer is 409 and nothing is saved.",
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "ValidateConventionPackRequest": {
+        "type": "object",
+        "properties": {
+          "yaml": {
+            "description": "The pack as YAML (JSON is YAML too). Kept as written, with its comments.",
+            "type": "string",
+            "maxLength": 262144
+          },
+          "document": {
+            "description": "The pack as a JSON object, instead of `yaml`.",
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {}
+          }
+        },
+        "additionalProperties": false
+      },
+      "PackIssue": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "error",
+              "warning"
+            ]
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Where, as a path into the document: `rules.host.remark-pattern.params.pattern`."
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a YAML syntax error."
+          },
+          "column": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "severity",
+          "path",
+          "message",
+          "line",
+          "column"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionPackValidation": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean",
+            "description": "True when there is no error (warnings do not make a pack invalid)."
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PackIssue"
+            }
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rules": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many rules the pack configures."
+          },
+          "hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "valid",
+          "issues",
+          "name",
+          "rules",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "RuleParamInfo": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "enum",
+              "pattern",
+              "string-list",
+              "ranges"
+            ]
+          },
+          "description": {
+            "type": "string"
+          },
+          "default": {
+            "description": "The value used when the pack does not set it (null: the rule needs it)."
+          },
+          "values": {
+            "anyOf": [
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For an enumeration, the allowed values."
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "description",
+          "default",
+          "values"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionRuleInfo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "description": "The kind of object the rule reports on.",
+            "$ref": "#/components/schemas/CheckObjectKind"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "defaultSeverity": {
+            "$ref": "#/components/schemas/CheckSeverity"
+          },
+          "needs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelResource"
+            },
+            "description": "What must be readable for the rule to run."
+          },
+          "codes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The kinds of finding the rule makes."
+          },
+          "params": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RuleParamInfo"
+            }
+          },
+          "effective": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "severity": {
+                "$ref": "#/components/schemas/CheckSeverity"
+              },
+              "params": {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              },
+              "scope": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PackScope"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The scope in force (the rule's own, or the pack's); null: every object."
+              },
+              "active": {
+                "type": "boolean",
+                "description": "Whether the rule runs. False when switched off or when a parameter it needs is not set."
+              },
+              "inactive": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "disabled",
+                      "needs_params"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "note": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "enabled",
+              "severity",
+              "params",
+              "scope",
+              "active",
+              "inactive",
+              "note"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "description",
+          "defaultSeverity",
+          "needs",
+          "codes",
+          "params",
+          "effective"
+        ],
+        "additionalProperties": false
+      },
+      "ReconciliationCheckInfo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ReconciliationCheck"
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionRuleCatalog": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/PackRef"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConventionRuleInfo"
+            }
+          },
+          "reconciliationChecks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationCheckInfo"
+            }
+          }
+        },
+        "required": [
+          "pack",
+          "rules",
+          "reconciliationChecks"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionFinding": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 400,
+            "description": "Stable between runs for the same rule, kind of finding, object and field: compare runs by it."
+          },
+          "ruleId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string",
+            "description": "The kind of finding within the rule."
+          },
+          "severity": {
+            "$ref": "#/components/schemas/CheckSeverity"
+          },
+          "object": {
+            "$ref": "#/components/schemas/CheckObjectRef"
+          },
+          "related": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckObjectRef"
+            }
+          },
+          "message": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "English text. The console shows `messageKey` in the language of the user."
+          },
+          "messageKey": {
+            "type": "string",
+            "maxLength": 200,
+            "description": "A key of the `checks` namespace of the console texts; `params` fill its placeholders."
+          },
+          "params": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "fields": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "maxLength": 300
+            },
+            "description": "JSON Pointers of the fields involved."
+          },
+          "fix": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckFixHint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "ruleId",
+          "code",
+          "severity",
+          "object",
+          "related",
+          "message",
+          "messageKey",
+          "params",
+          "fields",
+          "fix"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionSummary": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "warning": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "info": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "objects": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many objects have at least one finding."
+          },
+          "byRule": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          }
+        },
+        "required": [
+          "error",
+          "warning",
+          "info",
+          "total",
+          "objects",
+          "byRule"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionRun": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/PackRef"
+          },
+          "ranAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was last asked for what the run saw."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when every kind of object came from the memory of this server."
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ConventionSummary"
+          },
+          "findings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConventionFinding"
+            },
+            "description": "Most severe first, then by kind and name."
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "More findings than 5000: the rest are counted in `summary` but not listed."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ruleId": {
+                  "type": "string"
+                },
+                "missing": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PanelResource"
+                  },
+                  "description": "Kinds of object the token could not read."
+                }
+              },
+              "required": [
+                "ruleId",
+                "missing"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "failed": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ruleId": {
+                  "type": "string"
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 300
+                }
+              },
+              "required": [
+                "ruleId",
+                "message"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Rules that raised an error; the others ran."
+          },
+          "checked": {
+            "type": "object",
+            "properties": {
+              "nodes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "hosts": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "configProfiles": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "internalSquads": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "externalSquads": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "subscriptionTemplates": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "nodes",
+              "hosts",
+              "configProfiles",
+              "internalSquads",
+              "externalSquads",
+              "subscriptionTemplates"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "pack",
+          "ranAt",
+          "fetchedAt",
+          "cached",
+          "summary",
+          "findings",
+          "truncated",
+          "skipped",
+          "failed",
+          "checked"
+        ],
+        "additionalProperties": false
+      },
+      "ConventionLastRun": {
+        "type": "object",
+        "properties": {
+          "ranAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Null when no run was made since the server started."
+          },
+          "pack": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PackRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConventionSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ranAt",
+          "pack",
+          "summary"
+        ],
+        "additionalProperties": false,
+        "description": "What the last run found, from the memory of this server. Does not run anything and does not ask the panel."
+      },
+      "ReconciliationStatus": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "drift",
+          "missing",
+          "extra",
+          "unknown"
+        ],
+        "description": "`ok`: as expected. `drift`: the two sides disagree. `missing`: the other side has no counterpart (a node the inventory does not know, a name without a record). `extra`: the inventory holds something the panel does not. `unknown`: it could not be decided (a name did not resolve in time, nothing serves the inbound)."
+      },
+      "ReconciliationRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 400
+          },
+          "check": {
+            "$ref": "#/components/schemas/ReconciliationCheck"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReconciliationStatus"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/CheckObjectRef"
+          },
+          "counterpart": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckObjectRef"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The node or server it was compared with."
+          },
+          "related": {
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CheckObjectRef"
+            }
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actual": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 1000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "English text; the console shows `reasonKey` in the language of the user."
+          },
+          "reasonKey": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "params": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "fix": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CheckFixHint"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "ttlSeconds": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a name that was looked up: its time to live."
+          }
+        },
+        "required": [
+          "id",
+          "check",
+          "status",
+          "subject",
+          "counterpart",
+          "related",
+          "expected",
+          "actual",
+          "reason",
+          "reasonKey",
+          "params",
+          "fix",
+          "ttlSeconds"
+        ],
+        "additionalProperties": false
+      },
+      "ReconciliationSummary": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "drift": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "missing": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "extra": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "unknown": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "byCheck": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "description": "Rows that are not `ok`, by check."
+          }
+        },
+        "required": [
+          "ok",
+          "drift",
+          "missing",
+          "extra",
+          "unknown",
+          "total",
+          "byCheck"
+        ],
+        "additionalProperties": false
+      },
+      "ReconciliationReport": {
+        "type": "object",
+        "properties": {
+          "pack": {
+            "$ref": "#/components/schemas/PackRef"
+          },
+          "ranAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/ReconciliationSummary"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReconciliationRow"
+            }
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "dns": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "names": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Different names that had to be looked up."
+              },
+              "resolved": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "failed": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Not found, timed out or refused."
+              },
+              "skipped": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Left out because of the cap on names per run."
+              },
+              "capped": {
+                "type": "boolean"
+              },
+              "cached": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991,
+                "description": "Answers that came from the short memory of this server."
+              },
+              "durationMs": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "enabled",
+              "names",
+              "resolved",
+              "failed",
+              "skipped",
+              "capped",
+              "cached",
+              "durationMs"
+            ],
+            "additionalProperties": false
+          },
+          "inventory": {
+            "type": "object",
+            "properties": {
+              "available": {
+                "type": "boolean"
+              },
+              "reason": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "enum": [
+                      "no_permission"
+                    ]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Why the inventory was not compared."
+              },
+              "servers": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "available",
+              "reason",
+              "servers"
+            ],
+            "additionalProperties": false
+          },
+          "settings": {
+            "type": "object",
+            "properties": {
+              "hostAddress": {
+                "type": "string",
+                "enum": [
+                  "node",
+                  "node-ip",
+                  "node-address",
+                  "none"
+                ]
+              },
+              "hostSni": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "node-address"
+                ]
+              },
+              "hostPort": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "inbound"
+                ]
+              },
+              "dnsEnabled": {
+                "type": "boolean"
+              },
+              "maxTtlSeconds": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "matchBy": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "address",
+                    "dns",
+                    "hostname"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "hostAddress",
+              "hostSni",
+              "hostPort",
+              "dnsEnabled",
+              "maxTtlSeconds",
+              "matchBy"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "pack",
+          "ranAt",
+          "fetchedAt",
+          "summary",
+          "rows",
+          "truncated",
+          "dns",
+          "inventory",
+          "settings"
+        ],
+        "additionalProperties": false,
+        "description": "What hosts, nodes and servers say about each other. \"Check only\": nothing is changed, and the fix hints are information."
+      },
+      "ImpactKind": {
+        "type": "string",
+        "enum": [
+          "configProfile",
+          "internalSquad",
+          "host",
+          "node",
+          "subscriptionTemplate"
+        ]
+      },
+      "JsonPatchOperation": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "add"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "value": {}
+            },
+            "required": [
+              "op",
+              "path",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "replace"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "value": {}
+            },
+            "required": [
+              "op",
+              "path",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "test"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "value": {}
+            },
+            "required": [
+              "op",
+              "path",
+              "value"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "remove"
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "required": [
+              "op",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "move"
+              },
+              "from": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "required": [
+              "op",
+              "from",
+              "path"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "op": {
+                "type": "string",
+                "const": "copy"
+              },
+              "from": {
+                "type": "string",
+                "maxLength": 512
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 512
+              }
+            },
+            "required": [
+              "op",
+              "from",
+              "path"
+            ],
+            "additionalProperties": false
+          }
+        ],
+        "description": "One operation of RFC 6902."
+      },
+      "ImpactRequest": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/ImpactKind"
+          },
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "description": "The object the change is for."
+          },
+          "change": {
+            "anyOf": [
+              {
+                "minItems": 1,
+                "maxItems": 500,
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/JsonPatchOperation"
+                }
+              },
+              {
+                "type": "object",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "additionalProperties": {}
+              }
+            ],
+            "description": "Either a partial object as the panel API would take it for an update (the fields given replace the current ones; the others stay), or a JSON Patch (RFC 6902, an array) applied to the editable form of the object. The editable forms are listed in the description of the operation. A masked value (`[masked:...]`) in a configuration means \"unchanged\"; any other value where the current one is masked counts as a change of a secret."
+          }
+        },
+        "required": [
+          "kind",
+          "uuid",
+          "change"
+        ],
+        "additionalProperties": false
+      },
+      "ImpactTarget": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "$ref": "#/components/schemas/CheckObjectRef"
+          },
+          "editable": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {},
+            "description": "The editable form of the object, as `POST /panel/impact` takes a change for it, with every secret masked."
+          },
+          "masked": {
+            "type": "boolean",
+            "description": "True when the form holds masked values: they stand for secrets that a dry run cannot change."
+          }
+        },
+        "required": [
+          "target",
+          "editable",
+          "masked"
+        ],
+        "additionalProperties": false,
+        "description": "The object a change is for, in the form a change is written against: the starting point of an editor."
+      },
+      "ImpactRuleId": {
+        "type": "string",
+        "enum": [
+          "profile.config-edit",
+          "profile.name-only",
+          "squad.inbounds-changed",
+          "squad.members-changed",
+          "squad.metadata-only",
+          "node.profile-move",
+          "node.active-inbounds-changed",
+          "node.disable",
+          "node.enable",
+          "node.connection-changed",
+          "node.metadata-only",
+          "host.edit",
+          "template.edit"
+        ]
+      },
+      "RiskLevel": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "ImpactReport": {
+        "type": "object",
+        "properties": {
+          "rulesVersion": {
+            "type": "string",
+            "description": "The version of the impact rule table (`3.4`: the observed behaviour of Remnawave 3.4.x)."
+          },
+          "panelVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "$ref": "#/components/schemas/CheckObjectRef"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "False when the proposed change leaves the object as it is."
+          },
+          "changes": {
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "add",
+                    "remove",
+                    "replace"
+                  ]
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 300
+                }
+              },
+              "required": [
+                "op",
+                "path"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Paths of the editable form that differ (values are not repeated: they may hold secrets)."
+          },
+          "inbounds": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "added": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "removed": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "changed": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "renamed": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "from",
+                        "to"
+                      ],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": [
+                  "added",
+                  "removed",
+                  "changed",
+                  "renamed"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "For a configuration or an inbound list: which inbounds (by tag) the change adds, removes, changes or renames."
+          },
+          "restarts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "node": {
+                  "$ref": "#/components/schemas/CheckObjectRef"
+                },
+                "rule": {
+                  "$ref": "#/components/schemas/ImpactRuleId"
+                },
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "restart",
+                    "stop",
+                    "start"
+                  ],
+                  "description": "What happens to the node: Xray restarts, the node stops (it is disabled), or it starts (it is enabled)."
+                },
+                "state": {
+                  "type": "string"
+                },
+                "usersOnline": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "node",
+                "rule",
+                "action",
+                "state",
+                "usersOnline"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Nodes on which Xray restarts or that stop or start, and the rule that says so."
+          },
+          "skipped": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "node": {
+                  "$ref": "#/components/schemas/CheckObjectRef"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "disabled"
+                  ]
+                }
+              },
+              "required": [
+                "node",
+                "reason"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Nodes of the same profile that the change does not restart."
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "$ref": "#/components/schemas/ImpactRuleId"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "basis": {
+                  "type": "string",
+                  "enum": [
+                    "observed",
+                    "documented",
+                    "assumed"
+                  ],
+                  "description": "Where the rule comes from: measured on a panel, the design of Remnawave 3.4.x, or an assumption to confirm."
+                },
+                "effect": {
+                  "type": "string",
+                  "enum": [
+                    "restart",
+                    "stop",
+                    "start",
+                    "none"
+                  ]
+                },
+                "messageKey": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "title",
+                "basis",
+                "effect",
+                "messageKey"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "dangling": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "$ref": "#/components/schemas/CheckObjectRef"
+                },
+                "inbound": {
+                  "type": "object",
+                  "properties": {
+                    "uuid": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "tag": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "uuid",
+                    "tag"
+                  ],
+                  "additionalProperties": false
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "removed",
+                    "renamed",
+                    "unlisted"
+                  ]
+                }
+              },
+              "required": [
+                "from",
+                "inbound",
+                "reason"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "unserved": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "host": {
+                  "$ref": "#/components/schemas/CheckObjectRef"
+                },
+                "reason": {
+                  "type": "string",
+                  "enum": [
+                    "inbound_removed",
+                    "node_moved",
+                    "node_disabled",
+                    "no_node"
+                  ]
+                }
+              },
+              "required": [
+                "host",
+                "reason"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Hosts that would be left with no node that serves their inbound."
+          },
+          "affected": {
+            "type": "object",
+            "properties": {
+              "internalSquads": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CheckObjectRef"
+                }
+              },
+              "externalSquads": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CheckObjectRef"
+                }
+              },
+              "templates": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CheckObjectRef"
+                }
+              },
+              "hosts": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/CheckObjectRef"
+                }
+              }
+            },
+            "required": [
+              "internalSquads",
+              "externalSquads",
+              "templates",
+              "hosts"
+            ],
+            "additionalProperties": false
+          },
+          "users": {
+            "type": "object",
+            "properties": {
+              "onlineOnRestartedNodes": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Users connected now to the nodes that restart (their count as the panel reports it); null when unknown."
+              },
+              "squadMembersUpTo": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "An upper bound of the users who may use these nodes: the member counts of the internal squads that reach them, added up (a user in two squads counts twice)."
+              }
+            },
+            "required": [
+              "onlineOnRestartedNodes",
+              "squadMembersUpTo"
+            ],
+            "additionalProperties": false
+          },
+          "risk": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "$ref": "#/components/schemas/RiskLevel"
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "message": {
+                      "type": "string",
+                      "maxLength": 1000,
+                      "description": "English text."
+                    },
+                    "messageKey": {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    "params": {
+                      "type": "object",
+                      "propertyNames": {
+                        "type": "string",
+                        "maxLength": 64
+                      },
+                      "additionalProperties": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 500
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "level": {
+                      "$ref": "#/components/schemas/RiskLevel"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message",
+                    "messageKey",
+                    "params",
+                    "level"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "level",
+              "reasons"
+            ],
+            "additionalProperties": false
+          },
+          "saferWay": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "description": "English text."
+                  },
+                  "messageKey": {
+                    "type": "string",
+                    "maxLength": 200
+                  },
+                  "params": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string",
+                      "maxLength": 64
+                    },
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "code",
+                  "message",
+                  "messageKey",
+                  "params"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A way to do it that disturbs less, when there is one."
+          },
+          "findings": {
+            "type": "object",
+            "properties": {
+              "introduced": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConventionFinding"
+                },
+                "description": "Convention findings the change would cause."
+              },
+              "fixed": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ConventionFinding"
+                },
+                "description": "Convention findings the change would resolve."
+              },
+              "unchanged": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "introduced",
+              "fixed",
+              "unchanged"
+            ],
+            "additionalProperties": false
+          },
+          "notes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "maxLength": 64
+                },
+                "message": {
+                  "type": "string",
+                  "maxLength": 1000,
+                  "description": "English text."
+                },
+                "messageKey": {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                "params": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "additionalProperties": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 500
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "code",
+                "message",
+                "messageKey",
+                "params"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "rulesVersion",
+          "panelVersion",
+          "target",
+          "changed",
+          "changes",
+          "inbounds",
+          "restarts",
+          "skipped",
+          "rules",
+          "dangling",
+          "unserved",
+          "affected",
+          "users",
+          "risk",
+          "saferWay",
+          "findings",
+          "notes"
+        ],
+        "additionalProperties": false,
+        "description": "The result of a dry run: what a change would do, computed from what the panel reported. Nothing was sent to the panel."
       },
       "PanelSnapshotKind": {
         "type": "string",

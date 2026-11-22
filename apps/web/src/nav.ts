@@ -28,6 +28,7 @@ import { PiListChecks, PiUsers } from 'react-icons/pi';
 import {
   TbBraces,
   TbCamera,
+  TbChecklist,
   TbCirclesRelation,
   TbCode,
   TbCookie,
@@ -266,6 +267,13 @@ const navigation = (t: TFunction<Namespace[]>): readonly GatedSection[] => [
         name: t('nav:snapshots'),
         href: ROUTES.DASHBOARD.PANEL.SNAPSHOTS,
         icon: TbCamera,
+        permission: 'panel:read',
+      },
+      {
+        id: 'checks',
+        name: t('nav:checks'),
+        href: ROUTES.DASHBOARD.PANEL.CHECKS,
+        icon: TbChecklist,
         permission: 'panel:read',
       },
       {

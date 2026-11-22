@@ -102,6 +102,7 @@ ENV NODE_ENV=production \
 COPY --from=server-deps /app ./
 COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/packages/contracts/dist ./packages/contracts/dist
+COPY --from=build /app/packages/conventions/dist ./packages/conventions/dist
 COPY --from=build /app/packages/db/dist ./packages/db/dist
 COPY --from=build /app/packages/plugin-api/dist ./packages/plugin-api/dist
 COPY --from=build /app/packages/remnawave/dist ./packages/remnawave/dist

@@ -38,7 +38,7 @@ A scenario for cases such as a node blocked in transit: deploy on a new IP or se
 A new IP on the same server: DNS, hosts, API port ACL if needed, fail2ban rules, update of the HAProxy `bind`, cert-sync, probes; the scenario enforces the order "add first, then remove".
 
 ### N09 Moving between profiles, splitting and merging (H)
-Cloning a shared profile "for a node" (as for the entry node of a chain), moving an inbound, merging back; impact calculation for restarts; the old state is recorded for rollback.
+Cloning a shared profile "for a node" (as for the entry node of a chain), moving an inbound, merging back; impact calculation for restarts; the old state is recorded for rollback. Built in Phase 3 (ADR 0044): the impact calculation is a dry run (`POST /panel/impact`) that says which nodes restart, stop or start and why (each rule marked observed, documented or assumed), which hosts and subscriptions change, what the linter would find afterwards, a risk level and, for a shared profile, the safer way (clone it for the node); it changes nothing.
 
 ### N10 Updating the node image and Xray (H)
 Strategies: canary (one node), then waves; checks after each: node online, Xray uptime, users online, configured thresholds; stop on failure and roll back to the previous tag. Version source: node and Xray releases on GitHub, with the tag pinned in compose and in the artifact. "Urgent" security releases are taken into account. Rollback: **full** (the previous image stays on disk until the end of the window).
@@ -111,7 +111,7 @@ List, view, version diff (Monaco), clone, inbound editing through a builder (REA
 In stages: generation, profile update, check of subscriptions and clients, rollback. Separately for each node when profiles are cloned.
 
 ### P04 Hosts (M)
-CRUD, clone, batch operations (disable, enable, delete, update), sorting; a **conventions engine** (defaults, configurable): remark from a pattern, `address` = IP, explicit `sni`, fingerprint policy (default `firefox`; the allowed set is configurable, the observed compatibility constraint is described in `04-remnawave-integration.md`), subscription types, `vlessRouteId` range (default outside 0x4000-0x4FFF), marking of test hosts (for example 🧪) and protecting them from bulk edits; **host and node reconciliation**: drift of address, SNI and inbound binding; fixing with a dump and rollback.
+CRUD, clone, batch operations (disable, enable, delete, update), sorting; a **conventions engine** (defaults, configurable): remark from a pattern, `address` = IP, explicit `sni`, fingerprint policy (default `firefox`; the allowed set is configurable, the observed compatibility constraint is described in `04-remnawave-integration.md`), subscription types, `vlessRouteId` range (default outside 0x4000-0x4FFF), marking of test hosts (for example 🧪) and protecting them from bulk edits; **host and node reconciliation**: drift of address, SNI and inbound binding; fixing with a dump and rollback. Built in Phase 3 (ADR 0044): the conventions engine is a rule pack as data (30 rules, a pattern language that cannot take exponential time, versions, import and export; the owner's own scheme is a pack and not code) and reconciliation of hosts, nodes and the server inventory is check only, with DNS looked up under a timeout, a cap and a rate limit; the fix with a dump and rollback comes with the writes of the panel.
 
 ### P05 Squads (M)
 Internal (inbound composition, impact: restart of the affected node), external (template, headers, subscription page), users in batches.
