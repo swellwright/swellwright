@@ -28,7 +28,13 @@ const COUNT_COLOR: Readonly<Record<keyof CheckCounts, string>> = {
 };
 
 /** The chip of one result: an icon and a word, with a tooltip that says what the status means. */
-export function CheckStatusBadge({ status, size = 'md' }: { status: CheckStatus; size?: 'sm' | 'md' | 'lg' }) {
+export function CheckStatusBadge({
+  status,
+  size = 'md',
+}: {
+  status: CheckStatus;
+  size?: 'sm' | 'md' | 'lg';
+}) {
   const { t } = useTranslation('baseline');
   return (
     <Tooltip label={t(`statusHelp.${status}`)} withArrow>
@@ -69,11 +75,17 @@ export function TrendMark({ trend }: { trend: 'better' | 'worse' | 'same' | null
       </Text>
     );
   }
-  const Icon = trend === 'better' ? IconArrowUpRight : trend === 'worse' ? IconArrowDownRight : IconEqual;
+  const Icon =
+    trend === 'better' ? IconArrowUpRight : trend === 'worse' ? IconArrowDownRight : IconEqual;
   const color = trend === 'better' ? 'teal' : trend === 'worse' ? 'red' : 'gray';
   return (
     <Tooltip label={t(`trend.${trend}`)} withArrow>
-      <Icon aria-label={t(`trend.${trend}`)} color={`var(--mantine-color-${color}-4)`} role="img" size={20} />
+      <Icon
+        aria-label={t(`trend.${trend}`)}
+        color={`var(--mantine-color-${color}-4)`}
+        role="img"
+        size={20}
+      />
     </Tooltip>
   );
 }
@@ -84,12 +96,15 @@ export function valueText(value: unknown): string {
     return '–';
   }
   if (Array.isArray(value)) {
-    return value.length === 0 ? '[]' : value.map((entry) => String(entry)).join(', ');
+    return value.length === 0 ? '[]' : value.map((entry) => valueText(entry)).join(', ');
   }
   if (typeof value === 'string') {
     return value === '' ? '""' : value;
   }
-  return String(value);
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return JSON.stringify(value);
 }
 
 /** What an expectation says, in words: `at most 90`, `equals no`. */

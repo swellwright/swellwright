@@ -12,15 +12,14 @@ const make = (
   expect: Record<string, unknown>,
   severity: 'high' | 'medium' | 'low' = 'medium',
   params?: Record<string, string | number>,
-): BaselineCheck =>
-  ({
-    id: 'a.b',
-    title: 'A check',
-    category: 'system',
-    severity,
-    observe: { kind, field, ...(params ? { params } : {}) },
-    expect,
-  }) as BaselineCheck;
+): BaselineCheck => ({
+  id: 'a.b',
+  title: 'A check',
+  category: 'system',
+  severity,
+  observe: { kind, field, ...(params ? { params } : {}) },
+  expect,
+});
 
 const observed = (
   fields: Record<string, ObservedValue>,

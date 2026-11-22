@@ -36,6 +36,9 @@ const AuditPage = lazy(() =>
 const ServersPage = lazy(() =>
   import('./fleet/servers-page.js').then((m) => ({ default: m.ServersPage })),
 );
+const BaselinePage = lazy(() =>
+  import('./baseline/baseline-page.js').then((m) => ({ default: m.BaselinePage })),
+);
 const RunsPage = lazy(() =>
   import('./commands/runs-page.js').then((m) => ({ default: m.RunsPage })),
 );
@@ -292,6 +295,16 @@ function NodePluginsRoute() {
   return <PanelRoute page={<NodePluginsPage />} title={t('nodePlugins')} />;
 }
 
+function BaselineRoute() {
+  const { t } = useTranslation('nav');
+  const { session } = useConsole();
+  return (
+    <Guarded permission="servers:read" title={t('baseline')}>
+      <BaselinePage permissions={session.permissions} />
+    </Guarded>
+  );
+}
+
 function ChecksRoute() {
   const { t } = useTranslation('nav');
   const { session } = useConsole();
@@ -331,6 +344,7 @@ export const routes: RouteObject[] = [
           { path: relative(D.HOME), element: <OverviewRoute /> },
           { path: relative(D.FLEET.ROOT), element: <AreaIndex area="fleet" /> },
           { path: relative(D.FLEET.SERVERS), element: <ServersRoute /> },
+          { path: relative(D.FLEET.BASELINE), element: <BaselineRoute /> },
           { path: relative(D.FLEET.NODES), element: <PanelNodesRoute /> },
           { path: relative(D.OPERATIONS.ROOT), element: <AreaIndex area="operations" /> },
           { path: relative(D.OPERATIONS.RUNS), element: <RunsRoute /> },

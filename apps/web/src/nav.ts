@@ -1,5 +1,6 @@
 import {
   IconApi,
+  IconChecklist,
   IconBell,
   IconBook,
   IconCalendarTime,
@@ -92,6 +93,14 @@ const navigation = (t: TFunction<Namespace[]>): readonly GatedSection[] => [
         name: t('nav:servers'),
         href: ROUTES.DASHBOARD.FLEET.SERVERS,
         icon: HiServer,
+        permission: 'servers:read',
+      },
+      {
+        id: 'baseline',
+        name: t('nav:baseline'),
+        href: ROUTES.DASHBOARD.FLEET.BASELINE,
+        icon: IconChecklist,
+        // Baseline checks of servers over SSH (ADR 0045): reading the state of the fleet is reading servers.
         permission: 'servers:read',
       },
       {

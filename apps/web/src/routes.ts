@@ -12,6 +12,7 @@ export const ROUTES = {
     FLEET: {
       ROOT: '/dashboard/fleet',
       SERVERS: '/dashboard/fleet/servers',
+      BASELINE: '/dashboard/fleet/baseline',
       NODES: '/dashboard/fleet/nodes',
       CHAINS: '/dashboard/fleet/chains',
       DNS: '/dashboard/fleet/dns',

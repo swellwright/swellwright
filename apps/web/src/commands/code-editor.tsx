@@ -19,7 +19,7 @@ export interface EditorMarker {
 
 export interface CodeEditorProps {
   value: string;
-  onChange?: (value: string) => void;
+  onChange?: ((value: string) => void) | undefined;
   readOnly?: boolean;
   /** The language of Monaco, `shell` by default. */
   language?: string;

@@ -69,7 +69,9 @@ function duration(ms: number | null): string {
     return '–';
   }
   const seconds = Math.max(0, Math.round(ms / 1000));
-  return seconds < 60 ? `${String(seconds)} s` : `${String(Math.floor(seconds / 60))} min ${String(seconds % 60).padStart(2, '0')} s`;
+  return seconds < 60
+    ? `${String(seconds)} s`
+    : `${String(Math.floor(seconds / 60))} min ${String(seconds % 60).padStart(2, '0')} s`;
 }
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
@@ -136,7 +138,8 @@ function Drift({ diff }: { diff: CheckRunDiff }) {
   }
   return (
     <Stack gap="xs">
-      {diff.notes.includes('baseline_version_differs') || diff.notes.includes('baseline_differs') ? (
+      {diff.notes.includes('baseline_version_differs') ||
+      diff.notes.includes('baseline_differs') ? (
         <Text c="dimmed" fz="xs">
           {t('baseline:drawer.driftBaseline')}
         </Text>
@@ -171,9 +174,12 @@ function Drift({ diff }: { diff: CheckRunDiff }) {
               {change.from ? <CheckStatusBadge size="sm" status={change.from.status} /> : null}
               {change.from && change.to ? <Text fz="sm">→</Text> : null}
               {change.to ? <CheckStatusBadge size="sm" status={change.to.status} /> : null}
-              {change.from && change.to && valueText(change.from.observed) !== valueText(change.to.observed) ? (
+              {change.from &&
+              change.to &&
+              valueText(change.from.observed) !== valueText(change.to.observed) ? (
                 <Text c="dimmed" fz="xs" truncate>
-                  <Code>{valueText(change.from.observed)}</Code> → <Code>{valueText(change.to.observed)}</Code>
+                  <Code>{valueText(change.from.observed)}</Code> →{' '}
+                  <Code>{valueText(change.to.observed)}</Code>
                 </Text>
               ) : null}
             </Group>
@@ -253,7 +259,11 @@ function CheckContent({
   const [picked, setPicked] = useState<string | undefined>(undefined);
   const [filter, setFilter] = useState<'problems' | 'all'>('problems');
 
-  const fleet = useQuery({ queryKey: ['baseline', 'fleet'], queryFn: getBaselineFleet, retry: false });
+  const fleet = useQuery({
+    queryKey: ['baseline', 'fleet'],
+    queryFn: getBaselineFleet,
+    retry: false,
+  });
   const item = fleet.data?.items.find((entry) => entry.server.id === serverId);
   const runs = useQuery({
     queryKey: ['baseline', 'runs', serverId],
@@ -282,12 +292,16 @@ function CheckContent({
     onSuccess: async () => {
       notifySuccess(t('baseline:run.started'));
       setPicked(undefined);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ['baseline'] }),
-      ]);
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ['baseline'] })]);
     },
     onError: (error) => {
-      notifyFailure(t, t('baseline:run.failed'), error, t('baseline:signInAgain'), t('baseline:noRun'));
+      notifyFailure(
+        t,
+        t('baseline:run.failed'),
+        error,
+        t('baseline:signInAgain'),
+        t('baseline:noRun'),
+      );
     },
   });
 
@@ -308,7 +322,12 @@ function CheckContent({
     if (runs.isError) {
       return (
         <QueryErrorCard
-          message={describeError(t, runs.error, t('baseline:signInAgain'), t('baseline:readForbidden'))}
+          message={describeError(
+            t,
+            runs.error,
+            t('baseline:signInAgain'),
+            t('baseline:readForbidden'),
+          )}
           onRetry={() => void runs.refetch()}
           title={t('baseline:drawer.loadFailed')}
         />
@@ -317,7 +336,9 @@ function CheckContent({
     if (runs.data.runs.length === 0 || run.data === undefined) {
       return (
         <Stack gap="md">
-          {item?.baseline ? null : <Callout color="orange">{t('baseline:drawer.noBaseline')}</Callout>}
+          {item?.baseline ? null : (
+            <Callout color="orange">{t('baseline:drawer.noBaseline')}</Callout>
+          )}
           <Text c="dimmed" fz="sm">
             {t('baseline:drawer.noRuns')}
           </Text>
@@ -348,7 +369,9 @@ function CheckContent({
             </Stack>
           </Callout>
         ) : null}
-        {isGoing(current.state) ? <Callout color="cyan">{t('baseline:drawer.pending')}</Callout> : null}
+        {isGoing(current.state) ? (
+          <Callout color="cyan">{t('baseline:drawer.pending')}</Callout>
+        ) : null}
 
         <SectionCard.Root>
           <SectionCard.Section>
@@ -456,7 +479,9 @@ function CheckContent({
                             </Text>
                             <Group gap={4}>
                               {(['fail', 'warn', 'error', 'pass', 'skipped'] as const)
-                                .filter((status) => results.some((result) => result.status === status))
+                                .filter((status) =>
+                                  results.some((result) => result.status === status),
+                                )
                                 .map((status) => (
                                   <StatusBadge
                                     iconSize={12}
@@ -464,7 +489,9 @@ function CheckContent({
                                     kind={STATUS_KIND[status]}
                                     size="sm"
                                   >
-                                    {String(results.filter((result) => result.status === status).length)}
+                                    {String(
+                                      results.filter((result) => result.status === status).length,
+                                    )}
                                   </StatusBadge>
                                 ))}
                             </Group>

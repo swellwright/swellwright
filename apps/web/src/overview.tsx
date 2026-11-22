@@ -23,8 +23,10 @@ import {
 } from '@swellwright/ui';
 
 import { ApiUnreachableError, loadSystemStatus } from './api.js';
+import { BaselineOverviewBlock } from './baseline/overview-block.js';
 import { PanelOverviewBlock } from './panel/overview-block.js';
 import { QueryErrorCard } from './security/query-error.js';
+import { useConsole } from './shell/console-context.js';
 
 /**
  * The Overview, laid out like the panel's Home page: no header card, but titled sections (a level 4 heading, then a
@@ -33,6 +35,7 @@ import { QueryErrorCard } from './security/query-error.js';
  */
 export function Overview() {
   const { t } = useTranslation(['overview', 'common']);
+  const { session } = useConsole();
   const { data, error, isPending, isFetching, refetch } = useQuery({
     queryKey: ['system', 'status'],
     queryFn: loadSystemStatus,
@@ -62,6 +65,7 @@ export function Overview() {
   return (
     <Stack gap="sm">
       <PanelOverviewBlock />
+      <BaselineOverviewBlock enabled={session.permissions.includes('servers:read')} />
 
       <MetricSection
         actions={

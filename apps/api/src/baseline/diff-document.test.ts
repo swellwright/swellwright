@@ -85,7 +85,7 @@ describe('the drift between two runs', () => {
       ],
     );
     assert.equal(drift.changes[0]?.from?.status, 'pass');
-    assert.equal(drift.changes[0]?.to?.status, 'warn');
+    assert.equal(drift.changes[0].to?.status, 'warn');
   });
 
   it('ranks an unobservable check between a warning and a failure, and a skipped check as good as a pass', () => {

@@ -222,8 +222,8 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
     );
     const root = run.results[0];
     assert.equal(root?.observed, 'no');
-    assert.deepEqual(root?.expectation, { comparator: 'equals', value: 'no' });
-    assert.equal(root?.remediationHint, 'Set PermitRootLogin no.');
+    assert.deepEqual(root.expectation, { comparator: 'equals', value: 'no' });
+    assert.equal(root.remediationHint, 'Set PermitRootLogin no.');
     assert.deepEqual(run.results[2]?.observed, ['tcp/22', 'tcp/443']);
     assert.deepEqual(run.results[1]?.observation, {
       kind: 'disk.usage',
@@ -300,9 +300,9 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
     );
     const item = fleet.items.find((entry) => entry.server.id === serverId);
     assert.equal(item?.baseline?.name, 'mini');
-    assert.equal(item?.assignedBy, 'server');
-    assert.equal(item?.lastRun?.id, worse.id);
-    assert.equal(item?.trend, 'worse');
+    assert.equal(item.assignedBy, 'server');
+    assert.equal(item.lastRun?.id, worse.id);
+    assert.equal(item.trend, 'worse');
     assert.equal(fleet.totals.failing, 1);
     assert.equal(fleet.totals.failingChecks, 1);
 
@@ -363,7 +363,7 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
       gate.open();
       await waitForRun((started.body as { id: string }).id);
     } finally {
-      gate?.open();
+      gate.open();
       gate = undefined;
     }
   });
@@ -601,7 +601,7 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
     const fleet = BaselineFleetSchema.parse((await h.observer.get('/baseline-fleet')).body);
     const item = fleet.items.find((entry) => entry.server.id === tagged);
     assert.equal(item?.baseline?.name, 'edge-baseline');
-    assert.equal(item?.assignedBy, 'tag');
+    assert.equal(item.assignedBy, 'tag');
     assert.equal((await runOnce(tagged)).baseline.name, 'edge-baseline');
     const summary = BaselineViewSchema.parse((await h.observer.get(`/baselines/${edge.id}`)).body);
     assert.equal(summary.serverCount, 1);
@@ -613,13 +613,13 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
     assert.ok(started.length >= 5);
     const first = started[0];
     assert.equal(first?.actor?.name, 'ops');
-    assert.equal(first?.details['trigger'], 'manual');
-    assert.equal(first?.details['baseline'], 'mini');
+    assert.equal(first.details['trigger'], 'manual');
+    assert.equal(first.details['baseline'], 'mini');
     const finished = await eventsOf(h.instance, 'baseline.run.finished');
     assert.ok(finished.length >= 5);
     assert.equal(finished[0]?.actor, null);
-    assert.equal(finished[0]?.details['state'], 'completed');
-    assert.equal(finished[0]?.details['pass'], 4);
+    assert.equal(finished[0].details['state'], 'completed');
+    assert.equal(finished[0].details['pass'], 4);
     const versions = await eventsOf(h.instance, 'baseline.version.created');
     assert.ok(
       versions.some((event) => event.details['built_in'] === true),

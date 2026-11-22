@@ -2,7 +2,8 @@
 // first makes `@monaco-editor/react` use the Monaco that is bundled here instead of fetching one from a CDN.
 import './monaco-setup.js';
 
-import Editor, { type Monaco } from '@monaco-editor/react';
+import Editor from '@monaco-editor/react';
+import * as monaco from 'monaco-editor/editor';
 import type { editor } from 'monaco-editor';
 import { useCallback, useEffect, useRef } from 'react';
 
@@ -29,20 +30,19 @@ export default function MonacoEditor({
   options,
   markers,
 }: MonacoEditorProps) {
-  const handle = useRef<{ editor: editor.IStandaloneCodeEditor; monaco: Monaco } | null>(null);
+  const handle = useRef<editor.IStandaloneCodeEditor | null>(null);
   const apply = useCallback(() => {
-    const current = handle.current;
-    const model = current?.editor.getModel();
-    if (!current || !model) {
+    const model = handle.current?.getModel();
+    if (!model) {
       return;
     }
-    current.monaco.editor.setModelMarkers(
+    monaco.editor.setModelMarkers(
       model,
       'swellwright',
       markers
         .filter((marker) => marker.line >= 1 && marker.line <= model.getLineCount())
         .map((marker) => ({
-          severity: current.monaco.MarkerSeverity.Error,
+          severity: monaco.MarkerSeverity.Error,
           message: marker.message,
           startLineNumber: marker.line,
           startColumn: marker.column ?? 1,
@@ -56,8 +56,8 @@ export default function MonacoEditor({
   }, [apply, value]);
   return (
     <Editor
-      onMount={(mounted, monaco) => {
-        handle.current = { editor: mounted, monaco };
+      onMount={(mounted) => {
+        handle.current = mounted;
         apply();
       }}
       language={language}

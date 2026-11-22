@@ -117,7 +117,7 @@ describe('the catalogue of observations', () => {
     const port = observationKind('port.listener');
     assert.ok(port);
     for (const value of [0, 65_536, 1.5, '443', -1, Number.NaN]) {
-      assert.ok(observationParamIssues(port, { port: value as number }).length > 0, String(value));
+      assert.ok(observationParamIssues(port, { port: value }).length > 0, String(value));
     }
     const sysctl = observationKind('sysctl.value');
     assert.ok(sysctl);
