@@ -6,6 +6,7 @@
 
 import { FakePanel } from './fake-panel.js';
 import { FAKE_TOKEN } from './fixtures.js';
+import { applyChecksScenario } from './fixtures-checks.js';
 
 function option(name: string): string | undefined {
   const index = process.argv.indexOf(`--${name}`);
@@ -26,6 +27,11 @@ const panel = await FakePanel.start({
   extraHosts,
   ...(version === undefined ? {} : { version }),
 });
+if (process.argv.includes('--scenario') && option('scenario') === 'checks') {
+  // A fleet with things wrong in it, for the checks (hosts that drift, a shared profile, dangling inbounds).
+  applyChecksScenario(panel.fixtures);
+  console.log('Scenario: checks');
+}
 console.log(`Fake panel listening on ${panel.url}`);
 console.log(`Token: ${panel.token}`);
 console.log('Press Ctrl+C to stop.');

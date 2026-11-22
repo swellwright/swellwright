@@ -9,3 +9,5 @@ export const VAULT_KDF = Symbol('VAULT_KDF');
 export const PLUGIN_NETWORK = Symbol('PLUGIN_NETWORK');
 /** The clock of the update check, in milliseconds since the epoch; tests move it instead of waiting a day. */
 export const UPDATES_CLOCK = Symbol('UPDATES_CLOCK');
+/** The question the reconciliation asks of DNS (ADR 0044); tests replace it so that no real name is looked up. */
+export const DNS_QUERY = Symbol('DNS_QUERY');

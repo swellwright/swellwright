@@ -1,5 +1,6 @@
 import { type DynamicModule, Module, type OnApplicationShutdown, Inject } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import type { DnsQuery } from '@swellwright/conventions';
 import { Database } from '@swellwright/db';
 
 import { ArtifactsController } from './artifacts/artifacts.controller.js';
@@ -27,6 +28,7 @@ import { type AppConfig } from './config.js';
 import {
   CONFIG,
   DATABASE,
+  DNS_QUERY,
   PASSWORD_HASHER,
   PLUGIN_NETWORK,
   SECRET_BOX,
@@ -40,6 +42,12 @@ import {
   ReadinessService,
   ValkeyCheck,
 } from './readiness.js';
+import { ChecksController } from './checks/checks.controller.js';
+import { ChecksService } from './checks/checks.service.js';
+import { nodeDnsQuery } from './checks/dns-query.js';
+import { InventoryReader } from './checks/inventory.js';
+import { ChecksMemory } from './checks/memory.js';
+import { ConventionPackService } from './checks/pack.service.js';
 import { PanelClients } from './panel/clients.js';
 import { PanelCache } from './panel/panel-cache.js';
 import { PanelController } from './panel/panel.controller.js';
@@ -79,6 +87,8 @@ export interface AppOptions {
   readonly pluginNetwork?: PluginNetwork;
   /** The clock of the update check (milliseconds since the epoch), so that tests need not wait a day. */
   readonly clock?: () => number;
+  /** Answers the DNS questions of the reconciliation, replaced in tests so that no real name is looked up. */
+  readonly dnsQuery?: DnsQuery;
 }
 
 function checksFrom(config: AppConfig, database: Database | undefined): ReadinessCheck[] {
@@ -121,6 +131,7 @@ export class AppModule implements OnApplicationShutdown {
         CommandsController,
         ArtifactsController,
         PanelController,
+        ChecksController,
       ],
       providers: [
         { provide: CONFIG, useValue: config },
@@ -158,6 +169,15 @@ export class AppModule implements OnApplicationShutdown {
         PanelService,
         PanelReaderService,
         PanelMonitorService,
+        ChecksMemory,
+        ConventionPackService,
+        InventoryReader,
+        ChecksService,
+        {
+          provide: DNS_QUERY,
+          useValue:
+            options.dnsQuery ?? nodeDnsQuery(config.checks.dnsServers, config.checks.dnsTimeoutMs),
+        },
         PluginRuntime,
         PluginBroker,
         PluginsService,

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type {
   PanelApiTokenView,
   PanelConfigProfileSummary,
@@ -13,6 +13,8 @@ import type {
   PanelSnippetView,
   PanelSubscriptionSettingsView,
   PanelSubscriptionTemplateView,
+  PanelResource,
+  PanelTokenInfo,
 } from '@swellwright/contracts';
 import {
   type PanelHealth,
@@ -38,6 +40,27 @@ export interface Read<T> {
   readonly value: T;
   readonly fetchedAt: string;
   readonly cached: boolean;
+}
+
+/** What the checks read (ADR 0044): the kinds they look at, the ones the token could not read, and how fresh it all is. */
+export interface ChecksRead {
+  readonly nodes: PanelNodeView[];
+  readonly hosts: PanelHostView[];
+  readonly profiles: (PanelConfigProfileSummary & { config?: unknown })[];
+  readonly internalSquads: PanelInternalSquadView[];
+  readonly externalSquads: PanelExternalSquadView[];
+  readonly templates: PanelSubscriptionTemplateView[];
+  readonly snippets: PanelSnippetView[];
+  readonly nodePlugins: PanelNodePluginView[];
+  /** Kinds the token may not read, or that came in a shape this release does not know: their rules are skipped. */
+  readonly unavailable: PanelResource[];
+  readonly panelVersion: string | null;
+  readonly token: PanelTokenInfo | null;
+  /** The oldest read among them. */
+  readonly fetchedAt: string;
+  /** True when every kind came from the memory of this server. */
+  readonly cached: boolean;
+  readonly connectionId: string;
 }
 
 interface Options {
@@ -226,6 +249,138 @@ export class PanelReaderService {
 
   apiTokens(actor: Actor, refresh: boolean): Promise<Read<PanelApiTokenView[]>> {
     return this.load('apiTokens', actor, (c) => c.apiTokens(), { refresh });
+  }
+
+  // ---- what the checks read ----------------------------------------------------------------------------------------
+
+  /**
+   * Everything the checks look at, for one charge against the limit of forced reads: the nodes, hosts, config profiles
+   * (each with its masked configuration), squads, templates, snippets and node plugins. A kind that the token may not
+   * read (403) or that the panel sends in a shape this release does not know is listed as unavailable, and the rules
+   * that need it are skipped; any other failure (the panel is down, refuses the token, asks to slow down) is the
+   * failure of the whole read, as everywhere else.
+   */
+  async readForChecks(actor: Actor, refresh: boolean): Promise<ChecksRead> {
+    const row = await this.usable();
+    if (refresh) {
+      this.limitRefresh(actor);
+    }
+    const options: Options = { refresh, counted: true };
+    const unavailable: PanelResource[] = [];
+    const reads: Read<unknown>[] = [];
+    const take = async <T>(
+      resource: PanelResource,
+      read: Promise<Read<T>>,
+      empty: T,
+    ): Promise<T> => {
+      try {
+        const done = await read;
+        reads.push(done);
+        return done.value;
+      } catch (error) {
+        if (isPartial(error)) {
+          unavailable.push(resource);
+          return empty;
+        }
+        throw error;
+      }
+    };
+    const [
+      nodes,
+      hosts,
+      summaries,
+      internalSquads,
+      externalSquads,
+      templates,
+      snippets,
+      nodePlugins,
+    ] = await Promise.all([
+      take(
+        'nodes',
+        this.load('nodes', actor, (c) => c.nodes(), options),
+        [],
+      ),
+      take(
+        'hosts',
+        this.load('hosts', actor, (c) => c.hosts(), options),
+        [],
+      ),
+      take(
+        'configProfiles',
+        this.load('configProfiles', actor, (c) => c.configProfiles(), options),
+        [],
+      ),
+      take(
+        'internalSquads',
+        this.load('internalSquads', actor, (c) => c.internalSquads(), options),
+        [],
+      ),
+      take(
+        'externalSquads',
+        this.load('externalSquads', actor, (c) => c.externalSquads(), options),
+        [],
+      ),
+      take(
+        'subscriptionTemplates',
+        this.load('subscriptionTemplates', actor, (c) => c.subscriptionTemplates(), options),
+        [],
+      ),
+      take(
+        'snippets',
+        this.load('snippets', actor, (c) => c.snippets(), options),
+        [],
+      ),
+      take(
+        'nodePlugins',
+        this.load('nodePlugins', actor, (c) => c.nodePlugins(), options),
+        [],
+      ),
+    ]);
+    // The configuration of each profile: the list does not carry it. One that cannot be read leaves the profile
+    // without a configuration; the rules that need one look at the profiles that have it.
+    const profiles = await Promise.all(
+      summaries.map(async (summary) => {
+        try {
+          const detail = await this.load(
+            `configProfile:${summary.uuid}`,
+            actor,
+            (c) => c.configProfile(summary.uuid),
+            {
+              ...options,
+              notFoundIsObject: 'config profile',
+            },
+          );
+          reads.push(detail);
+          return { ...summary, config: detail.value.config };
+        } catch (error) {
+          if (isPartial(error) || error instanceof NotFoundException) {
+            return { ...summary };
+          }
+          throw error;
+        }
+      }),
+    );
+    const now = new Date();
+    const oldest = reads.reduce(
+      (least, read) => (read.fetchedAt < least ? read.fetchedAt : least),
+      now.toISOString(),
+    );
+    return {
+      nodes,
+      hosts,
+      profiles,
+      internalSquads,
+      externalSquads,
+      templates,
+      snippets,
+      nodePlugins,
+      unavailable,
+      panelVersion: row.panelVersion,
+      token: tokenInfo(row, now),
+      fetchedAt: reads.length === 0 ? now.toISOString() : oldest,
+      cached: reads.length > 0 && reads.every((read) => read.cached),
+      connectionId: row.id,
+    };
   }
 
   // ---- the overview ------------------------------------------------------------------------------------------------

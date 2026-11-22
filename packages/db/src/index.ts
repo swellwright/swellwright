@@ -4,6 +4,7 @@ export { appliedMigrations, schemaProblem, shippedMigrations } from './migration
 export { Prisma, PrismaClient } from './generated/client.js';
 export type {
   AuditEvent,
+  ConventionPack,
   Credential,
   Invitation,
   PanelConnection,

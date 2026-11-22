@@ -54,6 +54,22 @@ import {
   ScriptViewSchema,
   UpdateScriptRequestSchema,
 } from './commands.js';
+import {
+  ChecksQuerySchema,
+  ConventionLastRunSchema,
+  ConventionPackQuerySchema,
+  ConventionPackValidationSchema,
+  ConventionPackVersionListSchema,
+  ConventionPackViewSchema,
+  ConventionRuleCatalogSchema,
+  ConventionRunSchema,
+  IMPACT_KINDS,
+  ImpactReportSchema,
+  ImpactRequestSchema,
+  ReconciliationReportSchema,
+  SaveConventionPackRequestSchema,
+  ValidateConventionPackRequestSchema,
+} from './checks.js';
 import { ApiErrorSchema } from './errors.js';
 import {
   ConnectPanelRequestSchema,
@@ -1790,6 +1806,145 @@ export const listPanelApiTokensRoute = defineRoute({
   responses: { 200: { description: 'The tokens.', schema: PanelApiTokenListSchema } },
 });
 
+const CHECK_PANEL_ERRORS = `${PANEL_ERRORS} The checks read the panel (nothing else) through the memory of this server; \`refresh=true\` asks the panel again.`;
+
+export const getConventionRulesRoute = defineRoute({
+  operationId: 'getConventionRules',
+  method: 'get',
+  path: '/panel/checks/rules',
+  tags: ['panel'],
+  summary: 'The convention rules and how they are set',
+  description:
+    'Every rule the convention linter knows (id, what it checks, the kinds of finding it makes, its parameters and their defaults, what it needs to be readable) with the settings in force: switched on or off, the severity, the parameters and the scope that the active convention pack gives it. Also the checks of the reconciliation and whether the pack switches them on. Does not call the panel.',
+  auth: 'any',
+  permission: 'panel:read',
+  responses: { 200: { description: 'The rules.', schema: ConventionRuleCatalogSchema } },
+});
+
+export const runConventionChecksRoute = defineRoute({
+  operationId: 'runConventionChecks',
+  method: 'get',
+  path: '/panel/checks/convention',
+  tags: ['panel'],
+  summary: 'Check the panel against the conventions',
+  description: `Reads the nodes, hosts, config profiles, squads, templates and snippets (through the memory of this server) and runs the active convention pack, or the built-in one when none was saved. Answers the findings (each with the object, the rule, a message and its key for the console, the fields involved and a fix hint that nothing applies), most severe first, with counts. A rule that needs a kind of object the token cannot read is listed under \`skipped\`; a rule that fails is listed under \`failed\` and the others still run. Not recorded in the audit log. ${CHECK_PANEL_ERRORS}`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: ChecksQuerySchema },
+  responses: { 200: { description: 'The findings.', schema: ConventionRunSchema } },
+});
+
+export const getLastConventionRunRoute = defineRoute({
+  operationId: 'getLastConventionRun',
+  method: 'get',
+  path: '/panel/checks/convention/last',
+  tags: ['panel'],
+  summary: 'What the last convention run found',
+  description:
+    'The counts of the most recent run, from the memory of this server, for a dashboard that must not run the checks on every load. Null fields when nothing ran since the server started. Does not call the panel.',
+  auth: 'any',
+  permission: 'panel:read',
+  responses: { 200: { description: 'The last run.', schema: ConventionLastRunSchema } },
+});
+
+export const getConventionPackRoute = defineRoute({
+  operationId: 'getConventionPack',
+  method: 'get',
+  path: '/panel/checks/convention-pack',
+  tags: ['panel'],
+  summary: 'The convention pack in use',
+  description:
+    'The active pack as a document and as the YAML it was written in, or a rendering of the built-in pack when none was saved (`pack.source` is `built-in`). With `version`, a pack from the history. A pack holds no secret: it is rules, patterns and thresholds. 404 for a version that does not exist.',
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: ConventionPackQuerySchema },
+  responses: { 200: { description: 'The pack.', schema: ConventionPackViewSchema } },
+});
+
+export const putConventionPackRoute = defineRoute({
+  operationId: 'putConventionPack',
+  method: 'put',
+  path: '/panel/checks/convention-pack',
+  tags: ['panel'],
+  summary: 'Save a convention pack',
+  description:
+    'Validates the pack (the shape, every rule id, every parameter, every pattern: a pattern outside the safe subset is refused) and saves it as the next version, which becomes the active one; the earlier versions stay in the history. `expectedVersion` makes it safe against two editors: when the active version is another one the answer is 409 `conflict`. A pack that is not valid is 400 `validation_failed` and the issues are in `details.issues`. Needs `panel:write` and a fresh second factor. Recorded as `panel.convention_pack.saved` (the name, the version, the hash and counts, not the document).',
+  auth: 'session',
+  permission: 'panel:write',
+  stepUp: true,
+  request: { body: SaveConventionPackRequestSchema },
+  responses: { 200: { description: 'The saved pack.', schema: ConventionPackViewSchema } },
+});
+
+export const resetConventionPackRoute = defineRoute({
+  operationId: 'resetConventionPack',
+  method: 'delete',
+  path: '/panel/checks/convention-pack',
+  tags: ['panel'],
+  summary: 'Go back to the built-in convention pack',
+  description:
+    'Deactivates the saved pack; the built-in pack applies again. The saved versions stay in the history. Needs `panel:write` and a fresh second factor. Recorded as `panel.convention_pack.reset`. 404 when no saved pack is active.',
+  auth: 'session',
+  permission: 'panel:write',
+  stepUp: true,
+  responses: {
+    204: { description: 'The built-in pack applies.', schema: z.undefined(), empty: true },
+  },
+});
+
+export const listConventionPackVersionsRoute = defineRoute({
+  operationId: 'listConventionPackVersions',
+  method: 'get',
+  path: '/panel/checks/convention-pack/versions',
+  tags: ['panel'],
+  summary: 'The history of the convention pack',
+  description:
+    'Every saved version, newest first: who saved it, when, why and which one is active.',
+  auth: 'any',
+  permission: 'panel:read',
+  responses: { 200: { description: 'The versions.', schema: ConventionPackVersionListSchema } },
+});
+
+export const validateConventionPackRoute = defineRoute({
+  operationId: 'validateConventionPack',
+  method: 'post',
+  path: '/panel/checks/convention-pack/validate',
+  tags: ['panel'],
+  summary: 'Validate a convention pack without saving it',
+  description:
+    'The same validation as saving: syntax (with the line and column of a YAML error), the shape, rule ids (an unknown id is a warning, since a pack may be written for a newer release), parameters and patterns. Answers 200 with the issues whether or not the pack is valid. Saves nothing and does not call the panel.',
+  auth: 'any',
+  permission: 'panel:read',
+  request: { body: ValidateConventionPackRequestSchema },
+  responses: { 200: { description: 'The result.', schema: ConventionPackValidationSchema } },
+});
+
+export const runReconciliationRoute = defineRoute({
+  operationId: 'runReconciliation',
+  method: 'get',
+  path: '/panel/checks/reconciliation',
+  tags: ['panel'],
+  summary: 'Reconcile hosts, nodes and the server inventory',
+  description: `Compares each host with the node that serves its inbound (address, SNI, port), each node address with DNS (A and AAAA, CNAME chains followed up to a limit; looked up through a resolver of this server, with a timeout, a cap on names per run and a short memory), and each node with the server inventory (by address, by what the names resolve to, and by hostname), and reports drift: rows with the two sides, the status (\`ok\`, \`drift\`, \`missing\`, \`extra\`, \`unknown\`), the reason and a fix hint. "Check only": nothing is written. The inventory part needs \`servers:read\` as well; without it that part is left out (\`inventory.available\` is false). A name that does not resolve in time is a row, not an error. ${CHECK_PANEL_ERRORS} Also 429 \`rate_limited\` when asked again with \`refresh=true\` too often.`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { query: ChecksQuerySchema },
+  responses: { 200: { description: 'The report.', schema: ReconciliationReportSchema } },
+});
+
+export const calculatePanelImpactRoute = defineRoute({
+  operationId: 'calculatePanelImpact',
+  method: 'post',
+  path: '/panel/impact',
+  tags: ['panel'],
+  summary: 'Dry run of a change: what it would restart and break',
+  description: `Computes what a proposed change would do, from what the panel reported, and sends nothing to the panel. \`change\` is a partial object as the panel API takes it for an update, or a JSON Patch (RFC 6902) applied to the editable form of the object. Editable forms: config profile \`{ name, config }\` (the configuration as \`GET /panel/config-profiles/{uuid}\` shows it, masked); internal squad \`{ name, tags, inbounds }\` (inbounds by uuid or tag); host the fields of \`GET /panel/hosts\` without \`uuid\` and \`hash\`; node \`{ name, address, port, isDisabled, tags, note, configProfile: { activeConfigProfileUuid, activeInbounds } }\`; subscription template \`{ name, tags, templateJson, templateYaml }\`. The answer says which nodes restart Xray and by which rule (editing a shared profile restarts all its nodes, even when one inbound changed), the hosts, squads and templates that are affected, the references that would dangle, the users who may notice, a risk level with reasons, a safer way when there is one, and the convention findings the change would introduce or resolve. Secrets are masked: a masked value means "unchanged", any other value in its place counts as a change of a secret; no value of the request is repeated in the answer. Not recorded in the audit log. Kinds: ${IMPACT_KINDS.join(', ')}. ${CHECK_PANEL_ERRORS} Also 404 when the object does not exist, 400 \`validation_failed\` when the change cannot be applied.`,
+  auth: 'any',
+  permission: 'panel:read',
+  request: { body: ImpactRequestSchema },
+  responses: { 200: { description: 'The impact.', schema: ImpactReportSchema } },
+});
+
 /** Routes any signed-in user may call without a permission. Everything else under `session` names one. */
 export const ROUTES_OPEN_TO_ANY_SESSION: readonly string[] = [
   'getMe',
@@ -1919,6 +2074,16 @@ export const routes = [
   listPanelNodePluginsRoute,
   getPanelInfraRoute,
   listPanelApiTokensRoute,
+  getConventionRulesRoute,
+  runConventionChecksRoute,
+  getLastConventionRunRoute,
+  getConventionPackRoute,
+  putConventionPackRoute,
+  resetConventionPackRoute,
+  listConventionPackVersionsRoute,
+  validateConventionPackRoute,
+  runReconciliationRoute,
+  calculatePanelImpactRoute,
 ] as const;
 
 /** Errors every route may return, documented once. */
