@@ -22,3 +22,7 @@ overrides:
   # ADR 0038). The patch release is API-compatible; drop the override when a monaco-editor that depends on a fixed
   # version is used.
   dompurify: 3.4.18
+  # GHSA-mrhx-c7xc-m3w5 (zod < 4.6.6, memory exhaustion on oversized constrained collections). The panel's contract package, a
+  # development dependency that only the tests of packages/remnawave load, pins zod 4.4.3 exactly; its schemas use the Zod 4 API
+  # that 4.6.7 keeps, and the tests that feed them the fixtures of the fake panel pass with it (ADR 0041).
+  "@remnawave/backend-contract>zod": 4.6.7

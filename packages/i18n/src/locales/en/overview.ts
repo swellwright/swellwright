@@ -16,6 +16,38 @@ export const overview = {
     dependenciesSummary: '{{up}} of {{total}} up',
   },
 
+  /** The block of the connected Remnawave panel (apps/web/src/panel/overview-block.tsx). */
+  panel: {
+    title: 'Remnawave panel',
+    connect: 'Connect a panel',
+    notConnectedTitle: 'No panel is connected',
+    notConnectedText:
+      'Connect your Remnawave panel to see its nodes, hosts, profiles and users here.',
+    notConnectedTextNoRight:
+      'Ask someone who may change the connection to connect a Remnawave panel.',
+    version: 'Panel version',
+    supported: 'Supported: {{range}}',
+    unsupported: 'Not supported by this release',
+    nodesOnline: 'Online nodes',
+    ofTotal: 'of {{total}}',
+    nodesTrouble: 'Problem nodes',
+    health: 'Health',
+    healthOk: 'OK',
+    healthUnknown: 'Unknown',
+    instances_one: '{{count}} process reports',
+    instances_other: '{{count}} processes report',
+    hosts: 'Hosts',
+    profiles: 'Config profiles',
+    users: 'Users',
+    usersOnline_one: '{{count}} online now',
+    usersOnline_other: '{{count}} online now',
+    token: 'Token expires in',
+    tokenDays_one: '{{count}} day',
+    tokenDays_other: '{{count}} days',
+    tokenExpired: 'Expired',
+    tokenNoExpiry: 'No expiry date',
+  },
+
   checks: {
     title: 'Dependency checks',
     apiDescription: 'API description',

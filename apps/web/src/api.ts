@@ -33,6 +33,36 @@ import {
   type HealthResponse,
   HealthResponseSchema,
   type LoginRequest,
+  type ConnectPanelRequest,
+  type ConnectPanelWithTokenRequest,
+  type PanelConfigProfileAnswer,
+  PanelConfigProfileAnswerSchema,
+  type PanelConfigProfileList,
+  PanelConfigProfileListSchema,
+  type PanelConnectionView,
+  PanelConnectionViewSchema,
+  type PanelExternalSquadList,
+  PanelExternalSquadListSchema,
+  type PanelHostList,
+  PanelHostListSchema,
+  type PanelInfraAnswer,
+  PanelInfraAnswerSchema,
+  type PanelInternalSquadList,
+  PanelInternalSquadListSchema,
+  type PanelNodeList,
+  PanelNodeListSchema,
+  type PanelNodePluginList,
+  PanelNodePluginListSchema,
+  type PanelOverview,
+  PanelOverviewSchema,
+  type PanelSnippetList,
+  PanelSnippetListSchema,
+  type PanelSubscriptionSettingsAnswer,
+  PanelSubscriptionSettingsAnswerSchema,
+  type PanelSubscriptionTemplateList,
+  PanelSubscriptionTemplateListSchema,
+  type PanelTestResult,
+  PanelTestResultSchema,
   type PendingSession,
   PendingSessionSchema,
   type PluginConfigView,
@@ -623,6 +653,117 @@ export const verifyServerArtifact = (
 /** Deletes a copy from the server and forgets it. */
 export const removeServerArtifact = (id: string, name: string, version: string): Promise<void> =>
   send('DELETE', `/servers/${id}/artifacts/${name}/${version}`, undefined, undefined);
+
+/** `?refresh=true` when the person asked the panel again instead of the short memory of the server. */
+const refreshQuery = (refresh: boolean): string => (refresh ? '?refresh=true' : '');
+
+/** Where the connection to the Remnawave panel stands (`panel:read`). Never calls the panel and never carries the token. */
+export const getPanelConnection = (): Promise<PanelConnectionView> =>
+  send('GET', '/panel/connection', undefined, PanelConnectionViewSchema);
+
+/** Connects with a token that is in the vault already (`panel:write`). The panel is asked first. */
+export const connectPanel = (request: ConnectPanelRequest): Promise<PanelConnectionView> =>
+  send('PUT', '/panel/connection', request, PanelConnectionViewSchema);
+
+/**
+ * Connects with a token that is not in the vault yet (`panel:write` and `vault:manage`, needs a fresh code): the
+ * panel accepts it first, then it is sealed into the vault and the connection saved in one step.
+ */
+export const connectPanelWithToken = (
+  request: ConnectPanelWithTokenRequest,
+): Promise<PanelConnectionView> =>
+  send('PUT', '/panel/connection/with-token', request, PanelConnectionViewSchema);
+
+/** Asks the panel again and saves what it finds. A panel that does not answer is a result (`ok: false`), not an error. */
+export const testPanel = (): Promise<PanelTestResult> =>
+  send('POST', '/panel/connection/test', undefined, PanelTestResultSchema);
+
+/** Forgets the connection. The token stays in the vault; nothing is changed on the panel. */
+export const disconnectPanel = (): Promise<void> =>
+  send('DELETE', '/panel/connection', undefined, undefined);
+
+export const getPanelOverview = (refresh = false): Promise<PanelOverview> =>
+  send('GET', `/panel/overview${refreshQuery(refresh)}`, undefined, PanelOverviewSchema);
+
+export const listPanelNodes = (refresh = false): Promise<PanelNodeList> =>
+  send('GET', `/panel/nodes${refreshQuery(refresh)}`, undefined, PanelNodeListSchema);
+
+export const listPanelHosts = (refresh = false): Promise<PanelHostList> =>
+  send('GET', `/panel/hosts${refreshQuery(refresh)}`, undefined, PanelHostListSchema);
+
+export const listPanelConfigProfiles = (refresh = false): Promise<PanelConfigProfileList> =>
+  send(
+    'GET',
+    `/panel/config-profiles${refreshQuery(refresh)}`,
+    undefined,
+    PanelConfigProfileListSchema,
+  );
+
+/** One profile with its Xray configuration, every secret in it masked. */
+export const getPanelConfigProfile = (
+  uuid: string,
+  refresh = false,
+): Promise<PanelConfigProfileAnswer> =>
+  send(
+    'GET',
+    `/panel/config-profiles/${uuid}${refreshQuery(refresh)}`,
+    undefined,
+    PanelConfigProfileAnswerSchema,
+  );
+
+/** The configuration as the panel computes it for its nodes (masked too). Not kept in memory by the server. */
+export const getPanelComputedConfig = (uuid: string): Promise<PanelConfigProfileAnswer> =>
+  send(
+    'GET',
+    `/panel/config-profiles/${uuid}/computed-config`,
+    undefined,
+    PanelConfigProfileAnswerSchema,
+  );
+
+export const listPanelInternalSquads = (refresh = false): Promise<PanelInternalSquadList> =>
+  send(
+    'GET',
+    `/panel/internal-squads${refreshQuery(refresh)}`,
+    undefined,
+    PanelInternalSquadListSchema,
+  );
+
+export const listPanelExternalSquads = (refresh = false): Promise<PanelExternalSquadList> =>
+  send(
+    'GET',
+    `/panel/external-squads${refreshQuery(refresh)}`,
+    undefined,
+    PanelExternalSquadListSchema,
+  );
+
+export const listPanelSubscriptionTemplates = (
+  refresh = false,
+): Promise<PanelSubscriptionTemplateList> =>
+  send(
+    'GET',
+    `/panel/subscription-templates${refreshQuery(refresh)}`,
+    undefined,
+    PanelSubscriptionTemplateListSchema,
+  );
+
+export const getPanelSubscriptionSettings = (
+  refresh = false,
+): Promise<PanelSubscriptionSettingsAnswer> =>
+  send(
+    'GET',
+    `/panel/subscription-settings${refreshQuery(refresh)}`,
+    undefined,
+    PanelSubscriptionSettingsAnswerSchema,
+  );
+
+export const listPanelSnippets = (refresh = false): Promise<PanelSnippetList> =>
+  send('GET', `/panel/snippets${refreshQuery(refresh)}`, undefined, PanelSnippetListSchema);
+
+export const listPanelNodePlugins = (refresh = false): Promise<PanelNodePluginList> =>
+  send('GET', `/panel/node-plugins${refreshQuery(refresh)}`, undefined, PanelNodePluginListSchema);
+
+export const getPanelInfra = (refresh = false): Promise<PanelInfraAnswer> =>
+  send('GET', `/panel/infra${refreshQuery(refresh)}`, undefined, PanelInfraAnswerSchema);
 
 /** The current session, or null when nobody is signed in. */
 export async function getMe(): Promise<SessionInfo | null> {

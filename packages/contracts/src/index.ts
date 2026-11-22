@@ -4,6 +4,7 @@ export * from './auth.js';
 export * from './commands.js';
 export * from './errors.js';
 export * from './openapi.js';
+export * from './panel.js';
 export * from './plugins.js';
 export * from './roles.js';
 export * from './routes.js';

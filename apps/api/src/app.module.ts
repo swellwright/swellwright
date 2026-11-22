@@ -40,6 +40,12 @@ import {
   ReadinessService,
   ValkeyCheck,
 } from './readiness.js';
+import { PanelClients } from './panel/clients.js';
+import { PanelCache } from './panel/panel-cache.js';
+import { PanelController } from './panel/panel.controller.js';
+import { PanelMonitorService } from './panel/panel-monitor.service.js';
+import { PanelReaderService } from './panel/panel-reader.service.js';
+import { PanelService } from './panel/panel.service.js';
 import { PluginBroker } from './plugins/broker.js';
 import { PluginNetwork } from './plugins/host/network.js';
 import { PluginHostService } from './plugins/host/plugin-host.service.js';
@@ -114,6 +120,7 @@ export class AppModule implements OnApplicationShutdown {
         ServersController,
         CommandsController,
         ArtifactsController,
+        PanelController,
       ],
       providers: [
         { provide: CONFIG, useValue: config },
@@ -146,6 +153,11 @@ export class AppModule implements OnApplicationShutdown {
         CommandRunsService,
         CatalogueService,
         DistributionService,
+        PanelClients,
+        PanelCache,
+        PanelService,
+        PanelReaderService,
+        PanelMonitorService,
         PluginRuntime,
         PluginBroker,
         PluginsService,

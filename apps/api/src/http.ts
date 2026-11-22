@@ -75,6 +75,8 @@ export class CodedHttpException extends HttpException {
     readonly apiCode: ErrorCode,
     message: string,
     readonly apiDetails?: unknown,
+    /** Sent as `Retry-After`, for an answer that tells the caller to wait (a panel that asks to slow down). */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message, status);
   }
@@ -139,6 +141,9 @@ export class ApiExceptionFilter implements ExceptionFilter {
         code = 'step_up_required';
       }
       if (exception instanceof CodedHttpException) {
+        if (exception.retryAfterSeconds !== undefined) {
+          res.setHeader('retry-after', String(exception.retryAfterSeconds));
+        }
         code = exception.apiCode;
         // A 5xx still says what went wrong: these are failures of a server out there, not of Swellwright.
         message = exception.message;

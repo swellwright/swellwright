@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.23.0",
+    "version": "0.24.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -62,6 +62,10 @@
     {
       "name": "commands",
       "description": "The script library and runs of a script or a command on several servers at once, with the output of each server (ADR 0038). Writing scripts and starting or stopping runs need `servers:exec` and a fresh authenticator code; reading the history needs `servers:read`."
+    },
+    {
+      "name": "panel",
+      "description": "The connection to a Remnawave panel and read-only views of its objects (ADR 0041): nodes, hosts, config profiles, squads, templates, snippets, node plugins and billing. Secrets in what the panel returns are masked before they leave this server."
     }
   ],
   "paths": {
@@ -4994,6 +4998,1015 @@
         "x-sw-permission": "servers:exec",
         "x-sw-step-up": true
       }
+    },
+    "/panel/connection": {
+      "get": {
+        "operationId": "getPanelConnection",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The connection to the Remnawave panel",
+        "responses": {
+          "200": {
+            "description": "The connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConnectionView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Where the panel is, which vault secret holds its token (never the token), the state found by the last check, the version and whether this release supports it, what the token can read, when the token expires and what went wrong last. Answers 200 with state `unconfigured` when no panel is connected. Reading does not call the panel.",
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      },
+      "put": {
+        "operationId": "connectPanel",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Connect to a panel with a token from the vault",
+        "responses": {
+          "200": {
+            "description": "The saved connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConnectionView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Validates the address (https; the same address policy as for servers: loopback, link-local and metadata addresses are refused), asks the panel for its version and health with the token, reads each resource once to find what the token can read, and only then saves the connection (one row; a second call replaces it). Nothing is stored when the panel refuses. The token secret cannot be deleted from the vault while a connection uses it. Recorded as `panel.connected`. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed. 409 `address_not_allowed`.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectPanelRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:write"
+      },
+      "delete": {
+        "operationId": "disconnectPanel",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Disconnect from the panel",
+        "responses": {
+          "204": {
+            "description": "Disconnected."
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Forgets the connection and the short-lived memory of what was read. The token stays in the vault: delete the secret separately. Nothing is changed on the panel. Recorded as `panel.disconnected`. 404 when nothing is connected.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:write"
+      }
+    },
+    "/panel/connection/with-token": {
+      "put": {
+        "operationId": "connectPanelWithToken",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Connect to a panel with a token that is not in the vault yet",
+        "responses": {
+          "200": {
+            "description": "The saved connection.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConnectionView"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The wizard path: the token is tried against the panel first, and only when the panel accepts it is the token sealed into the vault (kind `panel_token`, the name you give) and the connection saved, in one transaction. Needs `panel:write` and `vault:manage`, and a fresh second factor, as every route that writes a secret does. Recorded as `secret.created` and `panel.connected`. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed. 409 `address_not_allowed`, and 409 when the secret name is taken.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectPanelWithTokenRequest"
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:write",
+        "x-sw-step-up": true
+      }
+    },
+    "/panel/connection/test": {
+      "post": {
+        "operationId": "testPanel",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Test the connection",
+        "responses": {
+          "200": {
+            "description": "The result of the test.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelTestResult"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Asks the panel again (version, health, every resource once) and saves what it finds as the state of the connection. A panel that does not answer or refuses the token is a result (200 with `ok: false` and the state), not an error. Recorded as `panel.tested` with the outcome. Rate limited per user.",
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "x-sw-permission": "panel:write"
+      }
+    },
+    "/panel/overview": {
+      "get": {
+        "operationId": "getPanelOverview",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The panel at a glance",
+        "responses": {
+          "200": {
+            "description": "The overview.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelOverview"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Version, health, how many nodes, hosts, config profiles, squads, templates, snippets and node plugins there are, how many nodes are online, the users as counts (no personal data), and the days left of the connected token with a warning from 14 days before. A count the token may not read is null. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/nodes": {
+      "get": {
+        "operationId": "listPanelNodes",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The nodes of the panel",
+        "responses": {
+          "200": {
+            "description": "The nodes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelNodeList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Normalised: state, address, port, country, versions of the node and of Xray, the profile and its active inbounds, tags, provider, traffic and consumption fields, flags. Read from a memory of this server that lives 15 seconds (`SW_PANEL_CACHE_TTL_SECONDS`); `refresh=true` asks the panel again and is rate limited per user. Read only: nothing is sent to the panel but GET requests. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/hosts": {
+      "get": {
+        "operationId": "listPanelHosts",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The hosts of the panel",
+        "responses": {
+          "200": {
+            "description": "The hosts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelHostList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Every field the panel shows for a host. Opaque parts (mux, sockopt, XHTTP extra parameters, final mask, the subscription mappers) are JSON with every secret masked. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/config-profiles": {
+      "get": {
+        "operationId": "listPanelConfigProfiles",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The config profiles of the panel",
+        "responses": {
+          "200": {
+            "description": "The profiles.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConfigProfileList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Name, tags, inbounds (tag, protocol, network, security, port) and the nodes that run the profile. The Xray configuration itself is not in the list: read one profile for it. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/config-profiles/{uuid}": {
+      "get": {
+        "operationId": "getPanelConfigProfile",
+        "tags": [
+          "panel"
+        ],
+        "summary": "One config profile with its configuration",
+        "responses": {
+          "200": {
+            "description": "The profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConfigProfileAnswer"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The Xray configuration as JSON with every secret masked (REALITY private keys and short ids, passwords, client ids, credentials in URLs, PEM private keys): a mask looks like `[masked:1a2b3c4d]`, where the eight characters are a keyed fingerprint of the value, so a rotated key shows as a change and the value cannot be guessed from it. No route returns an unmasked value. 404 when the panel has no such profile. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/config-profiles/{uuid}/computed-config": {
+      "get": {
+        "operationId": "getPanelComputedConfig",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The computed configuration of a config profile",
+        "responses": {
+          "200": {
+            "description": "The computed profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelConfigProfileAnswer"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "The configuration as the panel computes it for its nodes, masked like the profile. Not cached: it is read when asked. 404 when the panel has no such profile. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "uuid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/internal-squads": {
+      "get": {
+        "operationId": "listPanelInternalSquads",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The internal squads of the panel",
+        "responses": {
+          "200": {
+            "description": "The squads.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelInternalSquadList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Name, tags, members count (a number, no user), inbounds. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/external-squads": {
+      "get": {
+        "operationId": "listPanelExternalSquads",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The external squads of the panel",
+        "responses": {
+          "200": {
+            "description": "The squads.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelExternalSquadList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Templates, subscription settings, host overrides, response headers (values that carry credentials are masked), HWID settings, custom remarks. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/subscription-templates": {
+      "get": {
+        "operationId": "listPanelSubscriptionTemplates",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The subscription templates of the panel",
+        "responses": {
+          "200": {
+            "description": "The templates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelSubscriptionTemplateList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Type, name, tags and the template body (JSON, or YAML decoded and masked). A template for a local proxy often carries its credentials; they are masked. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/subscription-settings": {
+      "get": {
+        "operationId": "getPanelSubscriptionSettings",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The subscription settings of the panel",
+        "responses": {
+          "200": {
+            "description": "The settings.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelSubscriptionSettingsAnswer"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Custom remarks and response headers, the response rules, HWID settings. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/snippets": {
+      "get": {
+        "operationId": "listPanelSnippets",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The snippets of the panel",
+        "responses": {
+          "200": {
+            "description": "The snippets.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelSnippetList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Named JSON fragments the panel templates reuse, masked. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/node-plugins": {
+      "get": {
+        "operationId": "listPanelNodePlugins",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The node plugins of the panel",
+        "responses": {
+          "200": {
+            "description": "The plugins.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelNodePluginList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Name, tags and the plugin configuration as masked JSON. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/infra": {
+      "get": {
+        "operationId": "getPanelInfra",
+        "tags": [
+          "panel"
+        ],
+        "summary": "Infrastructure providers and billing nodes",
+        "responses": {
+          "200": {
+            "description": "The billing data.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelInfraAnswer"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Providers with their totals, billing nodes with their next billing date, the nodes that are not in billing yet, and the totals. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
+    },
+    "/panel/api-tokens": {
+      "get": {
+        "operationId": "listPanelApiTokens",
+        "tags": [
+          "panel"
+        ],
+        "summary": "The API tokens of the panel",
+        "responses": {
+          "200": {
+            "description": "The tokens.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PanelApiTokenList"
+                }
+              }
+            }
+          },
+          "default": {
+            "description": "Error envelope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Names, scopes and expiry, never the token values. The panel lets only an administrator session list its API tokens, not an API token: with a token the panel answers 403, which is reported as 502 `panel_forbidden`, and the capability `apiTokens` of the connection is `denied`. The panel can be refused or slow, and each of those has a code: 409 `panel_not_connected` (nothing is connected), 409 `panel_unsupported_version`, 502 `panel_unauthorized` (the panel rejected the token), 502 `panel_forbidden` (the token has no scope for this), 502 `panel_unreachable`, 502 `panel_contract_changed` (the panel answered in a shape this release does not know; the message names the endpoint and the field), 504 `panel_timeout`, 429 `panel_rate_limited` (the panel asked to slow down; `Retry-After` is set). 423 `vault_sealed` while the vault that holds the token is sealed.",
+        "parameters": [
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "true: ask the panel again instead of answering from the memory of this server. Rate limited per user.",
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ]
+            }
+          }
+        ],
+        "security": [
+          {
+            "session": []
+          },
+          {
+            "bearer": []
+          }
+        ],
+        "x-sw-permission": "panel:read"
+      }
     }
   },
   "components": {
@@ -5028,6 +6041,14 @@
           "artifact_destination_conflict",
           "artifact_hash_mismatch",
           "sudo_unavailable",
+          "panel_not_connected",
+          "panel_unauthorized",
+          "panel_forbidden",
+          "panel_unreachable",
+          "panel_timeout",
+          "panel_contract_changed",
+          "panel_unsupported_version",
+          "panel_rate_limited",
           "internal_error"
         ]
       },
@@ -5696,7 +6717,11 @@
           "artifact.pushed",
           "artifact.verified",
           "artifact.removed",
-          "artifact.broken"
+          "artifact.broken",
+          "panel.connected",
+          "panel.disconnected",
+          "panel.tested",
+          "panel.state.changed"
         ]
       },
       "AuditOutcome": {
@@ -11297,6 +12322,2813 @@
           "verifiedAt",
           "ok",
           "results"
+        ],
+        "additionalProperties": false
+      },
+      "PanelConnectionState": {
+        "type": "string",
+        "enum": [
+          "unconfigured",
+          "connected",
+          "degraded",
+          "unreachable",
+          "unauthorized",
+          "unsupported"
+        ],
+        "description": "`unconfigured`: no panel connected. `connected`: reachable, the token works, the version is supported and every resource can be read. `degraded`: it works, but the token cannot read some resources or expires soon. `unreachable`: the panel did not answer (network, TLS, timeout, 5xx). `unauthorized`: the panel refused the token (expired, revoked or wrong). `unsupported`: the version is outside the supported window or the panel answers in a shape this release does not know."
+      },
+      "PanelResource": {
+        "type": "string",
+        "enum": [
+          "system",
+          "nodes",
+          "hosts",
+          "configProfiles",
+          "internalSquads",
+          "externalSquads",
+          "subscriptionTemplates",
+          "subscriptionSettings",
+          "snippets",
+          "nodePlugins",
+          "infra",
+          "apiTokens"
+        ]
+      },
+      "PanelCapabilityState": {
+        "type": "string",
+        "enum": [
+          "ok",
+          "denied",
+          "failed"
+        ],
+        "description": "`ok`: the token can read it. `denied`: the panel answered 403, the token has no scope for it. `failed`: the read failed for another reason (see `lastError`)."
+      },
+      "PanelCapabilities": {
+        "type": "object",
+        "properties": {
+          "checkedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "resources": {
+            "type": "object",
+            "propertyNames": {
+              "$ref": "#/components/schemas/PanelResource"
+            },
+            "additionalProperties": {
+              "$ref": "#/components/schemas/PanelCapabilityState"
+            },
+            "required": [
+              "system",
+              "nodes",
+              "hosts",
+              "configProfiles",
+              "internalSquads",
+              "externalSquads",
+              "subscriptionTemplates",
+              "subscriptionSettings",
+              "snippets",
+              "nodePlugins",
+              "infra",
+              "apiTokens"
+            ]
+          }
+        },
+        "required": [
+          "checkedAt",
+          "resources"
+        ],
+        "additionalProperties": false,
+        "description": "What the token can read, found by reading each resource once. The panel does not allow an API token to list API tokens, so `apiTokens` is normally `denied`."
+      },
+      "PanelVersionSupport": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "supported",
+              "unsupported"
+            ]
+          },
+          "range": {
+            "type": "string",
+            "description": "The window this release supports."
+          },
+          "reason": {
+            "description": "Why it is unsupported; null when supported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "range",
+          "reason"
+        ],
+        "additionalProperties": false
+      },
+      "PanelTokenInfo": {
+        "type": "object",
+        "properties": {
+          "secretId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "description": "The vault secret (kind `panel_token`) that holds the token."
+          },
+          "secretName": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Read from the token itself when it is a signed token with an expiry claim; null when it carries none. The token is never returned."
+          },
+          "daysLeft": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Negative once it has expired."
+          },
+          "expiryWarning": {
+            "type": "boolean",
+            "description": "True from 14 days before the expiry on."
+          }
+        },
+        "required": [
+          "secretId",
+          "secretName",
+          "expiresAt",
+          "daysLeft",
+          "expiryWarning"
+        ],
+        "additionalProperties": false
+      },
+      "PanelWarning": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "token_expiring",
+              "capabilities_limited"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "PanelLastError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "PanelConnectionView": {
+        "type": "object",
+        "properties": {
+          "state": {
+            "$ref": "#/components/schemas/PanelConnectionState"
+          },
+          "baseUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "panelVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "versionSupport": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelVersionSupport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capabilities": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelCapabilities"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "token": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelTokenInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelWarning"
+            }
+          },
+          "lastCheckedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastError": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelLastError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trustedCa": {
+            "type": "boolean",
+            "description": "A certificate authority of its own is configured for this panel (not a secret)."
+          },
+          "createdAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "state",
+          "baseUrl",
+          "panelVersion",
+          "versionSupport",
+          "capabilities",
+          "token",
+          "warnings",
+          "lastCheckedAt",
+          "lastError",
+          "trustedCa",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": false,
+        "description": "The connection to the panel. Never carries the token: it names the vault secret that holds it."
+      },
+      "ConnectPanelRequest": {
+        "type": "object",
+        "properties": {
+          "baseUrl": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 2048,
+            "description": "The address of the panel, for example `https://panel.example.com`. https only (plain http only for a loopback or private address when `SW_PANEL_ALLOW_HTTP` is on), no credentials, query or fragment. A path is allowed for a panel behind a prefix; the API itself is `/api/...` under it."
+          },
+          "tokenSecretId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+            "description": "A vault secret of kind `panel_token` with the API token of the panel."
+          },
+          "trustedCa": {
+            "description": "PEM text of a certificate authority to trust for this panel (a private CA or a self-signed certificate). Public material, not a secret. `null` removes it. Without it the system trust store is used.",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "baseUrl",
+          "tokenSecretId"
+        ],
+        "additionalProperties": false,
+        "description": "Connects to the panel with a token that is in the vault already. The panel is asked first; nothing is stored when it refuses."
+      },
+      "ConnectPanelWithTokenRequest": {
+        "type": "object",
+        "properties": {
+          "baseUrl": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 2048,
+            "description": "The address of the panel, for example `https://panel.example.com`. https only (plain http only for a loopback or private address when `SW_PANEL_ALLOW_HTTP` is on), no credentials, query or fragment. A path is allowed for a panel behind a prefix; the API itself is `/api/...` under it."
+          },
+          "token": {
+            "type": "string",
+            "minLength": 16,
+            "maxLength": 4096,
+            "description": "The API token as the panel showed it. Stored in the vault, never returned."
+          },
+          "secretName": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "The name of the new vault secret."
+          },
+          "trustedCa": {
+            "description": "PEM text of a certificate authority to trust for this panel (a private CA or a self-signed certificate). Public material, not a secret. `null` removes it. Without it the system trust store is used.",
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 20000
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "baseUrl",
+          "token",
+          "secretName"
+        ],
+        "additionalProperties": false,
+        "description": "The wizard path for a token that is not in the vault yet: the panel is asked with it first, and only when it answers is the token stored (kind `panel_token`) and the connection saved, in one transaction."
+      },
+      "PanelTestResult": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "description": "True when the state is `connected` or `degraded`."
+          },
+          "connection": {
+            "$ref": "#/components/schemas/PanelConnectionView"
+          },
+          "latencyMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "ok",
+          "connection",
+          "latencyMs"
+        ],
+        "additionalProperties": false,
+        "description": "The outcome of a connection test. A panel that does not answer is a result (`ok: false` and the state), not an error."
+      },
+      "PanelInboundView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "profileUuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "description": "The Xray protocol (`vless`, `trojan`, ...)."
+          },
+          "network": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "security": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "raw": {
+            "description": "The raw inbound; only on the detail of a profile."
+          }
+        },
+        "required": [
+          "uuid",
+          "profileUuid",
+          "tag",
+          "type",
+          "network",
+          "security",
+          "port"
+        ],
+        "additionalProperties": false
+      },
+      "PanelNodeState": {
+        "type": "string",
+        "enum": [
+          "online",
+          "connecting",
+          "offline",
+          "disabled"
+        ]
+      },
+      "PanelNodeView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "port": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "countryCode": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PanelNodeState"
+          },
+          "isConnected": {
+            "type": "boolean"
+          },
+          "isConnecting": {
+            "type": "boolean"
+          },
+          "isDisabled": {
+            "type": "boolean"
+          },
+          "lastStatusChange": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "lastStatusMessage": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "xrayVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "nodeVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "xrayUptimeSeconds": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "usersOnline": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "configProfile": {
+            "type": "object",
+            "properties": {
+              "uuid": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "inbounds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "uuid": {
+                      "type": "string",
+                      "format": "uuid",
+                      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                    },
+                    "tag": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "uuid",
+                    "tag"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            },
+            "required": [
+              "uuid",
+              "inbounds"
+            ],
+            "additionalProperties": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "uuid": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "activePluginUuid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "integrationUuids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "ips": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ip": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "ip",
+                "status"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "proxyUrl": {
+            "description": "With the credentials in it, if any, masked.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "traffic": {
+            "type": "object",
+            "properties": {
+              "trackingActive": {
+                "type": "boolean"
+              },
+              "usedBytes": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "limitBytes": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "resetDay": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "notifyPercent": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "trackingActive",
+              "usedBytes",
+              "limitBytes",
+              "resetDay",
+              "notifyPercent"
+            ],
+            "additionalProperties": false
+          },
+          "consumptionMultiplier": {
+            "type": "number"
+          },
+          "nodeConsumptionMultiplier": {
+            "type": "number"
+          },
+          "viewPosition": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "system": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "hostname": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "platform": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "release": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "arch": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "cpus": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "memoryTotal": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "memoryUsed": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "uptimeSeconds": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "loadAvg": {
+                    "type": "array",
+                    "items": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "required": [
+                  "hostname",
+                  "platform",
+                  "release",
+                  "arch",
+                  "cpus",
+                  "memoryTotal",
+                  "memoryUsed",
+                  "uptimeSeconds",
+                  "loadAvg"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "address",
+          "port",
+          "countryCode",
+          "state",
+          "isConnected",
+          "isConnecting",
+          "isDisabled",
+          "lastStatusChange",
+          "lastStatusMessage",
+          "xrayVersion",
+          "nodeVersion",
+          "xrayUptimeSeconds",
+          "usersOnline",
+          "configProfile",
+          "tags",
+          "provider",
+          "activePluginUuid",
+          "integrationUuids",
+          "ips",
+          "proxyUrl",
+          "traffic",
+          "consumptionMultiplier",
+          "nodeConsumptionMultiplier",
+          "viewPosition",
+          "note",
+          "system",
+          "createdAt",
+          "updatedAt",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelHostView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "viewPosition": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "remark": {
+            "type": "string"
+          },
+          "address": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sni": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "alpn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fingerprint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "isDisabled": {
+            "type": "boolean"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "securityLayer": {
+            "type": "string"
+          },
+          "inbound": {
+            "type": "object",
+            "properties": {
+              "configProfileUuid": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "configProfileInboundUuid": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "configProfileUuid",
+              "configProfileInboundUuid"
+            ],
+            "additionalProperties": false
+          },
+          "nodeUuids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "serverDescription": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "overrideSniFromAddress": {
+            "type": "boolean"
+          },
+          "keepSniBlank": {
+            "type": "boolean"
+          },
+          "vlessRouteId": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pinnedPeerCertSha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verifyPeerCertByName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "shuffleHost": {
+            "type": "boolean"
+          },
+          "mihomoX25519": {
+            "type": "boolean"
+          },
+          "mihomoIpVersion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "xrayJsonTemplateUuid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "excludeFromSubscriptionTypes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "includeInSrrRules": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "internalSquads": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string"
+              },
+              "squadUuids": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                }
+              }
+            },
+            "required": [
+              "mode",
+              "squadUuids"
+            ],
+            "additionalProperties": false
+          },
+          "xhttpExtraParams": {
+            "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+          },
+          "muxParams": {
+            "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+          },
+          "sockoptParams": {
+            "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+          },
+          "finalMask": {
+            "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+          },
+          "mapper": {
+            "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "viewPosition",
+          "remark",
+          "address",
+          "port",
+          "path",
+          "sni",
+          "host",
+          "alpn",
+          "fingerprint",
+          "isDisabled",
+          "isHidden",
+          "securityLayer",
+          "inbound",
+          "nodeUuids",
+          "tags",
+          "serverDescription",
+          "overrideSniFromAddress",
+          "keepSniBlank",
+          "vlessRouteId",
+          "pinnedPeerCertSha256",
+          "verifyPeerCertByName",
+          "shuffleHost",
+          "mihomoX25519",
+          "mihomoIpVersion",
+          "xrayJsonTemplateUuid",
+          "excludeFromSubscriptionTypes",
+          "includeInSrrRules",
+          "internalSquads",
+          "xhttpExtraParams",
+          "muxParams",
+          "sockoptParams",
+          "finalMask",
+          "mapper",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelConfigProfileSummary": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "viewPosition": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inbounds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelInboundView"
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "uuid": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "countryCode": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "uuid",
+                "name",
+                "countryCode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "nodeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "viewPosition",
+          "tags",
+          "inbounds",
+          "nodes",
+          "nodeCount",
+          "createdAt",
+          "updatedAt",
+          "hash"
+        ],
+        "additionalProperties": false,
+        "description": "A config profile without its Xray configuration (the list does not carry it); `hash` covers the masked configuration all the same."
+      },
+      "PanelConfigProfileView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "viewPosition": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inbounds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelInboundView"
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "uuid": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "countryCode": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "uuid",
+                "name",
+                "countryCode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "nodeCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          },
+          "config": {
+            "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+          },
+          "masked": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991,
+            "description": "How many values were replaced by a mask in `config` and the raw inbounds."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "viewPosition",
+          "tags",
+          "inbounds",
+          "nodes",
+          "nodeCount",
+          "createdAt",
+          "updatedAt",
+          "hash",
+          "config",
+          "masked"
+        ],
+        "additionalProperties": false,
+        "description": "A config profile with its Xray configuration as JSON. Private keys, short ids, passwords, client ids and credentials in URLs are replaced by `[masked:xxxxxxxx]`, where the eight characters are a keyed fingerprint (the same value gives the same fingerprint, so a rotation shows as a change)."
+      },
+      "PanelInternalSquadView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "viewPosition": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "membersCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "inboundsCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "inbounds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelInboundView"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "viewPosition",
+          "tags",
+          "membersCount",
+          "inboundsCount",
+          "inbounds",
+          "createdAt",
+          "updatedAt",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelExternalSquadView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "viewPosition": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "membersCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "templates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "templateUuid": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "templateType": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "templateUuid",
+                "templateType"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "subscriptionSettings": {
+            "type": "object",
+            "properties": {
+              "serveJsonAtBaseSubscription": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "isShowCustomRemarks": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              },
+              "randomizeHosts": {
+                "type": [
+                  "boolean",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "serveJsonAtBaseSubscription",
+              "isShowCustomRemarks",
+              "randomizeHosts"
+            ],
+            "additionalProperties": false
+          },
+          "hostOverrides": {
+            "type": "object",
+            "properties": {
+              "serverDescription": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "vlessRouteId": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": -9007199254740991,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "serverDescription",
+              "vlessRouteId"
+            ],
+            "additionalProperties": false
+          },
+          "responseHeadersAdd": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Values of headers that carry credentials are masked."
+          },
+          "responseHeadersRemove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hwidSettings": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "fallbackDeviceLimit": {
+                "type": "number"
+              },
+              "maxDevicesAnnounce": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "enabled",
+              "fallbackDeviceLimit",
+              "maxDevicesAnnounce"
+            ],
+            "additionalProperties": false
+          },
+          "customRemarks": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "subpageConfigUuid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "viewPosition",
+          "tags",
+          "membersCount",
+          "templates",
+          "subscriptionSettings",
+          "hostOverrides",
+          "responseHeadersAdd",
+          "responseHeadersRemove",
+          "hwidSettings",
+          "customRemarks",
+          "subpageConfigUuid",
+          "createdAt",
+          "updatedAt",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelSubscriptionTemplateView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "viewPosition": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "templateType": {
+            "type": "string"
+          },
+          "templateJson": {
+            "anyOf": [
+              {
+                "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "templateYaml": {
+            "description": "The YAML body, decoded and read back from its parsed form with every secret masked (comments are dropped). Null when the template has none or it could not be read.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "viewPosition",
+          "tags",
+          "templateType",
+          "templateJson",
+          "templateYaml",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelSubscriptionSettingsView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "serveJsonAtBaseSubscription": {
+            "type": "boolean"
+          },
+          "isShowCustomRemarks": {
+            "type": "boolean"
+          },
+          "randomizeHosts": {
+            "type": "boolean"
+          },
+          "customRemarks": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "customResponseHeaders": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "responseRules": {
+            "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+          },
+          "hwidSettings": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "fallbackDeviceLimit": {
+                "type": "number"
+              },
+              "maxDevicesAnnounce": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "enabled",
+              "fallbackDeviceLimit",
+              "maxDevicesAnnounce"
+            ],
+            "additionalProperties": false
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "serveJsonAtBaseSubscription",
+          "isShowCustomRemarks",
+          "randomizeHosts",
+          "customRemarks",
+          "customResponseHeaders",
+          "responseRules",
+          "hwidSettings",
+          "createdAt",
+          "updatedAt",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelSnippetView": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "snippet": {
+            "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "name",
+          "snippet",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelNodePluginView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "viewPosition": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pluginConfig": {
+            "anyOf": [
+              {
+                "description": "JSON as the panel keeps it, with every secret in it replaced by a mask."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "viewPosition",
+          "tags",
+          "pluginConfig",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelInfraProviderView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "loginUrl": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "faviconLink": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "totalAmount": {
+            "type": "number"
+          },
+          "totalBills": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "nodeUuid": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "countryCode": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "nodeUuid",
+                "countryCode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "loginUrl",
+          "faviconLink",
+          "totalAmount",
+          "totalBills",
+          "nodes",
+          "createdAt",
+          "updatedAt",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelBillingNodeView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "nodeUuid": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": "object",
+            "properties": {
+              "uuid": {
+                "type": "string",
+                "format": "uuid",
+                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uuid",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "node": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "uuid": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "uuid",
+                  "name",
+                  "countryCode"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nextBillingAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "nodeUuid",
+          "name",
+          "provider",
+          "node",
+          "nextBillingAt",
+          "hash"
+        ],
+        "additionalProperties": false
+      },
+      "PanelInfraView": {
+        "type": "object",
+        "properties": {
+          "providers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelInfraProviderView"
+            }
+          },
+          "billingNodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelBillingNodeView"
+            }
+          },
+          "availableBillingNodes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "uuid": {
+                  "type": "string",
+                  "format": "uuid",
+                  "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "countryCode": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "uuid",
+                "name",
+                "countryCode"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "stats": {
+            "type": "object",
+            "properties": {
+              "upcomingNodesCount": {
+                "type": "integer",
+                "minimum": -9007199254740991,
+                "maximum": 9007199254740991
+              },
+              "currentMonthPayments": {
+                "type": "number"
+              },
+              "totalSpent": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "upcomingNodesCount",
+              "currentMonthPayments",
+              "totalSpent"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "providers",
+          "billingNodes",
+          "availableBillingNodes",
+          "stats"
+        ],
+        "additionalProperties": false
+      },
+      "PanelApiTokenView": {
+        "type": "object",
+        "properties": {
+          "uuid": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expireAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "daysLeft": {
+            "type": "integer",
+            "minimum": -9007199254740991,
+            "maximum": 9007199254740991
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "SHA-256 (hex) of the canonical JSON of the masked configuration of this object; runtime state is not part of it. Stable between reads and safe to show."
+          }
+        },
+        "required": [
+          "uuid",
+          "name",
+          "scopes",
+          "expireAt",
+          "daysLeft",
+          "createdAt",
+          "updatedAt",
+          "hash"
+        ],
+        "additionalProperties": false,
+        "description": "A token of the panel by name, scopes and expiry. The value of a token is never read."
+      },
+      "PanelNodeList": {
+        "type": "object",
+        "properties": {
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelNodeView"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "nodes",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelHostList": {
+        "type": "object",
+        "properties": {
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelHostView"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "hosts",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelConfigProfileList": {
+        "type": "object",
+        "properties": {
+          "configProfiles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelConfigProfileSummary"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "configProfiles",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelInternalSquadList": {
+        "type": "object",
+        "properties": {
+          "internalSquads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelInternalSquadView"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "internalSquads",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelExternalSquadList": {
+        "type": "object",
+        "properties": {
+          "externalSquads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelExternalSquadView"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "externalSquads",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelSubscriptionTemplateList": {
+        "type": "object",
+        "properties": {
+          "templates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelSubscriptionTemplateView"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "templates",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelSnippetList": {
+        "type": "object",
+        "properties": {
+          "snippets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelSnippetView"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "snippets",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelNodePluginList": {
+        "type": "object",
+        "properties": {
+          "nodePlugins": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelNodePluginView"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "nodePlugins",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelInfraAnswer": {
+        "type": "object",
+        "properties": {
+          "infra": {
+            "$ref": "#/components/schemas/PanelInfraView"
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "infra",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelApiTokenList": {
+        "type": "object",
+        "properties": {
+          "apiTokens": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelApiTokenView"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "apiTokens",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelSubscriptionSettingsAnswer": {
+        "type": "object",
+        "properties": {
+          "subscriptionSettings": {
+            "$ref": "#/components/schemas/PanelSubscriptionSettingsView"
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "subscriptionSettings",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelConfigProfileAnswer": {
+        "type": "object",
+        "properties": {
+          "configProfile": {
+            "$ref": "#/components/schemas/PanelConfigProfileView"
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+            "description": "When the panel was asked."
+          },
+          "cached": {
+            "type": "boolean",
+            "description": "True when the answer comes from the short-lived memory of this server."
+          }
+        },
+        "required": [
+          "configProfile",
+          "fetchedAt",
+          "cached"
+        ],
+        "additionalProperties": false
+      },
+      "PanelOverview": {
+        "type": "object",
+        "properties": {
+          "connection": {
+            "type": "object",
+            "properties": {
+              "state": {
+                "$ref": "#/components/schemas/PanelConnectionState"
+              },
+              "baseUrl": {
+                "type": "string"
+              },
+              "panelVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "versionSupport": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/PanelVersionSupport"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "state",
+              "baseUrl",
+              "panelVersion",
+              "versionSupport"
+            ],
+            "additionalProperties": false
+          },
+          "system": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string"
+                  },
+                  "build": {
+                    "type": "object",
+                    "properties": {
+                      "time": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "number": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "time",
+                      "number"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "health": {
+                    "type": "string",
+                    "enum": [
+                      "ok",
+                      "unknown"
+                    ],
+                    "description": "`ok`: the health endpoint answered and listed the instances of the panel."
+                  },
+                  "instances": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Processes of the panel that reported in the health answer."
+                  },
+                  "uptimeSeconds": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "version",
+                  "build",
+                  "health",
+                  "instances",
+                  "uptimeSeconds"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "counts": {
+            "type": "object",
+            "properties": {
+              "nodes": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hosts": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "configProfiles": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "internalSquads": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "externalSquads": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "subscriptionTemplates": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "snippets": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "nodePlugins": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "nodes",
+              "hosts",
+              "configProfiles",
+              "internalSquads",
+              "externalSquads",
+              "subscriptionTemplates",
+              "snippets",
+              "nodePlugins"
+            ],
+            "additionalProperties": false
+          },
+          "nodes": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "online": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "connecting": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "offline": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "disabled": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "online",
+                  "connecting",
+                  "offline",
+                  "disabled"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "users": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "total": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "byStatus": {
+                    "type": "object",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "additionalProperties": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 9007199254740991
+                    }
+                  },
+                  "onlineNow": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "total",
+                  "byStatus",
+                  "onlineNow"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Counts only; no personal data of any user is read in this release."
+          },
+          "token": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PanelTokenInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PanelWarning"
+            }
+          },
+          "fetchedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "connection",
+          "system",
+          "counts",
+          "nodes",
+          "users",
+          "token",
+          "warnings",
+          "fetchedAt"
         ],
         "additionalProperties": false
       }
