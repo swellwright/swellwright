@@ -8,7 +8,7 @@
 // size of the automaton. The single characters (a class like `[A-Z]`, `\d`, `\p{L}`, a dot) are decided by code of
 // this module as well: no text of a pack is ever handed to the regular expression engine of the language, so there is
 // nothing for it to compile, and a pack cannot make it do anything but the answers below. Only the Unicode properties
-// are looked up in the engine, and only from a fixed list of constant expressions (see `PROPERTIES`).
+// are looked up in the engine, and only from a fixed list of constant expressions (see `PROPERTY_LIST`).
 //
 // The language is a subset on purpose, and it is always anchored: a pattern matches a whole value. Supported: literals,
 // `.`, escapes (`\d \D \w \W \s \S \p{..} \P{..} \uXXXX \u{...} \xHH \n \t \r` and an escaped symbol), classes
@@ -50,14 +50,25 @@ type Node =
 
 // ---- parsing ----------------------------------------------------------------------------------------------------
 
-const SIMPLE_ESCAPES: Readonly<Record<string, number>> = {
-  n: 0x0a,
-  r: 0x0d,
-  t: 0x09,
-  f: 0x0c,
-  v: 0x0b,
-  '0': 0x00,
-};
+/** The character a letter stands for after a backslash (`\n`, `\t`, ...), or undefined when it stands for none. */
+function simpleEscape(letter: string): number | undefined {
+  switch (letter) {
+    case 'n':
+      return 0x0a;
+    case 'r':
+      return 0x0d;
+    case 't':
+      return 0x09;
+    case 'f':
+      return 0x0c;
+    case 'v':
+      return 0x0b;
+    case '0':
+      return 0x00;
+    default:
+      return undefined;
+  }
+}
 
 const isHex = (text: string): boolean => /^[0-9a-fA-F]+$/u.test(text);
 
@@ -198,21 +209,30 @@ function propertyTest(expression: string): Test {
   };
 }
 
-const PROPERTIES: ReadonlyMap<string, Test> = (() => {
-  const map = new Map<string, Test>();
-  for (const name of [...GENERAL_CATEGORIES, ...BINARY_PROPERTIES]) {
-    map.set(name, propertyTest(name));
-  }
-  for (const script of SCRIPTS) {
-    const plain = propertyTest(`Script=${script}`);
-    const extended = propertyTest(`Script_Extensions=${script}`);
-    map.set(`Script=${script}`, plain);
-    map.set(`sc=${script}`, plain);
-    map.set(`Script_Extensions=${script}`, extended);
-    map.set(`scx=${script}`, extended);
-  }
-  return map;
-})();
+interface Property {
+  readonly names: readonly string[];
+  readonly test: Test;
+}
+
+/** Every property a pattern may use, each with the names it goes by. Built from the constants above and nothing else. */
+const PROPERTY_LIST: readonly Property[] = [
+  ...[...GENERAL_CATEGORIES, ...BINARY_PROPERTIES].map((name) => ({
+    names: [name],
+    test: propertyTest(name),
+  })),
+  ...SCRIPTS.flatMap((script) => [
+    { names: [`Script=${script}`, `sc=${script}`], test: propertyTest(`Script=${script}`) },
+    {
+      names: [`Script_Extensions=${script}`, `scx=${script}`],
+      test: propertyTest(`Script_Extensions=${script}`),
+    },
+  ]),
+];
+
+/** The test for a property by its name, searched for in the list: the name only ever selects, it is never used as a key. */
+function findProperty(name: string): Test | undefined {
+  return PROPERTY_LIST.find((property) => property.names.includes(name))?.test;
+}
 
 /** A single character test and, when it stands for exactly one character, which (a range may start or end on it). */
 interface Atom {
@@ -542,7 +562,7 @@ class Parser {
           throw new UnsafePatternError('A property is not closed', at);
         }
         const name = this.chars.slice(this.pos + 1, close).join('');
-        const test = PROPERTIES.get(name);
+        const test = findProperty(name);
         if (test === undefined) {
           throw new UnsafePatternError(
             'Not a supported Unicode property: use a general category such as `L` or `Nd`, one of Alphabetic, Uppercase, Lowercase, Emoji, Extended_Pictographic, Regional_Indicator and the like, or `Script=` with Latin, Cyrillic, Greek, Han and the like',
@@ -590,7 +610,7 @@ class Parser {
         if (/^[1-9]$/u.test(c)) {
           throw new UnsafePatternError('Back-references are not supported', at);
         }
-        const simple = SIMPLE_ESCAPES[c];
+        const simple = simpleEscape(c);
         if (simple !== undefined) {
           return single(simple);
         }
