@@ -17,6 +17,14 @@
 //   started         ISO 8601 UTC time, written by the wrapper
 //   exit            the exit code, then the ISO 8601 UTC finish time; created atomically (hard link of a complete
 //                   temporary file) so the first writer wins and a reader never sees half of it
+//   .owner          created exclusively by the launch that made the directory; the launch that cannot create it
+//                   does not own the step, whatever `mkdir` answered
+//   .claimed        created exclusively by the first wrapper to run; any other wrapper ends without running the script
+//
+// Who owns a step is always decided by an exclusive create done by the shell itself (`set -C`, which opens the file with
+// O_EXCL), never by `mkdir`. The coreutils of Ubuntu since 25.10 are the Rust ones (uutils), and their `mkdir` answers
+// success to both of two callers that race for the same path (measured on real servers: 29 to 57 percent of tight races;
+// the shell's exclusive create, a symbolic link and a hard link: none in 600). A directory is not an atomic claim there.
 
 import { AS_ROOT_FUNCTION } from './sudo-wrap.js';
 
@@ -50,9 +58,10 @@ publish_exit() {
 export const WRAPPER_SCRIPT = `#!/bin/sh
 D=$1
 cd "$D" || exit 70
-# The script runs at most once per step directory, whatever starts this wrapper: the first wrapper to make this
-# directory owns the step, any other one ends here without touching the step (a step must never run twice).
-mkdir .claimed 2>/dev/null || exit 0
+# The script runs at most once per step directory, whatever starts this wrapper: the first wrapper to create .claimed
+# owns the step, any other one ends here without touching the step (a step must never run twice). The claim is the
+# shell's own exclusive create, not mkdir (see the top of this file for why).
+( set -C; : > .claimed ) 2>/dev/null || exit 0
 trap '' HUP
 trap : TERM INT
 # A step that runs as root owns its secrets as root: the launch wrote them as the login user, and a program that is handed
@@ -99,7 +108,10 @@ IFS= read -r HDR || exit 65
 umask 077
 mkdir -p "$B" || { echo "swellwright: cannot create the base directory" >&2; exit 66; }
 D=$B/$ID
-if ! mkdir "$D" 2>/dev/null; then
+# The launch that creates the directory owns the step; a directory that is already there belongs to somebody else (a
+# complete step, one being made, or one that was never completed). Two launches that race can both be told by mkdir that
+# they made it, so the owner is the one that creates .owner exclusively (see the top of this file).
+if [ -e "$D" ] || ! mkdir "$D" 2>/dev/null || ! ( set -C; : > "$D/.owner" ) 2>/dev/null; then
   n=0
   while [ ! -f "$D/script.sha256" ] && [ "$n" -lt 25 ]; do nap; n=$((n + 1)); done
   if [ ! -f "$D/script.sha256" ]; then echo "SWRESULT incomplete"; exit 0; fi
@@ -138,7 +150,8 @@ done
 [ "$(sha256sum "$D/script.sh" | cut -d' ' -f1)" = "$WANT" ] || fail "the script hash differs" 67
 command -v setsid >/dev/null 2>&1 || fail "setsid is not installed on the server" 68
 : > "$D/out"; : > "$D/err"; chmod 600 "$D/out" "$D/err"
-printf '%s\\n' "$WANT" > "$D/script.sha256"
+# A launch that lost the race reads this file as soon as it exists, so it appears whole (written aside, then renamed).
+printf '%s\\n' "$WANT" > "$D/script.sha256.tmp" && mv -f "$D/script.sha256.tmp" "$D/script.sha256" || fail "the script hash could not be recorded" 66
 if [ "$USESUDO" = 1 ]; then
   as_root sh -c 'setsid sh "$1" "$2" </dev/null >/dev/null 2>&1 &' swellwright-start "$D/run.sh" "$D" || { echo "swellwright: sudo failed" >&2; rm -rf "$D"; exit 69; }
 else

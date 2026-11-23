@@ -20,10 +20,16 @@ remain planned. Architecture diagrams describe the target system unless stated o
 
 ## Before phase 4
 
-1. Investigate the reported intermittent SSH test failure `does not start a step twice`
-   (two writes to the counter instead of one). The wrapper has a `.claimed` directory;
-   the historical report does not prove the cause. Reproduce under Linux and real sshd,
-   checking concurrent launch, attachment and cleanup before changing retries or timeouts.
+1. The intermittent SSH test failure `does not start a step twice` (two writes to the
+   counter instead of one) is explained and fixed. Ubuntu 25.10 and the current
+   `ubuntu-latest` runner ship the Rust coreutils (uutils), whose `mkdir` answers success
+   to both of two callers that race for one path (measured: 344 of 600 and 173 of 600
+   tight races). Both the launch (`mkdir "$D"`) and the wrapper (`mkdir .claimed`) used
+   `mkdir` as the claim, so two launches both became the owner and both wrappers ran the
+   script; the earlier `.claimed` fix could not help. The owner is now decided by an
+   exclusive create done by the shell (`set -C`: none in 600). Two regression tests make
+   `mkdir` untrustworthy on purpose. Servers that run Ubuntu 25.10 or later (nodes
+   included) must never rely on `mkdir` as a lock; the node installer uses `flock`.
 2. The SSH pool's acquire-timeout test was failing because `acquireTimeoutMs: 150`
    bounded establishing the *first* connection too, not just waiting for a busy one;
    a real handshake occasionally exceeds 150ms on a loaded shared CI runner. Raised to
