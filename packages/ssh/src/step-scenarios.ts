@@ -282,6 +282,40 @@ export function defineStepScenarios(
       assert.equal(counter.stdout, 'ran\n');
     });
 
+    it('DIAGNOSTIC stress: no step runs twice', async () => {
+      const total = 100;
+      const batch = 4;
+      const failures: string[] = [];
+      for (let from = 0; from < total; from += batch) {
+        await Promise.all(
+          Array.from({ length: batch }, async () => {
+            const script = 'echo ran >> "$SWELLWRIGHT_STEP_DIR/counter"\nsleep 1\necho done\n';
+            const id = nextId('stress');
+            await Promise.all([
+              startDetachedStep(conn, { id, script, baseDir }),
+              startDetachedStep(conn, { id, script, baseDir }),
+            ]);
+            await waitForStep(conn, id, { baseDir, pollMs: 100 });
+            const dir = shellQuote(`${baseDir}/${id}`);
+            const counter = await conn.exec(`cat ${dir}/counter`);
+            if (counter.stdout !== 'ran\n') {
+              const info = await conn.exec(
+                `cd ${dir} && ls -la --time-style=full-iso; echo '--- wc/od'; wc -c counter; od -c counter; echo '--- trace'; cat ${shellQuote(`${baseDir}/${id}.trace`)}; echo '--- ps'; ps -eo pid,ppid,pgid,sid,lstart,args | grep -E 'run.sh|script.sh' | grep -v grep`,
+              );
+              failures.push(
+                `${id}: counter=${JSON.stringify(counter.stdout)}\n${info.stdout}${info.stderr}`,
+              );
+            }
+          }),
+        );
+      }
+      assert.equal(
+        failures.length,
+        0,
+        `${String(failures.length)} of ${String(total)} ran twice:\n${failures.join('\n=====\n')}`,
+      );
+    });
+
     it('never lets a hostile id or directory name reach the shell', async () => {
       for (const id of [
         '',

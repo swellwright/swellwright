@@ -50,9 +50,11 @@ publish_exit() {
 export const WRAPPER_SCRIPT = `#!/bin/sh
 D=$1
 cd "$D" || exit 70
+SWT="$D.trace"
+echo "W-start pid=$$ ppid=$PPID t=$(date +%s.%N)" >> "$SWT"
 # The script runs at most once per step directory, whatever starts this wrapper: the first wrapper to make this
 # directory owns the step, any other one ends here without touching the step (a step must never run twice).
-mkdir .claimed 2>/dev/null || exit 0
+if mkdir .claimed 2>/dev/null; then echo "W-claimed pid=$$ t=$(date +%s.%N)" >> "$SWT"; else echo "W-lostclaim pid=$$ t=$(date +%s.%N)" >> "$SWT"; exit 0; fi
 trap '' HUP
 trap : TERM INT
 # A step that runs as root owns its secrets as root: the launch wrote them as the login user, and a program that is handed
@@ -66,6 +68,7 @@ SWELLWRIGHT_STEP_DIR=$D
 SWELLWRIGHT_STEP_ID=\${D##*/}
 export SWELLWRIGHT_STEP_DIR SWELLWRIGHT_STEP_ID
 if [ -f ./env ]; then . ./env; fi
+echo "W-run pid=$$ t=$(date +%s.%N)" >> "$SWT"
 if [ -f ./stdin ]; then
   sh ./script.sh < ./stdin >> out 2>> err
 else
@@ -99,7 +102,10 @@ IFS= read -r HDR || exit 65
 umask 077
 mkdir -p "$B" || { echo "swellwright: cannot create the base directory" >&2; exit 66; }
 D=$B/$ID
+SWT="$B/$ID.trace"
+t() { echo "$1 pid=$$ t=$(date +%s.%N)" >> "$SWT"; }
 if ! mkdir "$D" 2>/dev/null; then
+  t L-mkdir-fail
   n=0
   while [ ! -f "$D/script.sha256" ] && [ "$n" -lt 25 ]; do nap; n=$((n + 1)); done
   if [ ! -f "$D/script.sha256" ]; then echo "SWRESULT incomplete"; exit 0; fi
@@ -107,6 +113,7 @@ if ! mkdir "$D" 2>/dev/null; then
   if [ "$HAVE" = "$WANT" ]; then echo "SWRESULT attached"; else echo "SWRESULT conflict"; fi
   exit 0
 fi
+t L-mkdir-ok
 getframe() {
   IFS=' ' read -r tag name sha || return 1
   [ "$tag" = FRAME ] && [ "$name" = "$1" ] || return 1
@@ -139,6 +146,7 @@ done
 command -v setsid >/dev/null 2>&1 || fail "setsid is not installed on the server" 68
 : > "$D/out"; : > "$D/err"; chmod 600 "$D/out" "$D/err"
 printf '%s\\n' "$WANT" > "$D/script.sha256"
+t L-spawn
 if [ "$USESUDO" = 1 ]; then
   as_root sh -c 'setsid sh "$1" "$2" </dev/null >/dev/null 2>&1 &' swellwright-start "$D/run.sh" "$D" || { echo "swellwright: sudo failed" >&2; rm -rf "$D"; exit 69; }
 else
