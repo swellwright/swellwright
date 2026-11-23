@@ -179,10 +179,15 @@ describe('SshPool', () => {
   });
 
   it('gives up waiting for a free connection after the acquire timeout, and recovers', async () => {
-    const pool = new SshPool({ maxPerHost: 1, acquireTimeoutMs: 150, idleMs: 5000 });
+    // acquireTimeoutMs bounds the whole acquire, including establishing the first connection (a real SSH
+    // handshake to the test server): 150ms left no margin for that handshake under a loaded CI runner, so the
+    // first withConnection call itself occasionally timed out instead of the second one. 1000ms keeps the test
+    // fast while giving the handshake real headroom; the hold grows with it so the second call still times out
+    // well before the first one releases.
+    const pool = new SshPool({ maxPerHost: 1, acquireTimeoutMs: 1000, idleMs: 5000 });
     try {
       const holder = pool.withConnection(targetFor(server), async () => {
-        await sleep(500);
+        await sleep(3000);
         return 'held';
       });
       await sleep(30);
