@@ -282,104 +282,38 @@ export function defineStepScenarios(
       assert.equal(counter.stdout, 'ran\n');
     });
 
-    it('DIAGNOSTIC stress: no step runs twice', async () => {
-      const script = 'echo ran >> "$SWELLWRIGHT_STEP_DIR/counter"\nsleep 1\necho done\n';
-      const dump = async (id: string): Promise<string> => {
-        const dir = shellQuote(`${baseDir}/${id}`);
-        const trace = shellQuote(`${baseDir}/${id}.trace`);
-        const info = await conn.exec(
-          `(cd ${dir} 2>/dev/null && ls -la --time-style=full-iso && echo '--- wc/od' && wc -c counter && od -c counter); echo '--- trace'; cat ${trace}; echo '--- ps'; ps -eo pid,ppid,pgid,sid,lstart,args | grep -E 'run.sh|script.sh' | grep -v grep`,
-        );
-        return info.stdout + info.stderr;
-      };
-      const attempt = async (launches: number): Promise<string | undefined> => {
-        const id = nextId('stress');
-        try {
-          await Promise.all(
-            Array.from({ length: launches }, () =>
-              startDetachedStep(conn, { id, script, baseDir }),
-            ),
-          );
-          await waitForStep(conn, id, { baseDir, pollMs: 100 });
-          const counter = await conn.exec(`cat ${shellQuote(`${baseDir}/${id}/counter`)}`);
-          if (counter.stdout !== 'ran\n') {
-            return `${id} DOUBLE counter=${JSON.stringify(counter.stdout)}\n${await dump(id)}`;
-          }
-          return undefined;
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          return `${id} ERROR ${message}\n${await dump(id).catch(() => '(dump failed)')}`;
-        }
-      };
-      const report: string[] = [];
-      for (const launches of [2, 1]) {
-        const problems: string[] = [];
-        for (let from = 0; from < 100; from += 4) {
-          const results = await Promise.all(Array.from({ length: 4 }, () => attempt(launches)));
-          for (const result of results) if (result !== undefined) problems.push(result);
-        }
-        const doubles = problems.filter((entry) => entry.includes(' DOUBLE ')).length;
-        report.push(
-          `launches=${String(launches)}: ${String(problems.length)} problems of 100 (${String(doubles)} double runs)\n${problems.slice(0, 5).join('\n=====\n')}`,
-        );
-      }
-      const bad = report.some((entry) => !entry.includes(': 0 problems'));
-      assert.ok(!bad, report.join('\n#####\n'));
-    });
-
-    it('DIAGNOSTIC exact replica of the idempotency test, 80 times in a row', async () => {
-      const script = 'echo ran >> "$SWELLWRIGHT_STEP_DIR/counter"\nsleep 1\necho done\n';
-      const problems: string[] = [];
-      for (let round = 0; round < 80; round += 1) {
-        const id = nextId('idem');
-        try {
-          await Promise.all([
-            startDetachedStep(conn, { id, script, baseDir }),
-            startDetachedStep(conn, { id, script, baseDir }),
-          ]);
-          await assert.rejects(
-            startDetachedStep(conn, { id, script: 'echo different\n', baseDir }),
-            (error: unknown) => error instanceof SshStepError && error.code === 'ssh_step_conflict',
-          );
-          await waitForStep(conn, id, { baseDir, pollMs: 100 });
-          const again = await startDetachedStep(conn, { id, script, baseDir });
-          const dir = shellQuote(`${baseDir}/${id}`);
-          const counter = await conn.exec(`cat ${dir}/counter`);
-          if (again.state !== 'exited' || counter.stdout !== 'ran\n') {
-            const info = await conn.exec(
-              `(cd ${dir} 2>/dev/null && ls -la --time-style=full-iso && echo '--- wc/od' && wc -c counter && od -c counter); echo '--- trace'; cat ${shellQuote(`${baseDir}/${id}.trace`)}`,
-            );
-            problems.push(
-              `${id} state=${again.state} counter=${JSON.stringify(counter.stdout)}\n${info.stdout}${info.stderr}`,
-            );
-          }
-        } catch (error) {
-          problems.push(`${id} ERROR ${error instanceof Error ? error.message : String(error)}`);
-        }
-        await conn.exec(`rm -rf ${shellQuote(baseDir)}/${shellQuote(id)}*`);
-      }
-      assert.ok(
-        problems.length === 0,
-        `${String(problems.length)} of 80 replicas failed:\n${problems.slice(0, 5).join('\n=====\n')}`,
-      );
-    });
-
-    it('DIAGNOSTIC mkdir atomicity over ssh', async () => {
-      const probe = (path: string): Promise<string> =>
-        conn
-          .exec(`if mkdir ${shellQuote(path)} 2>/dev/null; then echo OK; else echo FAIL; fi`)
-          .then((result) => result.stdout.trim());
-      let bothOk = 0;
-      for (let round = 0; round < 300; round += 1) {
-        const path = `${baseDir}/atomic-${String(round)}-${Date.now().toString(36)}`;
-        const [first, second] = await Promise.all([probe(path), probe(path)]);
-        if (first === 'OK' && second === 'OK') bothOk += 1;
-      }
-      assert.equal(
-        bothOk,
-        0,
-        `mkdir succeeded twice for the same path in ${String(bothOk)} of 300 rounds`,
-      );
+    it('DIAGNOSTIC claim primitives under a tight race', async () => {
+      const script = String.raw`
+echo "mkdir: $(command -v mkdir) -> $(readlink -f "$(command -v mkdir)")"
+mkdir --version 2>&1 | head -n 1
+echo "ln: $(readlink -f "$(command -v ln)")"
+echo "sh: $(readlink -f "$(command -v sh)")"
+T=$(mktemp -d)
+race() {
+  name=$1; shift
+  both=0; i=0
+  while [ "$i" -lt 600 ]; do
+    d=$T/$name$i
+    ( "$@" "$d" 2>/dev/null && echo x >> "$T/$name$i.won" ) &
+    ( "$@" "$d" 2>/dev/null && echo x >> "$T/$name$i.won" ) &
+    wait
+    if [ -f "$T/$name$i.won" ] && [ "$(wc -l < "$T/$name$i.won")" -ge 2 ]; then both=$((both + 1)); fi
+    i=$((i + 1))
+  done
+  echo "$name: both won in $both of 600"
+}
+noclob() { ( set -C; : > "$1" ); }
+symlnk() { ln -s target "$1"; }
+hardln() { ln "$T/seed" "$1"; }
+: > "$T/seed"
+race mkdir mkdir
+race noclobber noclob
+race symlink symlnk
+race hardlink hardln
+rm -rf "$T"
+`;
+      const result = await conn.exec(`sh -c ${shellQuote(script)}`, { timeoutMs: 120_000 });
+      assert.ok(false, `${result.stdout}${result.stderr}`);
     });
 
     it('never lets a hostile id or directory name reach the shell', async () => {
