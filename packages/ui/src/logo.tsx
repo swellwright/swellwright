@@ -24,7 +24,7 @@ export function LogoMark({ size = 28, className }: { size?: number; className?: 
       />
       <path
         d="M11 23.5q4.5 -4 9 0t9 0"
-        stroke="var(--mantine-color-blue-4)"
+        stroke="var(--mantine-color-cyan-4)"
         strokeLinecap="round"
         strokeWidth="1.8"
       />

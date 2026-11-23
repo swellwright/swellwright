@@ -24,8 +24,12 @@ remain planned. Architecture diagrams describe the target system unless stated o
    (two writes to the counter instead of one). The wrapper has a `.claimed` directory;
    the historical report does not prove the cause. Reproduce under Linux and real sshd,
    checking concurrent launch, attachment and cleanup before changing retries or timeouts.
-2. Investigate the pool acquire-timeout test and the command-shell streaming test.
-   Preserve behavioral assertions; do not hide failures with blanket retries.
+2. The SSH pool's acquire-timeout test was failing because `acquireTimeoutMs: 150`
+   bounded establishing the *first* connection too, not just waiting for a busy one;
+   a real handshake occasionally exceeds 150ms on a loaded shared CI runner. Raised to
+   1000ms (held connection to 3000ms, same ratio) rather than retried away; reproduced
+   4 times in a row before the fix, 0 since. The command-shell streaming test has not
+   been independently investigated; do not assume the same cause without reproducing it.
 3. Review `reconciliation.drift` warning severity for an empty inventory.
 4. Make explicit decisions for workflow approval policies P-001 through P-016 and
    record phase-4 architecture in the next ADR. Follow-ups also include operator access
