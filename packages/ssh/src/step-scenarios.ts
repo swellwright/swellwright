@@ -327,6 +327,61 @@ export function defineStepScenarios(
       assert.ok(!bad, report.join('\n#####\n'));
     });
 
+    it('DIAGNOSTIC exact replica of the idempotency test, 80 times in a row', async () => {
+      const script = 'echo ran >> "$SWELLWRIGHT_STEP_DIR/counter"\nsleep 1\necho done\n';
+      const problems: string[] = [];
+      for (let round = 0; round < 80; round += 1) {
+        const id = nextId('idem');
+        try {
+          await Promise.all([
+            startDetachedStep(conn, { id, script, baseDir }),
+            startDetachedStep(conn, { id, script, baseDir }),
+          ]);
+          await assert.rejects(
+            startDetachedStep(conn, { id, script: 'echo different\n', baseDir }),
+            (error: unknown) => error instanceof SshStepError && error.code === 'ssh_step_conflict',
+          );
+          await waitForStep(conn, id, { baseDir, pollMs: 100 });
+          const again = await startDetachedStep(conn, { id, script, baseDir });
+          const dir = shellQuote(`${baseDir}/${id}`);
+          const counter = await conn.exec(`cat ${dir}/counter`);
+          if (again.state !== 'exited' || counter.stdout !== 'ran\n') {
+            const info = await conn.exec(
+              `(cd ${dir} 2>/dev/null && ls -la --time-style=full-iso && echo '--- wc/od' && wc -c counter && od -c counter); echo '--- trace'; cat ${shellQuote(`${baseDir}/${id}.trace`)}`,
+            );
+            problems.push(
+              `${id} state=${again.state} counter=${JSON.stringify(counter.stdout)}\n${info.stdout}${info.stderr}`,
+            );
+          }
+        } catch (error) {
+          problems.push(`${id} ERROR ${error instanceof Error ? error.message : String(error)}`);
+        }
+        await conn.exec(`rm -rf ${shellQuote(baseDir)}/${shellQuote(id)}*`);
+      }
+      assert.ok(
+        problems.length === 0,
+        `${String(problems.length)} of 80 replicas failed:\n${problems.slice(0, 5).join('\n=====\n')}`,
+      );
+    });
+
+    it('DIAGNOSTIC mkdir atomicity over ssh', async () => {
+      const probe = (path: string): Promise<string> =>
+        conn
+          .exec(`if mkdir ${shellQuote(path)} 2>/dev/null; then echo OK; else echo FAIL; fi`)
+          .then((result) => result.stdout.trim());
+      let bothOk = 0;
+      for (let round = 0; round < 300; round += 1) {
+        const path = `${baseDir}/atomic-${String(round)}-${Date.now().toString(36)}`;
+        const [first, second] = await Promise.all([probe(path), probe(path)]);
+        if (first === 'OK' && second === 'OK') bothOk += 1;
+      }
+      assert.equal(
+        bothOk,
+        0,
+        `mkdir succeeded twice for the same path in ${String(bothOk)} of 300 rounds`,
+      );
+    });
+
     it('never lets a hostile id or directory name reach the shell', async () => {
       for (const id of [
         '',
