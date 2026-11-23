@@ -115,16 +115,16 @@ if ! mkdir "$D" 2>/dev/null; then
 fi
 t L-mkdir-ok
 getframe() {
-  IFS=' ' read -r tag name sha || return 1
-  [ "$tag" = FRAME ] && [ "$name" = "$1" ] || return 1
+  IFS=' ' read -r tag name sha || { t "L-frame-eof want=$1"; return 1; }
+  [ "$tag" = FRAME ] && [ "$name" = "$1" ] || { t "L-frame-bad want=$1 tag=$tag name=$name"; return 1; }
   [ "$sha" = - ] && return 0
-  : > "$D/$2" && chmod "$3" "$D/$2" || return 1
-  while IFS= read -r line; do [ "$line" = . ] && break; printf '%s\\n' "$line"; done | base64 -d > "$D/$2" || return 1
+  : > "$D/$2" && chmod "$3" "$D/$2" || { t "L-frame-open want=$1"; return 1; }
+  while IFS= read -r line; do [ "$line" = . ] && break; printf '%s\\n' "$line"; done | base64 -d > "$D/$2" || { t "L-frame-b64 want=$1"; return 1; }
   got=$(sha256sum "$D/$2" | cut -d' ' -f1)
-  [ "$got" = "$sha" ] || return 2
+  [ "$got" = "$sha" ] || { t "L-frame-sha want=$1 got=$got sha=$sha size=$(wc -c < "$D/$2")"; return 2; }
   return 0
 }
-fail() { echo "swellwright: $1" >&2; rm -rf "$D"; exit "$2"; }
+fail() { t "L-fail $1"; echo "swellwright: $1" >&2; rm -rf "$D"; exit "$2"; }
 getframe script script.sh 700 || fail "the script did not arrive intact" 67
 getframe stdin stdin 600 || fail "the stdin file did not arrive intact" 67
 getframe env env 600 || fail "the env file did not arrive intact" 67
