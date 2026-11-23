@@ -7,13 +7,14 @@ import { spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { SshConnection } from './connection.js';
 import { SshStepError } from './errors.js';
 import { defineStepScenarios } from './step-scenarios.js';
 import { STATUS_SCRIPT, WRAPPER_SCRIPT } from './step-scripts.js';
-import { getStepStatus, startDetachedStep } from './steps.js';
+import { shellQuote } from './shell.js';
+import { getStepStatus, startDetachedStep, waitForStep } from './steps.js';
 import {
   installFakeSudo,
   shExecHandler,
@@ -249,6 +250,41 @@ describe(
   },
 );
 
+// A stand-in for the `mkdir` of uutils coreutils (the default of Ubuntu 25.10 and later), which tells BOTH of two callers
+// that race for one path that they made it (measured on real servers in 29 to 57 percent of tight races). For a path
+// named `raced-*` the two callers wait for each other and then both succeed; `.claimed`, the wrapper's claim, always
+// succeeds. A claim made with mkdir lets such a step run twice; one made with an exclusive create does not.
+const RACY_MKDIR = String.raw`#!/bin/sh
+last=
+for a in "$@"; do last=$a; done
+case $last in
+  .claimed) exec /bin/mkdir -p "$@" ;;
+  */raced-*)
+    here=$(dirname "$0")
+    key=$(printf '%s' "$last" | tr '/' '_')
+    /bin/mkdir -p "$here/barrier"
+    : > "$here/barrier/$key.$$"
+    n=0
+    while [ "$n" -lt 50 ]; do
+      c=0
+      for f in "$here/barrier/$key".*; do [ -e "$f" ] && c=$((c + 1)); done
+      [ "$c" -ge 2 ] && break
+      sleep 0.1
+      n=$((n + 1))
+    done
+    exec /bin/mkdir -p "$last" ;;
+esac
+exec /bin/mkdir "$@"
+`;
+
+function installRacyMkdir(): { path: string; cleanup: () => void } {
+  const dir = tempDir('sw-ssh-racy-mkdir-');
+  const file = join(dir.path, 'mkdir');
+  writeFileSync(file, RACY_MKDIR);
+  chmodSync(file, 0o755);
+  return dir;
+}
+
 // A step must never run twice. The launcher already attaches a second caller instead of starting again; this is the
 // last line of defence: whatever starts the wrapper a second time, it ends without running the script.
 describe('the step wrapper', { skip: TOOLS_MISSING }, () => {
@@ -268,5 +304,65 @@ describe('the step wrapper', { skip: TOOLS_MISSING }, () => {
     } finally {
       base.cleanup();
     }
+  });
+
+  it('runs the script once even when mkdir tells every caller that it made the directory', () => {
+    const racy = installRacyMkdir();
+    const base = tempDir();
+    try {
+      const dir = join(base.path, 'once');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, 'script.sh'), 'echo ran >> "$SWELLWRIGHT_STEP_DIR/counter"\n');
+      writeFileSync(join(dir, 'run.sh'), WRAPPER_SCRIPT);
+      const env = { ...process.env, PATH: `${racy.path}:${process.env['PATH'] ?? ''}` };
+      const first = spawnSync('/bin/sh', [join(dir, 'run.sh'), dir], { encoding: 'utf8', env });
+      const second = spawnSync('/bin/sh', [join(dir, 'run.sh'), dir], { encoding: 'utf8', env });
+      assert.equal(first.status, 0);
+      assert.equal(second.status, 0, 'a second wrapper ends quietly');
+      assert.equal(readFileSync(join(dir, 'counter'), 'utf8'), 'ran\n');
+    } finally {
+      base.cleanup();
+      racy.cleanup();
+    }
+  });
+});
+
+// The launcher of a step has the same duty: of two launches that race for one id only one may create the step, even
+// when mkdir says both did (the original report: "does not start a step twice" saw `ran` written twice on a real sshd).
+describe('two launches that race for one step id', { skip: TOOLS_MISSING }, () => {
+  let racy: ReturnType<typeof installRacyMkdir>;
+  let home: ReturnType<typeof tempDir>;
+  let server: TestSshServer;
+  let connection: SshConnection;
+
+  before(async () => {
+    racy = installRacyMkdir();
+    home = tempDir('sw-ssh-race-home-');
+    server = await TestSshServer.start({
+      users: USERS,
+      exec: shExecHandler({ home: home.path, extraPath: racy.path }),
+    });
+    connection = await SshConnection.connect(targetFor(server));
+  });
+  after(async () => {
+    connection.close();
+    await server.close();
+    racy.cleanup();
+    home.cleanup();
+  });
+
+  it('start the script once and give the other launch the step that exists', async () => {
+    const baseDir = join(home.path, 'steps-race');
+    const id = `raced-${Date.now().toString(36)}`;
+    const script = 'echo ran >> "$SWELLWRIGHT_STEP_DIR/counter"\nsleep 1\n';
+    const [first, second] = await Promise.all([
+      startDetachedStep(connection, { id, script, baseDir }),
+      startDetachedStep(connection, { id, script, baseDir }),
+    ]);
+    assert.equal(first.scriptSha256, second.scriptSha256);
+    const status = await waitForStep(connection, id, { baseDir, pollMs: 100 });
+    assert.equal(status.exitCode, 0);
+    const counter = await connection.exec(`cat ${shellQuote(`${baseDir}/${id}/counter`)}`);
+    assert.equal(counter.stdout, 'ran\n');
   });
 });
