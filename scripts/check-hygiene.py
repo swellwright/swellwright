@@ -2,7 +2,8 @@
 """Repository hygiene check (standard library only).
 
 Fails on: secret-looking strings, private-key headers, forbidden file types, e-mail addresses other than
-noreply/example ones, oversized files, and any pattern from the SW_FORBIDDEN_PATTERNS environment variable
+noreply/example ones and the documented AI-assistant attribution addresses (codex@openai.com,
+noreply@anthropic.com), oversized files, and any pattern from the SW_FORBIDDEN_PATTERNS environment variable
 (newline-separated regexes; keep the real list in CI secrets, never in the repository).
 Warns on public-looking IPv4 addresses (allowlist: scripts/hygiene-allowlist.txt, one string per line).
 
@@ -30,7 +31,11 @@ DETECTORS = [
 ]
 # The top-level label must be alphabetic, so "pnpm@10.34.9" or "pkg@0.23.6" (name@version) are not e-mails.
 EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}(?![A-Za-z0-9-])")
-EMAIL_OK = re.compile(r"(@users\.noreply\.github\.com$|@example\.(com|org|net)$|@localhost$)", re.I)
+EMAIL_OK = re.compile(
+    r"(@users\.noreply\.github\.com$|@example\.(com|org|net)$|@localhost$"
+    r"|^codex@openai\.com$|^noreply@anthropic\.com$)",
+    re.I,
+)
 IPV4 = re.compile(r"(?<![\w.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?![\w.])")
 DOC_NETS = [ipaddress.ip_network(n) for n in ("192.0.2.0/24", "198.51.100.0/24", "203.0.113.0/24")]
 MAX_BYTES = 5 * 1024 * 1024

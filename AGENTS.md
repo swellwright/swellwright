@@ -57,6 +57,9 @@ for implemented features and known follow-ups.
 
 - Preserve other people's changes. Use a focused branch for implementation, Conventional
   Commits and DCO sign-off (`git commit -s`) when commits are requested. Do not invent an identity.
+- For commits containing Codex contributions, append `Co-authored-by: Codex <codex@openai.com>`.
+  Preserve the configured primary author, DCO sign-off and other co-author trailers.
+  Do not add Codex attribution to work performed solely by Claude Code.
 - Do not push to main, merge, enable auto-merge or force-push without current authorization.
   Creating a local change is not permission to publish deployment data or access credentials.
 - Use the PR template; do not require an assistant-specific promotional footer. Describe the
