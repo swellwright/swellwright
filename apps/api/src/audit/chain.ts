@@ -62,7 +62,12 @@ export function chainHash(fields: ChainFields): string {
     fields.details,
     fields.prevHash,
   ]);
-  return createHash('sha256').update(text, 'utf8').digest('hex');
+  // This hashes append-only audit metadata (seq, actor, action, outcome, object ids, a
+  // schema-validated `details` record, prevHash) for tamper detection, never a password or
+  // passphrase: audit.service.ts builds `details` from literal, schema-checked values (e.g.
+  // `{ kek_version }`), and vault.service.ts never puts a passphrase into it. Passphrases are
+  // only ever hashed with the Argon2-based KDF in vault/kdf.ts.
+  return createHash('sha256').update(text, 'utf8').digest('hex'); // lgtm[js/insufficient-password-hash]
 }
 
 /** Where the walk of the chain stands: the number and the hash the next event has to carry. */
