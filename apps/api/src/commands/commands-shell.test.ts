@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
@@ -272,31 +272,38 @@ describe('commands against a real shell', { skip: !databaseUrl || !available }, 
     { skip: !posix },
     async () => {
       const { id, host } = await realServer('real-cancel');
-      const run = await h.createRun(
-        h.operator,
-        h.inline([id], 'echo started\nsleep 60\necho not reached\n'),
-      );
-      await h.waitFor(
-        run.id,
-        'the script to start',
-        (r) => targetOf(r, 0).stdout.tail === 'started\n',
-        30_000,
-      );
-      assert.equal((await h.operator.post(`/command-runs/${run.id}/cancel`)).status, 200);
-      const done = await h.finished(run.id, 60_000);
-      assert.equal(done.state, 'cancelled');
-      assert.equal(targetOf(done, 0).state, 'cancelled');
-      assert.equal(targetOf(done, 0).exitCode, 143);
-      assert.equal(targetOf(done, 0).stdout.tail, 'started\n');
-      await sleep(300);
-      const sleepers = spawnSync('sh', ['-c', `ps -eo args | grep -c "[s]leep 60"`], {
-        encoding: 'utf8',
-      });
-      assert.equal(
-        Number(sleepers.stdout.trim() || '0'),
-        0,
-        `no sleeper is left behind (${host.home})`,
-      );
+      // A sleeper that is not this script's: the other test files, and the SSH package beside them, run `sleep 60` of
+      // their own on this machine, and it must not be taken for this script's.
+      const bystander = spawn('sleep', ['60'], { stdio: 'ignore' });
+      try {
+        const run = await h.createRun(
+          h.operator,
+          h.inline([id], 'echo started\nsleep 60\necho not reached\n'),
+        );
+        await h.waitFor(
+          run.id,
+          'the script to start',
+          (r) => targetOf(r, 0).stdout.tail === 'started\n',
+          30_000,
+        );
+        assert.equal((await h.operator.post(`/command-runs/${run.id}/cancel`)).status, 200);
+        const done = await h.finished(run.id, 60_000);
+        assert.equal(done.state, 'cancelled');
+        assert.equal(targetOf(done, 0).state, 'cancelled');
+        assert.equal(targetOf(done, 0).exitCode, 143);
+        assert.equal(targetOf(done, 0).stdout.tail, 'started\n');
+        await sleep(300);
+        const sleepers = spawnSync('sh', ['-c', `ps -eo args | grep -c "[s]leep 60"`], {
+          encoding: 'utf8',
+        });
+        assert.equal(
+          Number(sleepers.stdout.trim() || '0'),
+          0,
+          `no sleeper is left behind (${host.home})`,
+        );
+      } finally {
+        bystander.kill();
+      }
     },
   );
 
