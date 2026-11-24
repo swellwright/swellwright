@@ -2,7 +2,7 @@
 export const auth = {
   /** Используется на нескольких из этих экранов. */
   shared: {
-    loginName: 'Имя для входа',
+    loginName: 'Юзернейм',
     password: 'Пароль',
     repeatPassword: 'Повторите пароль',
     passwordHint_one: 'Минимум {{count}} символ. Подойдёт и парольная фраза.',
@@ -46,7 +46,7 @@ export const auth = {
     title: 'Вход',
     submit: 'Войти',
     passwordPlaceholder: 'Ваш пароль',
-    wrongCredentials: 'Неверное имя для входа или пароль.',
+    wrongCredentials: 'Неверный юзернейм или пароль.',
   },
 
   setup: {
@@ -64,7 +64,7 @@ export const auth = {
     passwordCopyFailed: 'Не удалось скопировать пароль в буфер обмена',
     usernameHint:
       'Строчные латинские буквы, цифры, точка, дефис или подчёркивание. От 2 до 32 символов.',
-    usernameInvalid: 'Такое имя для входа недопустимо.',
+    usernameInvalid: 'Такой юзернейм недопустим.',
     submit: 'Создать владельца',
   },
 

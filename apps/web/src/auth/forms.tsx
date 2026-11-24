@@ -22,7 +22,7 @@ import { CODE_LENGTH, CodeInput } from './code-input.js';
 import { describeError } from './messages.js';
 
 /**
- * The sign-in form of the panel (src/features/auth/login-form): a labelled login name and password with the label
+ * The sign-in form of the panel (src/features/auth/login-form): a labelled username and password with the label
  * repeated as the placeholder, and a full-width default button with a leading icon, 32 px under the last field. A
  * failed sign-in is a red toast, as in the panel.
  */

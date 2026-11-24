@@ -2,7 +2,7 @@
 export const auth = {
   /** Used on more than one of those screens. */
   shared: {
-    loginName: 'Login name',
+    loginName: 'Username',
     password: 'Password',
     repeatPassword: 'Repeat the password',
     passwordHint_one: 'At least {{count}} character. A passphrase is fine.',
@@ -45,7 +45,7 @@ export const auth = {
     title: 'Sign in',
     submit: 'Sign in',
     passwordPlaceholder: 'Your password',
-    wrongCredentials: 'Wrong login name or password.',
+    wrongCredentials: 'Wrong username or password.',
   },
 
   setup: {
@@ -62,7 +62,7 @@ export const auth = {
     passwordCopiedMessage: 'The password was copied to the clipboard',
     passwordCopyFailed: 'The password could not be copied to the clipboard',
     usernameHint: 'Lower-case letters, digits, dot, dash or underscore. 2 to 32 characters.',
-    usernameInvalid: 'This login name is not allowed.',
+    usernameInvalid: 'This username is not allowed.',
     submit: 'Create the owner',
   },
 
