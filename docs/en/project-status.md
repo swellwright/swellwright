@@ -30,9 +30,11 @@ planned. Architecture diagrams describe the target system unless stated otherwis
    core in `packages/engine`: the state tables of a run and of a step (the run diagram in
    `docs/en/architecture.md` is checked against the table by a test), resource locks in one
    fixed order, the lease and fence arithmetic, the plan with its approval hash, the order
-   and the verdict of an undo, the recovery of an interrupted step and the step contract.
-   Not built yet: the Prisma tables, the `RunStore`, the loop and the fault tests on a real
-   PostgreSQL.
+   and the verdict of an undo, the recovery of an interrupted step and the step contract;
+   and the loop (`Worker`) over a `RunStore` port with a store in memory, tested with a
+   worker killed at each point, a stalled worker, contested locks, cancel and pause. Not
+   built yet: the Prisma tables and the store over them (it must pass the same suite),
+   the fault tests on a real PostgreSQL, undo execution and the wiring into the API.
 2. Verify deploy/resume/rollback with a disposable lab, independent fallback access, real
    PostgreSQL and fault injection. A PGlite development stand cannot establish correctness
    under concurrent PostgreSQL transactions.

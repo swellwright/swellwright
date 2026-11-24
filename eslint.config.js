@@ -33,8 +33,9 @@ export default defineConfig(
     extends: [reactHooks.configs.flat.recommended],
   },
   {
-    // node:test registers suites and tests as top-level calls; their returned promises are not awaited.
-    files: ['**/*.test.ts'],
+    // node:test registers suites and tests as top-level calls; their returned promises are not awaited. The same holds
+    // for a suite that a package exports for its stores to run (`src/testing`).
+    files: ['**/*.test.ts', '**/src/testing/**/*.ts'],
     rules: {
       '@typescript-eslint/no-floating-promises': 'off',
       '@typescript-eslint/no-extraneous-class': 'off',

@@ -19,6 +19,7 @@ const LEGAL: readonly (readonly [StepState, StepEvent, StepState])[] = [
   ['pending', 'start', 'running'],
   ['pending', 'skip', 'skipped'],
   ['running', 'restart', 'running'],
+  ['running', 'defer', 'pending'],
   ['running', 'succeed', 'succeeded'],
   ['running', 'mark_done', 'succeeded'],
   ['running', 'fail', 'failed'],

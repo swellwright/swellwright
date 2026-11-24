@@ -145,6 +145,7 @@ const step = (key: string, extra: Partial<StepPlanInput> = {}): StepPlanInput =>
   key,
   title: key,
   estimateSeconds: 10,
+  input: null,
   locks: [],
   items: [],
   ...extra,
@@ -171,6 +172,7 @@ const deploy = () =>
       }),
       step('node.install.nginx', {
         estimateSeconds: 120,
+        input: { package: 'nginx' },
         locks: [nodeResource('edge-09'), serverResource('s-1')],
         items: [item('package.install', 'nginx'), item('file.write', '/etc/nginx/nginx.conf')],
       }),
@@ -271,15 +273,15 @@ describe('the hash of a plan', () => {
     // The text that is hashed, written out by hand: keys sorted, no white space, no title and no estimate.
     const text =
       '{"params":{"dns":"manual","name":"edge-09","ports":[443,8443],"zone":"example.test"},"steps":[' +
-      '{"index":0,"items":[],"key":"ssh.connect","locks":["server:s-1"]},' +
-      '{"index":1,"items":[{"kind":"file.read","summary":"file.read /etc/ssh/sshd_config","target":"/etc/ssh/sshd_config"}],"key":"node.snapshot","locks":["server:s-1"]},' +
-      '{"index":2,"items":[{"kind":"package.install","summary":"package.install nginx","target":"nginx"},{"kind":"file.write","summary":"file.write /etc/nginx/nginx.conf","target":"/etc/nginx/nginx.conf"}],"key":"node.install.nginx","locks":["server:s-1","node:edge-09"]},' +
-      '{"index":3,"items":[{"irreversible":true,"kind":"panel.node.create","summary":"panel.node.create edge-09","target":"edge-09"}],"key":"panel.create-node","locks":["panel","dns-zone:example.test"]}' +
+      '{"index":0,"input":null,"items":[],"key":"ssh.connect","locks":["server:s-1"]},' +
+      '{"index":1,"input":null,"items":[{"kind":"file.read","summary":"file.read /etc/ssh/sshd_config","target":"/etc/ssh/sshd_config"}],"key":"node.snapshot","locks":["server:s-1"]},' +
+      '{"index":2,"input":{"package":"nginx"},"items":[{"kind":"package.install","summary":"package.install nginx","target":"nginx"},{"kind":"file.write","summary":"file.write /etc/nginx/nginx.conf","target":"/etc/nginx/nginx.conf"}],"key":"node.install.nginx","locks":["server:s-1","node:edge-09"]},' +
+      '{"index":3,"input":null,"items":[{"irreversible":true,"kind":"panel.node.create","summary":"panel.node.create edge-09","target":"edge-09"}],"key":"panel.create-node","locks":["panel","dns-zone:example.test"]}' +
       '],"workflowKey":"node.deploy"}';
     assert.equal(planHash(deploy()), sha256Hex(text));
     assert.equal(
       planHash(deploy()),
-      '4a94f64181c669244ba3c46108b13467795f07f4f4d70180272a4ecd8380f33e',
+      'f68877db506d68660128b893f043af618852454d65d1e703bb10a05a8299ae74',
     );
   });
 
@@ -291,6 +293,7 @@ describe('the hash of a plan', () => {
         key: s.key,
         title: s.title,
         estimateSeconds: s.estimateSeconds,
+        input: s.input,
         locks: s.locks.map((key) => {
           const [kind, id] = key.split(':');
           return kind === 'panel'
@@ -323,6 +326,17 @@ describe('the hash of a plan', () => {
     const changed = [
       hashOf((p) => ({ ...p, workflowKey: 'node.redeploy' })),
       hashOf((p) => ({ ...p, params: { name: 'edge-10' } })),
+      hashOf((p) => ({
+        ...p,
+        steps: [
+          step('a.one', {
+            input: { retries: 3 },
+            items: [item('file.write', '/x')],
+            locks: [nodeResource('edge-09')],
+          }),
+          p.steps[1],
+        ],
+      })),
       hashOf((p) => ({ ...p, params: { name: 'edge-09', extra: 1 } })),
       hashOf((p) => ({ ...p, steps: [...p.steps].reverse() })),
       hashOf((p) => ({ ...p, steps: [p.steps[0], step('a.three')] })),

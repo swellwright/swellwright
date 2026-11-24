@@ -5,6 +5,8 @@ import {
   InvalidStepError,
   defineStep,
   remoteId,
+  StepDeferredError,
+  StepFailure,
   type PlanContext,
   type Schema,
   type Step,
@@ -36,6 +38,19 @@ const base = (): Step<{ readonly server: string }, { readonly written: number },
   locks: (_ctx, params) => [serverResource(params.server)],
   plan: (_ctx, params) =>
     Promise.resolve([{ kind: 'file.write', target: params.server, summary: 'Write a file' }]),
+  input: {
+    parse(input) {
+      if (
+        typeof input === 'object' &&
+        input !== null &&
+        'server' in input &&
+        typeof input.server === 'string'
+      ) {
+        return { server: input.server };
+      }
+      throw new TypeError('The input is not {server: string}.');
+    },
+  },
   apply: async (ctx) => {
     await ctx.ports.ssh.run('true');
     return { written: 1 };
@@ -136,5 +151,23 @@ describe('the id of a step on a server', () => {
     assert.throws(() => remoteId('a'.repeat(64), 0), RangeError);
     assert.throws(() => remoteId('', -1), RangeError);
     assert.throws(() => remoteId('r', 1.5), RangeError);
+  });
+});
+
+describe('what a step throws to say how it ended', () => {
+  it('fails with a code that people can rely on', () => {
+    const failure = new StepFailure('host_unreachable', 'The host did not answer.');
+    assert.ok(failure instanceof Error);
+    assert.equal(failure.name, 'StepFailure');
+    assert.equal(failure.code, 'host_unreachable');
+    assert.equal(failure.message, 'The host did not answer.');
+  });
+
+  it('defers with a reason, before it has done anything', () => {
+    const deferred = new StepDeferredError('vault_sealed');
+    assert.ok(deferred instanceof Error);
+    assert.equal(deferred.name, 'StepDeferredError');
+    assert.equal(deferred.reason, 'vault_sealed');
+    assert.match(deferred.message, /vault_sealed/u);
   });
 });
