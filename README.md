@@ -119,7 +119,7 @@ The same stack as the Remnawave panel, so the UI feels familiar and contributors
 
 | Layer | Choice |
 |---|---|
-| Backend | NestJS, TypeScript, Zod, BullMQ on Valkey |
+| Backend | NestJS, TypeScript, Zod; runs and locks in PostgreSQL (ADR 0048) |
 | Data | PostgreSQL with Prisma |
 | SSH | `ssh2` (pooling, detached steps, sudo, PTY, SFTP, certificates) |
 | Frontend | React, Vite, Mantine, TanStack Query, xterm.js |

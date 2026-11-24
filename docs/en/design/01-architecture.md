@@ -7,7 +7,7 @@
 |---|---|---|
 | Backend | NestJS 12 (the panel uses 11), TypeScript 6.0 (the panel uses 5.9, see ADR 0009), Zod 4 (route registry, ADR 0012), CQRS, `@nestjs/schedule`, `@nestjs/terminus`, `@willsoto/nestjs-prometheus` | same as the panel |
 | Database | PostgreSQL + Prisma 7 (ADR 0013) (+ Kysely for heavy queries, as in the panel) | Prisma migrations, time-series partitioning |
-| Queues and locks | BullMQ + a Redis-compatible store (Valkey), Redlock and Postgres advisory locks | separate queues per task type |
+| Runs and locks | PostgreSQL only (`FOR UPDATE SKIP LOCKED`, lock rows with a fence token; ADR 0048, which narrows ADR 0005) | Valkey stays for readiness; no queue library in the first engine slice |
 | SSH | `ssh2` (the panel already has it) | pool, host key pinning, detached processes on the node, PTY, SFTP |
 | Panel API | `@remnawave/backend-contract` (version matched to the panel version) | typed requests and responses instead of home-grown OpenAPI validation |
 | Frontend | React 19, Vite, Mantine 9 (core, notifications, modals, spotlight, code-highlight, dropzone, form, dates, charts), TanStack Query 5, Zustand 5, React Router 7, Zod 4, i18next (ru, en), Tabler icons, Monaco, `@xterm/xterm` | same as the panel |
@@ -18,14 +18,14 @@
 ## 2. Components
 ```
  browser ──HTTPS──> nginx (proxy)  ─> swellwright-api  ──> PostgreSQL
-    ^  WS/SSE (events, terminal)        │  ^             Valkey (queues, locks)
+    ^  WS/SSE (events, terminal)        │  ^             Valkey (readiness)
     └───────────────────────────────────┘  │
                                 swellwright-worker ──SSH──> servers / nodes
                                        │  └──HTTPS──> Remnawave API, DNS API, providers, GitHub (releases)
                               swellwright-probe (optional, on observer machines) ──HTTPS──> api
 ```
-- **api**: REST and OpenAPI, WebSocket/SSE, serving the UI, authentication, authorization, scheduling (enqueuing jobs).
-- **worker**: runs workflows (the engine), SSH, panel and DNS calls, probes; scales horizontally (a single process at the start, but the code keeps no state in memory).
+- **api**: REST and OpenAPI, WebSocket/SSE, serving the UI, authentication, authorization, creating runs. In the first engine slice it also hosts the loop that executes them, because the vault key lives in its memory only (ADR 0048).
+- **worker** (planned): the same loop in a process of its own, with SSH, panel and DNS calls and probes; scales horizontally (the code keeps no state in memory) once the question of how it gets secrets is decided.
 - **web**: a static UI, built into the api image.
 - **probe-agent** (optional): a lightweight agent for machines in other networks (different carriers, different sites); outbound HTTPS to the api only, with a token that can only write results.
 - **cli** `sw`: a thin wrapper over the SDK.
@@ -34,7 +34,7 @@
 ## 3. Monorepo structure
 ```
 apps/api          NestJS: controllers, gateways, authorization, OpenAPI
-apps/worker       NestJS worker: queue processors, engine
+apps/worker       NestJS worker: the run loop in its own process, engine (planned; ADR 0048)
 apps/web          React: UI
 apps/cli          sw
 apps/probe-agent  probe agent (TCP, TLS/SNI, and REALITY via xray tests, 16-20 KB freeze test)
@@ -56,7 +56,7 @@ docs/ (en, ru)  deploy/  examples/
 ```
 
 ## 4. Execution model
-- A run is a `WorkflowRun` record plus enqueuing. A worker takes locks on resources (node, DNS zone, panel, panel server) and executes the stages described in the workflow.
+- A run is a database record (ADR 0048): a worker claims it from PostgreSQL with a lease and a fence token, takes locks on resources (node, DNS zone, panel, panel server) and executes the stages described in the workflow.
 - State (stages, steps, events, undo records, approvals) is stored in Postgres after every step (checkpoints). If a worker crashes, another worker picks the run up from the last checkpoint; a step that was running on a node as a detached process is re-read from its log and exit code.
 - Run events are streamed to the UI (WebSocket/SSE) and persisted; step output is stored in chunks with secrets redacted.
 - Approvals (approval gates) pause a run until a human decides (details in `08-engine.md`).
@@ -84,7 +84,7 @@ Remnawave API (tokens with scopes), DNS providers (through drivers), hosting pro
 4. **An agent on a node** (optional, later): an outbound WSS connection to the api, for servers without reachable SSH; not used by default.
 
 ## 9. Observability of Swellwright itself
-JSON logs with secret redaction, `/health` and `/ready`, Prometheus metrics (runs, stage durations, SSH errors, queue depth, lock age, remaining token lifetime), OpenTelemetry tracing (optional).
+JSON logs with secret redaction, `/health` and `/ready`, Prometheus metrics (runs, stage durations, SSH errors, runs waiting for a worker, lock age, remaining token lifetime), OpenTelemetry tracing (optional).
 
 ## 10. Why TypeScript
 - One stack with the panel (easier to maintain: `@remnawave/backend-contract` types, Zod schemas shared by the server, the UI, and the CLI).

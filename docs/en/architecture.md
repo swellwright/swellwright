@@ -8,7 +8,7 @@ This page includes the target architecture. See [project status](project-status.
 |---|---|
 | Backend | NestJS 12 (the panel uses 11), TypeScript 6.0 (the panel uses 5.9, see ADR 0009), Zod 4 (route registry, ADR 0012), CQRS, `@nestjs/schedule`, Terminus, Prometheus |
 | Database | PostgreSQL with Prisma 7 (ADR 0013) and Kysely for heavy queries |
-| Queues and locks | BullMQ on a Redis-compatible store (Valkey); Redlock and PostgreSQL advisory locks |
+| Runs and locks | PostgreSQL only: workers claim runs with `FOR UPDATE SKIP LOCKED`, locks are rows with a fence token (ADR 0048, which narrows ADR 0005). Valkey is used for readiness; no queue library in the first engine slice |
 | SSH | `ssh2`: pooling, detached steps, sudo, PTY terminal, SFTP, certificates |
 | Panel client | `@remnawave/backend-contract` pinned per panel version |
 | Frontend | React 19, Vite, Mantine 9, TanStack Query 5, Zustand 5, React Router 7, Zod 4, i18next, Tabler icons, Monaco, xterm.js |
@@ -22,23 +22,23 @@ flowchart LR
     B[Browser] -- HTTPS --> RP[Reverse proxy]
     RP --> API[swellwright-api<br/>REST, OpenAPI, WS/SSE]
     API --- PG[(PostgreSQL)]
-    API --- VK[(Valkey<br/>queues, locks)]
-    API -- jobs --> W[swellwright-worker]
+    API --- VK[(Valkey<br/>readiness)]
+    API -. runs are rows in PostgreSQL .-> W[swellwright-worker<br/>planned]
     W -- SSH --> N[Servers and nodes]
     W -- HTTPS --> EXT[Remnawave API<br/>DNS and hosting APIs<br/>release feeds]
     PA[probe-agent<br/>optional, other networks] -- HTTPS --> API
     B -. events, terminal .- API
 ```
 
-- **api**: REST and OpenAPI, WebSocket/SSE, serves the UI, authentication and authorization, enqueues runs.
-- **worker**: executes workflows (SSH, panel and DNS calls, probes); stateless, can be scaled out.
+- **api**: REST and OpenAPI, WebSocket/SSE, serves the UI, authentication and authorization, creates runs. In the first engine slice it also hosts the loop that executes them, because the vault key lives in its memory only (ADR 0048).
+- **worker** (planned): the same loop in a process of its own (SSH, panel and DNS calls, probes); stateless, can be scaled out once the question of how it gets secrets is decided.
 - **web**: static UI bundled into the api image.
 - **probe-agent** (optional): outbound HTTPS only, write-only token.
 - **cli** and **mcp** (optional) on top of the same API.
 
 ## Execution model
 
-A run is a database record plus a queue job. A worker takes locks on resources (node, server, DNS zone, panel, panel host) and executes stages. After every step a checkpoint (step state, undo records, outputs without secrets) is written. If a worker dies, another one resumes from the last unfinished step; a step already running on a node is **re-attached** by reading its log and exit-code file.
+A run is a database record (ADR 0048): a worker claims it from PostgreSQL with a lease and a fence token, takes locks on resources (node, server, DNS zone, panel, panel host) and executes stages. After every step a checkpoint (step state, undo records, outputs without secrets) is written in one transaction that checks the fence. If a worker dies, another one resumes from the last unfinished step; a step already running on a node is **re-attached** by reading its log and exit-code file.
 
 Approval gates pause a run until a human decides; the decision is bound to a hash of the plan.
 

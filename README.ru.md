@@ -104,7 +104,7 @@ Swellwright превращает каждую из них в сценарий **
 
 | Слой | Выбор |
 |---|---|
-| Бэкенд | NestJS, TypeScript, Zod, BullMQ на Valkey |
+| Бэкенд | NestJS, TypeScript, Zod; запуски и блокировки в PostgreSQL (ADR 0048) |
 | Данные | PostgreSQL, Prisma |
 | SSH | `ssh2` (пул, шаги отдельным процессом, sudo, PTY, SFTP, сертификаты) |
 | Фронтенд | React, Vite, Mantine, TanStack Query, xterm.js |

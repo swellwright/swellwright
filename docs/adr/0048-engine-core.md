@@ -1,6 +1,8 @@
 # ADR 0048: The engine core: runs, steps, durable execution and the worker
 
-Status: proposed
+Status: accepted
+
+Proposed on 2026-11-24 and accepted on 2026-11-25, with one change to the proposal: the loop runs inside the API process in this slice, because the vault key lives there (see "Where the code lives" and "Decisions of the owner").
 
 ## Context
 ADR 0005 chose to build the engine on PostgreSQL and a queue, with no external workflow engine, and `docs/en/design/08-engine.md` describes the lifecycle of a run, the step contract, durability, rollback, approvals, strategies and policies. Phase 4 builds it. What exists today:
@@ -65,8 +67,14 @@ Undo runs the undo records in **reverse**, each as an idempotent, journaled step
 ### Events
 Everything the run does is a `RunEvent` with a per-run `seq`. `GET /runs/{id}/events?after=<seq>` answers a page and the same route streams the following ones as server-sent events, so a client that reconnects asks for `after=<last seq>` and misses nothing. People's actions on a run (start, approve, cancel, resume, undo) also go to the audit chain (ADR 0015); the events of the engine itself do not, they are the run's own timeline.
 
-### Where the code lives
-`packages/engine` is the core with no I/O: the state machine, the step and workflow types, the scheduling loop over a `RunStore` **port** and the ports of a step. `apps/worker` is the process: the `RunStore` over Prisma (`packages/db`), the SSH and panel adapters, the configuration, the signals. The API creates runs and reads them through the same tables and the pure parts of the engine; it never executes a step. The compose file gets a `worker` service built from the same image with another command. The Prisma schema, the contracts of the run routes and the permissions come with the first code that uses them, not in this ADR.
+### Where the code lives, and who holds the vault key
+`packages/engine` is the core with no I/O: the state machine, the step and workflow types, the scheduling loop over a `RunStore` **port** and the ports of a step (SSH, panel read, secrets). In this ADR a *worker* is an instance of the scheduling loop; nothing in the design ties it to a process of its own.
+
+**In this slice the loop runs inside the API process.** The key that opens the vault lives only in the memory of the API process (ADR 0006 and 0018: sealed on start, unsealed by a person), so a process of its own, such as `apps/worker`, could not read an SSH key, a panel token or a secret handed to a run. Letting it do so is a decision about the threat model of the vault (a second unseal, or a channel that carries decrypted values between processes) that this ADR does not take. So the API hosts the loop, as it hosts the runners of commands and checks today: a module of `apps/api` provides the `RunStore` over Prisma (`packages/db`), the SSH, panel and vault adapters, the configuration and the shutdown. The HTTP handlers create and read runs through the same tables and the pure parts of the engine; the loop, started with the application, executes them.
+
+A step reaches a secret only through the secrets port, which the API implements with the one door of the vault (ADR 0042: a sealed vault answers first, then the expiry rule). A sealed vault does not fail a run, it makes it wait (`waiting: vault_sealed`, the way the commands runner waits, ADR 0038), and after a restart of the API the runs that were going on resume once the vault is unsealed. No decrypted value is part of a run's row, checkpoint, event or output.
+
+`apps/worker` stays a skeleton. The lease, the fence, the locks and the `RunStore` are written so that several loops can work on the same tables, in one process (the tests do that) or in several, so moving the loop into `apps/worker` later needs one more decision only: how that process gets secrets. The Prisma schema, the contracts of the run routes and the permissions come with the first code that uses them, not in this ADR.
 
 ### How it is tested
 The golden and the fault tests of design §13 are part of the core, not a later addition:
@@ -80,13 +88,15 @@ The golden and the fault tests of design §13 are part of the core, not a later 
 - The cost is polling and the load it puts on one table; `FOR UPDATE SKIP LOCKED` and an index on the claimable states keep it small, and the interval is a setting.
 - A lock and a checkpoint share a transaction, so the fence is a real guarantee; it does not make a stalled worker's step on a server disappear, and the idempotency of steps is therefore a **requirement on every step author**, tested by the fault suite for every step the engine ships.
 - ADR 0005 is narrowed, not reversed: no external engine, durable checkpoints, resume, approvals bound to the plan. Valkey and BullMQ are out of this slice.
-- The API process keeps its own small runners for commands and checks. There are two kinds of runner until a later phase moves them, and the documentation says which is which.
+- The API process hosts three loops: the runners of commands and checks (ADR 0038, 0045), which stay as they are, and the engine. The documentation says which is which. A run that needs a secret while the vault is sealed waits, and so does every run after a restart of the API, until a person unseals the vault.
+- The engine can move into its own process later without changing a step or a table, once the question of secrets for that process is decided.
 
 ## Not built here
-Approvals and the enforcement of policies P-001 to P-016; the panel write client (its own ADR, it is the first code that changes the panel); the workflows and their step catalogue; rollout strategies (canary, waves) and health gates; schedules and windows; the run screens; metrics; moving `CommandRun` and `CheckRun` into the engine.
+Approvals and the enforcement of policies P-001 to P-016; the panel write client (its own ADR, it is the first code that changes the panel); the workflows and their step catalogue; rollout strategies (canary, waves) and health gates; schedules and windows; the run screens; metrics; moving `CommandRun` and `CheckRun` into the engine; the `worker` process and the way it would get secrets.
 
-## For the owner
-1. **Narrowing ADR 0005** (PostgreSQL only, no Valkey or BullMQ in this slice): the reasoning is above. The alternative is BullMQ as the wake-up with PostgreSQL as the truth, which adds a dependency to review and a second place that can disagree.
-2. **An interrupted step that is not idempotent waits for a person** (the default above). The alternative, retrying by itself, is not offered.
-3. **A `worker` service in the compose file**, the same image. On the panel host this is one more container with the limits of ADR 0019; on a separate server it is no different from the API.
-4. Policies P-001 to P-016 (which are on by default, which only warn) are decided in the next ADR, with a proposal for each.
+## Decisions of the owner
+Taken on 2026-11-25: the owner approved this text, with the change in item 3, before it was merged.
+1. **ADR 0005 is narrowed**, as proposed: PostgreSQL only, no Valkey or BullMQ in this slice. Valkey stays what it is today (the readiness check). The alternative, BullMQ as the wake-up with PostgreSQL as the truth, would add a dependency to review and a second place that can disagree.
+2. **An interrupted step that is not idempotent waits for a person**, as proposed. Retrying by itself is not offered.
+3. **No `worker` service in the compose file in this slice.** The proposal was one more container from the same image. It is replaced by running the loop in the API process (see "Where the code lives"), because the vault key is in no other process. The compose file does not change; a `worker` service comes with the decision on how a separate process gets secrets.
+4. **Policies P-001 to P-016 get an ADR of their own**, with a proposal for each (which are on by default, which only warn), before any code that enforces approvals.

@@ -10,3 +10,5 @@ A run is a PostgreSQL record plus a queue job on a Redis-compatible store (Valke
 
 ## Consequences
 Fewer moving parts and the same stack as the panel. The engine (checkpoints, resume, locks, approvals, undo, policies) is project code and must be covered by golden scenario tests and fault injection. If scale ever outgrows this design, the step contract allows moving to another engine without rewriting the steps.
+
+Narrowed by ADR 0048 (the engine core): a run is a PostgreSQL record and a worker finds work by asking PostgreSQL for it; locks are rows with a fence token that the transaction recording a checkpoint checks, and Valkey, BullMQ and Redlock are not used in the first slice. Everything else decided here stands: no external workflow engine, durable checkpoints, resume, approvals bound to the plan.
