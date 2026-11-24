@@ -29,6 +29,10 @@ export interface LastReconciliation {
   readonly unknown: number;
   /** The inventory was compared (the person who ran it may read servers); without it the counts leave servers out. */
   readonly inventoryCompared: boolean;
+  /** How many servers the inventory had when it was compared; 0 without it. */
+  readonly inventoryServers: number;
+  /** How many nodes of the panel no server answers for, among `missing`; with an empty inventory that is every node. */
+  readonly unmanaged: number;
   /** By the id of the server. Empty without the inventory. */
   readonly nodes: ReadonlyMap<string, MatchedNode>;
 }

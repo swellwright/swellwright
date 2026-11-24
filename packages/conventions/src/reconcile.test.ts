@@ -536,6 +536,27 @@ describe('the server inventory', () => {
     assert.equal(at(extra, 0).subject.kind, 'server');
     assert.equal(result.summary.missing, 2);
     assert.equal(result.summary.extra, 1);
+    assert.equal(result.unmanaged, 2, 'the nodes with no server, counted apart');
+  });
+
+  it('counts the nodes that have no server: all of them for an empty inventory, none when nothing was compared or reported', () => {
+    assert.equal(run(fleet, {}, resolvedFleet(), []).unmanaged, 3);
+    assert.equal(run(fleet, {}, resolvedFleet(), null).unmanaged, 0, 'no inventory, no comparison');
+    assert.equal(
+      run(fleet, { inventory: { reportUnmanaged: false } }, resolvedFleet(), []).unmanaged,
+      0,
+      'switched off',
+    );
+    const dns = resolvedFleet();
+    dns.set('n1.example.com', failed('timeout'));
+    assert.equal(run(fleet, {}, dns, []).unmanaged, 2, 'a node that is undecided is not counted');
+    const quiet = run(
+      fleet,
+      { checks: { 'node.server': { enabled: false } } },
+      resolvedFleet(),
+      [],
+    );
+    assert.equal(quiet.unmanaged, 0, 'a check that is off finds nothing');
   });
 
   it('never reports a retired server as extra, and can be told to report neither side', () => {

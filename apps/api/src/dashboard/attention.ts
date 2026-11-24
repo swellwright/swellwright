@@ -68,6 +68,10 @@ export interface ReconciliationFacts {
     readonly extra: number;
     readonly unknown: number;
     readonly inventoryCompared: boolean;
+    /** How many servers the inventory had when it was compared. */
+    readonly inventoryServers: number;
+    /** How many nodes of the panel have no server (they are among `missing`). */
+    readonly unmanaged: number;
   } | null;
 }
 
@@ -613,12 +617,26 @@ function reconciliationItems(facts: ReconciliationFacts): AttentionItem[] {
   if (!facts.panelConnected || facts.last === null) {
     return [];
   }
-  const { drift, missing, extra, unknown, ranAt, inventoryCompared } = facts.last;
+  const { drift, missing, extra, unknown, ranAt, inventoryCompared, inventoryServers, unmanaged } =
+    facts.last;
   const items: AttentionItem[] = [];
   const total = drift + missing + extra;
   if (total > 0) {
+    // An empty inventory makes every node of the panel "not in the inventory": that is where one starts, not a drift,
+    // so while nothing else differs it is a hint. One difference of any other kind keeps the warning.
+    const onlyAStart =
+      inventoryCompared &&
+      inventoryServers === 0 &&
+      drift === 0 &&
+      extra === 0 &&
+      missing === unmanaged;
     items.push(
-      make('reconciliation.drift', { total, drift, missing, extra, inventoryCompared }, ranAt),
+      make(
+        'reconciliation.drift',
+        { total, drift, missing, extra, inventoryCompared },
+        ranAt,
+        onlyAStart ? 'info' : undefined,
+      ),
     );
   }
   if (unknown > 0) {
