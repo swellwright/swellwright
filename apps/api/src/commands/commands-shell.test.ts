@@ -2,7 +2,7 @@ import 'reflect-metadata';
 
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -18,7 +18,7 @@ import {
 import { databaseUrl } from '../test-support.js';
 import { findShell, shellHandler } from '../servers/ssh-test-support.js';
 import { loadBuiltinScripts } from './builtin-scripts.js';
-import { Harness, LOGIN, PASSPHRASE, sleep, targetOf, until } from './commands-test-support.js';
+import { Harness, LOGIN, PASSPHRASE, targetOf, until } from './commands-test-support.js';
 
 const shell = findShell();
 /** A directory with a `setsid`, for a machine that has none of its own (the tests of the author's Windows machine). */
@@ -65,6 +65,13 @@ async function startRealHost(): Promise<RealHost> {
   });
   return { server, home, sudo };
 }
+
+/** Whether a process is still there; one that is dead and waits to be collected (a zombie) is gone for this purpose. */
+const alive = (pid: number): boolean => {
+  const state = spawnSync('ps', ['-o', 'stat=', '-p', String(pid)], { encoding: 'utf8' });
+  const stat = state.stdout.trim();
+  return stat !== '' && !stat.startsWith('Z');
+};
 
 const stepDirectories = (host: RealHost): string[] => {
   const base = join(host.home, '.swellwright', 'steps');
@@ -273,12 +280,16 @@ describe('commands against a real shell', { skip: !databaseUrl || !available }, 
     async () => {
       const { id, host } = await realServer('real-cancel');
       // A sleeper that is not this script's: the other test files, and the SSH package beside them, run `sleep 60` of
-      // their own on this machine, and it must not be taken for this script's.
+      // their own on this machine. What is checked is the process this script started (it says its pid), not every
+      // sleeper of the machine, so this one must not matter.
       const bystander = spawn('sleep', ['60'], { stdio: 'ignore' });
       try {
         const run = await h.createRun(
           h.operator,
-          h.inline([id], 'echo started\nsleep 60\necho not reached\n'),
+          h.inline(
+            [id],
+            'sleep 60 &\necho $! > "$HOME/sleeper.pid"\necho started\nwait\necho not reached\n',
+          ),
         );
         await h.waitFor(
           run.id,
@@ -286,20 +297,26 @@ describe('commands against a real shell', { skip: !databaseUrl || !available }, 
           (r) => targetOf(r, 0).stdout.tail === 'started\n',
           30_000,
         );
+        const sleeper = Number(readFileSync(join(host.home, 'sleeper.pid'), 'utf8').trim());
+        assert.ok(
+          Number.isInteger(sleeper) && sleeper > 1,
+          'the script said the pid of its sleeper',
+        );
+        assert.ok(alive(sleeper), 'the sleeper is there while the script runs');
         assert.equal((await h.operator.post(`/command-runs/${run.id}/cancel`)).status, 200);
         const done = await h.finished(run.id, 60_000);
         assert.equal(done.state, 'cancelled');
         assert.equal(targetOf(done, 0).state, 'cancelled');
         assert.equal(targetOf(done, 0).exitCode, 143);
         assert.equal(targetOf(done, 0).stdout.tail, 'started\n');
-        await sleep(300);
-        const sleepers = spawnSync('sh', ['-c', `ps -eo args | grep -c "[s]leep 60"`], {
-          encoding: 'utf8',
-        });
-        assert.equal(
-          Number(sleepers.stdout.trim() || '0'),
-          0,
-          `no sleeper is left behind (${host.home})`,
+        await until(
+          `the sleeper ${String(sleeper)} of the script to be gone (${host.home})`,
+          () => !alive(sleeper),
+          10_000,
+        );
+        assert.ok(
+          bystander.pid !== undefined && alive(bystander.pid),
+          'what the script did not start is left alone',
         );
       } finally {
         bystander.kill();
