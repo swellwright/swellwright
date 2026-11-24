@@ -236,6 +236,8 @@ export class ChecksService {
       extra: result.summary.extra,
       unknown: result.summary.unknown,
       inventoryCompared: inventory !== null,
+      inventoryServers: inventory?.length ?? 0,
+      unmanaged: result.unmanaged,
       nodes: matched,
     });
     return {

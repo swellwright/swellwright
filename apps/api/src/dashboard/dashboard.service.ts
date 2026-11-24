@@ -197,6 +197,8 @@ export class DashboardService {
                   extra: last.extra,
                   unknown: last.unknown,
                   inventoryCompared: last.inventoryCompared,
+                  inventoryServers: last.inventoryServers,
+                  unmanaged: last.unmanaged,
                 },
         };
       }),

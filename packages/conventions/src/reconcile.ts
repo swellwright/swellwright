@@ -58,6 +58,12 @@ export interface ReconcileResult {
   readonly rows: ReconciliationRow[];
   readonly summary: ReconciliationSummary;
   readonly truncated: boolean;
+  /**
+   * How many nodes of the panel have no server in the inventory (`node.server` rows that are `missing`), counted over
+   * every row, not only the ones kept in `rows`. With an empty inventory that is every node: a place to start, not a
+   * drift, and the dashboard needs to tell it from a difference that is one.
+   */
+  readonly unmanaged: number;
 }
 
 /** The names a run has to look up, most important first: node addresses, then servers, then host addresses. */
@@ -236,7 +242,13 @@ export function reconcile(input: ReconcileInput): ReconcileResult {
   const all = rows.rows;
   const summary = summarise(all);
   const limited = all.slice(0, CONVENTION_PACK_LIMITS.rows);
-  return { rows: limited, summary, truncated: all.length > limited.length };
+  const unmanaged = all.filter((row) => row.check === 'node.server' && row.status === 'missing');
+  return {
+    rows: limited,
+    summary,
+    truncated: all.length > limited.length,
+    unmanaged: unmanaged.length,
+  };
 }
 
 function summarise(rows: readonly ReconciliationRow[]): ReconciliationSummary {

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
 import {
+  AttentionFeedSchema,
   ConventionLastRunSchema,
   ConventionPackValidationSchema,
   ConventionPackVersionListSchema,
@@ -14,6 +15,7 @@ import {
   ImpactReportSchema,
   type ImpactReport,
   ImpactTargetSchema,
+  RECONCILIATION_CHECKS,
   ReconciliationReportSchema,
 } from '@swellwright/contracts';
 import { DnsQueryError, type DnsQuery } from '@swellwright/conventions';
@@ -649,6 +651,80 @@ describe('the convention pack over the API', { skip: !databaseUrl }, () => {
     );
   });
 });
+
+/** What the dashboard says when the inventory has no servers yet, which is where everyone starts. */
+describe(
+  'the dashboard and a reconciliation against an empty inventory',
+  {
+    skip: !databaseUrl,
+  },
+  () => {
+    let booted: Booted;
+    before(async () => {
+      booted = await boot({ SW_DASHBOARD_CACHE_SECONDS: '0' }, [
+        CHECKS_ZONE,
+        { 'node-3.example.com': 'timeout' },
+      ]);
+    });
+    after(async () => {
+      await shutdown(booted);
+    });
+
+    const reconcile = async () => {
+      const reply = await get(booted.owner, '/reconciliation?refresh=true');
+      assert.equal(reply.status, 200, JSON.stringify(reply.body));
+      return ReconciliationReportSchema.parse(reply.body);
+    };
+    const driftItem = async () => {
+      const reply = await booted.owner.get('/dashboard/attention');
+      assert.equal(reply.status, 200, JSON.stringify(reply.body));
+      return AttentionFeedSchema.parse(reply.body).items.find(
+        (item) => item.kind === 'reconciliation.drift',
+      );
+    };
+
+    it('warns while the panel has differences of its own, whatever the inventory holds', async () => {
+      const report = await reconcile();
+      assert.equal(report.inventory.servers, 0);
+      assert.ok(report.summary.drift > 0, 'the scenario has drift of its own');
+      assert.equal((await driftItem())?.severity, 'warning');
+    });
+
+    it('calls it a hint once the only difference left is that no node has a server', async () => {
+      const off = RECONCILIATION_CHECKS.filter((check) => check !== 'node.server');
+      const yaml = [
+        'format: swellwright.conventions/v1',
+        'name: Only the inventory',
+        'reconciliation:',
+        '  checks:',
+        ...off.map((check) => `    ${check}: { enabled: false }`),
+        '',
+      ].join('\n');
+      const saved = await booted.owner.call('PUT', '/panel/checks/convention-pack', { yaml });
+      assert.equal(saved.status, 200, JSON.stringify(saved.body));
+      const report = await reconcile();
+      assert.equal(report.inventory.servers, 0);
+      assert.equal(report.summary.drift, 0);
+      assert.equal(report.summary.extra, 0);
+      assert.ok(report.summary.missing > 0, 'the nodes have no server');
+      const item = await driftItem();
+      assert.equal(item?.severity, 'info');
+      assert.equal(item.params['missing'], report.summary.missing);
+    });
+
+    it('is a warning again as soon as the inventory has a server: a fleet that is started and not finished', async () => {
+      const created = await booted.owner.post('/servers', {
+        name: 'srv-lost',
+        address: '203.0.113.9',
+      });
+      assert.equal(created.status, 201, JSON.stringify(created.body));
+      const report = await reconcile();
+      assert.equal(report.inventory.servers, 1);
+      assert.ok(report.summary.missing > 0, 'the nodes that have no server are still reported');
+      assert.equal((await driftItem())?.severity, 'warning');
+    });
+  },
+);
 
 describe('reconciliation over the API', { skip: !databaseUrl }, () => {
   let booted: Booted;

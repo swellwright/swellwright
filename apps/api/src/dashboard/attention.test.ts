@@ -103,6 +103,8 @@ describe('the attention feed: a system with nothing wrong', () => {
           extra: 0,
           unknown: 0,
           inventoryCompared: true,
+          inventoryServers: 3,
+          unmanaged: 0,
         },
       },
       snapshots: {
@@ -291,6 +293,8 @@ describe('the attention feed: conventions and reconciliation', () => {
           extra: 3,
           unknown: 4,
           inventoryCompared: false,
+          inventoryServers: 0,
+          unmanaged: 0,
         },
       },
     });
@@ -307,6 +311,67 @@ describe('the attention feed: conventions and reconciliation', () => {
       [],
       'a reconciliation that never ran says nothing',
     );
+  });
+
+  describe('with an inventory that has no servers', () => {
+    const found = (counts: {
+      drift: number;
+      missing: number;
+      extra: number;
+      inventoryCompared?: boolean;
+      inventoryServers?: number;
+      unmanaged: number;
+    }) =>
+      only(
+        build({
+          reconciliation: {
+            panelConnected: true,
+            last: {
+              ranAt: ago(HOUR),
+              unknown: 0,
+              inventoryCompared: true,
+              inventoryServers: 0,
+              ...counts,
+            },
+          },
+        }),
+        'reconciliation.drift',
+      );
+
+    it('is a hint, not a warning, while the only difference is that every node has no server yet', () => {
+      const item = found({ drift: 0, missing: 13, extra: 0, unmanaged: 13 });
+      assert.equal(item.severity, 'info');
+      assert.equal(item.params['total'], 13, 'the numbers are the same');
+    });
+
+    it('stays a warning when anything else differs, even one thing', () => {
+      assert.equal(found({ drift: 1, missing: 13, extra: 0, unmanaged: 13 }).severity, 'warning');
+      assert.equal(
+        found({ drift: 0, missing: 14, extra: 0, unmanaged: 13 }).severity,
+        'warning',
+        'a missing row that is not a node without a server',
+      );
+      assert.equal(found({ drift: 0, missing: 13, extra: 1, unmanaged: 13 }).severity, 'warning');
+    });
+
+    it('is a warning when the inventory has servers, or was not compared at all', () => {
+      assert.equal(
+        found({ drift: 0, missing: 12, extra: 0, unmanaged: 12, inventoryServers: 1 }).severity,
+        'warning',
+        'a fleet that was started but not finished is still a difference',
+      );
+      assert.equal(
+        found({
+          drift: 0,
+          missing: 2,
+          extra: 0,
+          unmanaged: 0,
+          inventoryCompared: false,
+        }).severity,
+        'warning',
+        'without the inventory the counts are those of the panel itself',
+      );
+    });
   });
 });
 
@@ -675,6 +740,8 @@ describe('the attention feed: ranking, ids and what an item may carry', () => {
           extra: 1,
           unknown: 1,
           inventoryCompared: true,
+          inventoryServers: 3,
+          unmanaged: 1,
         },
       },
       snapshots: {
