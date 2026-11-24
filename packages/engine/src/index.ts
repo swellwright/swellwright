@@ -107,6 +107,8 @@ export {
 } from './recovery.js';
 export {
   InvalidStepError,
+  StepDeferredError,
+  StepFailure,
   defineStep,
   remoteId,
   type DefinedStep,
@@ -117,3 +119,36 @@ export {
   type StepContext,
   type UndoRecordDraft,
 } from './step.js';
+export { StepRegistry, type RegisteredStep } from './registry.js';
+export {
+  FINISH_EVENTS,
+  FenceLostError,
+  LockLostError,
+  NotFoundError,
+  PERSON_EVENTS,
+  RUN_RISKS,
+  StateConflictError,
+  StoreError,
+  type Claim,
+  type Claimed,
+  type FinishEvent,
+  type LockResult,
+  type NewRun,
+  type PersonEvent,
+  type RunEventRow,
+  type RunRecord,
+  type RunRisk,
+  type RunStore,
+  type StepRecord,
+  type TimelineType,
+  type UndoRecordRow,
+} from './store.js';
+export { MemoryRunStore } from './memory-store.js';
+export {
+  CRASH_POINTS,
+  Worker,
+  WorkerCrash,
+  type CrashPoint,
+  type RunOutcome,
+  type WorkerOptions,
+} from './worker.js';

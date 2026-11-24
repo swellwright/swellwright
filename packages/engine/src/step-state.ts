@@ -22,6 +22,8 @@ export const STEP_EVENTS = [
   'start',
   /** A worker found the step `running` after a crash and runs it again (the attempt grows). */
   'restart',
+  /** The step said that it did nothing yet and cannot go on now (the vault is sealed): it goes back to waiting. */
+  'defer',
   /** The checkpoint: the output and the undo records are written with this transition. */
   'succeed',
   /** A person says the interrupted step did its work: it is `succeeded` with no output and no undo records. */
@@ -37,7 +39,13 @@ export type StepEvent = (typeof STEP_EVENTS)[number];
 
 export const STEP_TRANSITIONS = {
   pending: { start: 'running', skip: 'skipped' },
-  running: { restart: 'running', succeed: 'succeeded', mark_done: 'succeeded', fail: 'failed' },
+  running: {
+    restart: 'running',
+    defer: 'pending',
+    succeed: 'succeeded',
+    mark_done: 'succeeded',
+    fail: 'failed',
+  },
   succeeded: { undo_done: 'undone', undo_fail: 'undo_failed' },
   failed: { retry: 'pending' },
   skipped: {},

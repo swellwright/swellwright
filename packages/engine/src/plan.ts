@@ -113,6 +113,8 @@ export interface StepPlanInput {
   readonly key: string;
   readonly title: string;
   readonly estimateSeconds: number;
+  /** What the step is given when it runs: the parameters bound to it. JSON, and never a secret (a reference to one). */
+  readonly input: JsonValue;
   readonly locks: readonly ResourceRef[];
   readonly items: readonly PlanItem[];
 }
@@ -123,6 +125,7 @@ export interface PlannedStep {
   readonly key: string;
   readonly title: string;
   readonly estimateSeconds: number;
+  readonly input: JsonValue;
   /** The locks of the step in the order they are taken, as `lockKey` writes them. */
   readonly locks: readonly string[];
   readonly items: readonly PlanItem[];
@@ -188,11 +191,14 @@ export function buildPlan(input: {
         `Step ${String(index)} (${step.key}) plans more than ${String(MAX_ITEMS_PER_STEP)} changes.`,
       );
     }
+    // An input that cannot be hashed is refused here, with the same reason as for the parameters.
+    canonicalJson(step.input);
     return {
       index,
       key: step.key,
       title: step.title,
       estimateSeconds: step.estimateSeconds,
+      input: step.input,
       locks: orderLocks(step.locks).map(lockKey),
       // `irreversible: false` and no `irreversible` say the same, so they are written the same (and hash the same).
       items: step.items.map((item): PlanItem => ({
@@ -220,9 +226,9 @@ export function buildPlan(input: {
 }
 
 /**
- * The hash that an approval is bound to. It covers what the run will change: the workflow, its parameters, the steps in
- * order, their locks and their planned changes. It does not cover the title and the estimate of a step, which only
- * describe it: a better estimate from the history is not a different plan.
+ * The hash that an approval is bound to. It covers what the run will do: the workflow, its parameters, the steps in
+ * order, what each is given, their locks and their planned changes. It does not cover the title and the estimate of a
+ * step, which only describe it: a better estimate from the history is not a different plan.
  */
 export function planHash(plan: RunPlan): string {
   return sha256Hex(
@@ -232,6 +238,7 @@ export function planHash(plan: RunPlan): string {
       steps: plan.steps.map((step) => ({
         index: step.index,
         key: step.key,
+        input: step.input,
         locks: step.locks,
         items: step.items,
       })),

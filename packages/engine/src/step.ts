@@ -1,7 +1,8 @@
 // What a step is (ADR 0048, "The step contract"; design 08 section 2).
 //
 // The contract of the design with what the core needs on top of it: the declarations that decide how an interrupted step is
-// recovered, a context that carries the fence, the cancellation signal, the clock and the ports, and a schema for the output.
+// recovered, a context that carries the fence, the cancellation signal, the clock and the ports, and a schema for the input
+// and one for the output.
 // A step never reads the database and never holds a secret: a secret is a reference that a port opens.
 
 import { isKey, type JsonValue, type PlanItem } from './plan.js';
@@ -65,8 +66,39 @@ export interface Step<P, R, Ports = unknown> {
   readonly idempotent?: boolean;
   /** Looks at the world and says whether the effect of an interrupted `apply` is there. */
   readonly reconcile?: (ctx: StepContext<Ports>, params: P) => Promise<ReconcileResult<R>>;
+  /** What the plan stores for the step is checked against it before the step uses it: the row is not trusted. */
+  readonly input: Schema<P>;
   /** What `apply` returns is checked against it before it is written. */
   readonly output: Schema<R>;
+}
+
+/**
+ * What a step throws to fail with a code that people and the API can rely on (the codes of docs/en/api.md). Any other
+ * error ends the step as `step_error`, with a message that is cut short and never read as a code.
+ */
+export class StepFailure extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'StepFailure';
+    this.code = code;
+  }
+}
+
+/**
+ * What a step throws when it cannot go on now and has done nothing yet (the vault is sealed, a port is not ready): the step
+ * goes back to waiting and the run waits with the reason. It is only for the time before the first effect; after it the
+ * step must finish, fail, or leave the decision to its recovery.
+ */
+export class StepDeferredError extends Error {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(`The step cannot go on now: ${reason}`);
+    this.name = 'StepDeferredError';
+    this.reason = reason;
+  }
 }
 
 /** A step as the engine holds it: the defaults are filled in and the declarations are the ones recovery reads. */
