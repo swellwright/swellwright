@@ -161,7 +161,7 @@ const item = (kind: string, target: string, extra: Partial<PlanItem> = {}): Plan
 const deploy = () =>
   buildPlan({
     workflowKey: 'node.deploy',
-    params: { name: 'NL-09', zone: 'example.test', ports: [443, 8443], dns: 'manual' },
+    params: { name: 'edge-09', zone: 'example.test', ports: [443, 8443], dns: 'manual' },
     steps: [
       step('ssh.connect', { estimateSeconds: 5, locks: [serverResource('s-1')] }),
       step('node.snapshot', {
@@ -171,13 +171,13 @@ const deploy = () =>
       }),
       step('node.install.nginx', {
         estimateSeconds: 120,
-        locks: [nodeResource('NL-09'), serverResource('s-1')],
+        locks: [nodeResource('edge-09'), serverResource('s-1')],
         items: [item('package.install', 'nginx'), item('file.write', '/etc/nginx/nginx.conf')],
       }),
       step('panel.create-node', {
         estimateSeconds: 15,
         locks: [panelResource(), dnsZoneResource('example.test')],
-        items: [item('panel.node.create', 'NL-09', { irreversible: true })],
+        items: [item('panel.node.create', 'edge-09', { irreversible: true })],
       }),
     ],
   });
@@ -189,8 +189,8 @@ describe('building a plan', () => {
       plan.steps.map((s) => s.index),
       [0, 1, 2, 3],
     );
-    assert.deepEqual(plan.steps[2]?.locks, ['server:s-1', 'node:NL-09']);
-    assert.deepEqual(plan.locks, ['panel', 'dns-zone:example.test', 'server:s-1', 'node:NL-09']);
+    assert.deepEqual(plan.steps[2]?.locks, ['server:s-1', 'node:edge-09']);
+    assert.deepEqual(plan.locks, ['panel', 'dns-zone:example.test', 'server:s-1', 'node:edge-09']);
   });
 
   it('adds up the estimate and finds the first step that cannot be taken back', () => {
@@ -270,23 +270,23 @@ describe('the hash of a plan', () => {
   it('is this one for the plan above, forever', () => {
     // The text that is hashed, written out by hand: keys sorted, no white space, no title and no estimate.
     const text =
-      '{"params":{"dns":"manual","name":"NL-09","ports":[443,8443],"zone":"example.test"},"steps":[' +
+      '{"params":{"dns":"manual","name":"edge-09","ports":[443,8443],"zone":"example.test"},"steps":[' +
       '{"index":0,"items":[],"key":"ssh.connect","locks":["server:s-1"]},' +
       '{"index":1,"items":[{"kind":"file.read","summary":"file.read /etc/ssh/sshd_config","target":"/etc/ssh/sshd_config"}],"key":"node.snapshot","locks":["server:s-1"]},' +
-      '{"index":2,"items":[{"kind":"package.install","summary":"package.install nginx","target":"nginx"},{"kind":"file.write","summary":"file.write /etc/nginx/nginx.conf","target":"/etc/nginx/nginx.conf"}],"key":"node.install.nginx","locks":["server:s-1","node:NL-09"]},' +
-      '{"index":3,"items":[{"irreversible":true,"kind":"panel.node.create","summary":"panel.node.create NL-09","target":"NL-09"}],"key":"panel.create-node","locks":["panel","dns-zone:example.test"]}' +
+      '{"index":2,"items":[{"kind":"package.install","summary":"package.install nginx","target":"nginx"},{"kind":"file.write","summary":"file.write /etc/nginx/nginx.conf","target":"/etc/nginx/nginx.conf"}],"key":"node.install.nginx","locks":["server:s-1","node:edge-09"]},' +
+      '{"index":3,"items":[{"irreversible":true,"kind":"panel.node.create","summary":"panel.node.create edge-09","target":"edge-09"}],"key":"panel.create-node","locks":["panel","dns-zone:example.test"]}' +
       '],"workflowKey":"node.deploy"}';
     assert.equal(planHash(deploy()), sha256Hex(text));
     assert.equal(
       planHash(deploy()),
-      'bfc134ee1a14c990cb64e48f8ec67e34234bfd07401a165e5eb398f26498e284',
+      '4a94f64181c669244ba3c46108b13467795f07f4f4d70180272a4ecd8380f33e',
     );
   });
 
   it('is the same for the same plan, whatever order the keys of the parameters were made in', () => {
     const again = buildPlan({
       workflowKey: 'node.deploy',
-      params: { dns: 'manual', ports: [443, 8443], zone: 'example.test', name: 'NL-09' },
+      params: { dns: 'manual', ports: [443, 8443], zone: 'example.test', name: 'edge-09' },
       steps: deploy().steps.map((s) => ({
         key: s.key,
         title: s.title,
@@ -309,9 +309,9 @@ describe('the hash of a plan', () => {
 
   const base = () => ({
     workflowKey: 'node.deploy',
-    params: { name: 'NL-09' } as const,
+    params: { name: 'edge-09' } as const,
     steps: [
-      step('a.one', { items: [item('file.write', '/x')], locks: [nodeResource('NL-09')] }),
+      step('a.one', { items: [item('file.write', '/x')], locks: [nodeResource('edge-09')] }),
       step('a.two'),
     ],
   });
@@ -322,14 +322,14 @@ describe('the hash of a plan', () => {
     const reference = planHash(buildPlan(base()));
     const changed = [
       hashOf((p) => ({ ...p, workflowKey: 'node.redeploy' })),
-      hashOf((p) => ({ ...p, params: { name: 'NL-10' } })),
-      hashOf((p) => ({ ...p, params: { name: 'NL-09', extra: 1 } })),
+      hashOf((p) => ({ ...p, params: { name: 'edge-10' } })),
+      hashOf((p) => ({ ...p, params: { name: 'edge-09', extra: 1 } })),
       hashOf((p) => ({ ...p, steps: [...p.steps].reverse() })),
       hashOf((p) => ({ ...p, steps: [p.steps[0], step('a.three')] })),
       hashOf((p) => ({
         ...p,
         steps: [
-          step('a.one', { items: [item('file.write', '/y')], locks: [nodeResource('NL-09')] }),
+          step('a.one', { items: [item('file.write', '/y')], locks: [nodeResource('edge-09')] }),
           p.steps[1],
         ],
       })),
@@ -338,7 +338,7 @@ describe('the hash of a plan', () => {
         steps: [
           step('a.one', {
             items: [item('file.write', '/x', { summary: 'other' })],
-            locks: [nodeResource('NL-09')],
+            locks: [nodeResource('edge-09')],
           }),
           p.steps[1],
         ],
@@ -348,7 +348,7 @@ describe('the hash of a plan', () => {
         steps: [
           step('a.one', {
             items: [item('file.write', '/x', { irreversible: true })],
-            locks: [nodeResource('NL-09')],
+            locks: [nodeResource('edge-09')],
           }),
           p.steps[1],
         ],
@@ -356,7 +356,7 @@ describe('the hash of a plan', () => {
       hashOf((p) => ({
         ...p,
         steps: [
-          step('a.one', { items: [item('file.write', '/x')], locks: [nodeResource('NL-10')] }),
+          step('a.one', { items: [item('file.write', '/x')], locks: [nodeResource('edge-10')] }),
           p.steps[1],
         ],
       })),
@@ -387,7 +387,7 @@ describe('the hash of a plan', () => {
         steps: [
           step('a.one', {
             items: [item('file.write', '/x', { irreversible: false })],
-            locks: [nodeResource('NL-09')],
+            locks: [nodeResource('edge-09')],
           }),
           p.steps[1],
         ],

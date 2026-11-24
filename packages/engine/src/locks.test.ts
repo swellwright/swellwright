@@ -33,7 +33,7 @@ describe('a resource', () => {
   it('is written as `panel`, `server:<id>`, `node:<name>` or `dns-zone:<zone>`', () => {
     assert.equal(lockKey(panelResource()), 'panel');
     assert.equal(lockKey(serverResource('3f2a')), 'server:3f2a');
-    assert.equal(lockKey(nodeResource('NL-01')), 'node:NL-01');
+    assert.equal(lockKey(nodeResource('edge-01')), 'node:edge-01');
     assert.equal(lockKey(dnsZoneResource('example.test')), 'dns-zone:example.test');
   });
 
@@ -41,7 +41,7 @@ describe('a resource', () => {
     for (const ref of [
       panelResource(),
       serverResource('a'),
-      nodeResource('DE-1_x'),
+      nodeResource('edge-1_x'),
       dnsZoneResource('a.b.test'),
     ]) {
       assert.deepEqual(parseLockKey(lockKey(ref)), ref);
