@@ -169,8 +169,6 @@ if [ ! -d "$D" ]; then echo "state=notfound"; exit 0; fi
 code=; fin=; st=; sha=; so=0; se=0
 [ -f "$D/script.sha256" ] && sha=$(cat "$D/script.sha256")
 [ -f "$D/started" ] && st=$(cat "$D/started")
-[ -f "$D/out" ] && so=$(wc -c < "$D/out" | tr -d ' ')
-[ -f "$D/err" ] && se=$(wc -c < "$D/err" | tr -d ' ')
 read_exit() { { IFS= read -r code; IFS= read -r fin; } < "$D/exit"; }
 if [ -f "$D/exit" ]; then
   read_exit
@@ -190,6 +188,10 @@ elif [ -f "$D/pid" ]; then
 else
   state=unknown
 fi
+# Sizes after the state, never before: a reader fetches no more than they say, so a step reported as over must carry the
+# size it finished with (measured first, its last line could be lost). A step still running may be a little short.
+[ -f "$D/out" ] && so=$(wc -c < "$D/out" | tr -d ' ')
+[ -f "$D/err" ] && se=$(wc -c < "$D/err" | tr -d ' ')
 # A step that is over has no use for its secrets: the wrapper removes them first, this is for a wrapper that was killed.
 # (Secrets that belong to root are out of reach of the login user: for those \`removeStepSecrets\` runs through sudo.)
 case $state in exited|lost) [ -d "$D/secrets" ] && rm -rf "$D/secrets" 2>/dev/null;; esac

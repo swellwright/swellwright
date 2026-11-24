@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 
 import { SshConnection } from './connection.js';
 import { SshStepError } from './errors.js';
@@ -224,6 +224,53 @@ describe(
         });
         assert.match(out.stdout, /^state=exited$/mu);
         assert.match(out.stdout, /^code=4$/mu);
+      } finally {
+        base.cleanup();
+      }
+    });
+
+    // What a reader fetches once a step is over is bounded by the size the status gave, so a step that is reported as over
+    // must be reported with the size it finished with. A script that wrote its last line and ended between the look at
+    // the sizes and the look at the exit marker used to be reported as over with the size from before that line, and the
+    // line was never read (seen as a flaky CI test: the last line of a run's output was missing).
+    it('never reports a step as over with a size that misses what it wrote before it ended', () => {
+      const base = tempDir();
+      try {
+        const dir = join(base.path, 'late');
+        mkdirSync(dir, { recursive: true });
+        writeFileSync(join(dir, 'pid'), '2147483646\n');
+        writeFileSync(join(dir, 'out'), 'first\n');
+        // The process is alive. The first `wc` ends the way the step does: right after it has counted, the script writes
+        // one more line and the wrapper publishes the exit marker.
+        const finishing = [
+          'alive() { return 0; }',
+          'wc() {',
+          '  command wc "$@"',
+          '  if [ ! -e "$D/finished" ]; then',
+          '    : > "$D/finished"',
+          `    printf 'late\\n' >> "$D/out"`,
+          `    printf '0\\n2026-01-01T00:00:00Z\\n' > "$D/exit"`,
+          '  fi',
+          '}',
+        ].join('\n');
+        const script = STATUS_SCRIPT.replace('D=$1/$2\n', () => `D=$1/$2\n${finishing}\n`);
+        assert.notEqual(script, STATUS_SCRIPT, 'the stand-in is in place');
+        const look = (): string =>
+          spawnSync('/bin/sh', ['-c', script, 'swellwright-status', base.path, 'late'], {
+            encoding: 'utf8',
+          }).stdout;
+        const sizeOf = (report: string): number => Number(/^out=(\d+)$/mu.exec(report)?.[1]);
+        const onDisk = (): number => statSync(join(dir, 'out')).size;
+
+        const first = look();
+        if (/^state=(exited|lost)$/mu.test(first)) {
+          assert.equal(sizeOf(first), onDisk(), `over, with the size it finished with:\n${first}`);
+        }
+        // The next look, with nothing racing, is over and exact.
+        const second = look();
+        assert.match(second, /^state=exited$/mu);
+        assert.equal(sizeOf(second), 'first\nlate\n'.length);
+        assert.equal(sizeOf(second), onDisk());
       } finally {
         base.cleanup();
       }
