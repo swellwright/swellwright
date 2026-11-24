@@ -13,10 +13,11 @@ implementation, not a production release. API description version: 0.31.0.
 - Phase 3: read-only Remnawave 3.4 client and browsers, snapshots/diff, conventions,
   reconciliation, impact calculation, read API console, baseline checks and dashboard.
 
-Commands currently run through the API's command runner. `apps/worker`,
-`packages/engine` and `packages/policy` are skeletons, not a complete durable workflow
-system. CLI, probe agent, web terminal, panel writes and full deploy/rollback workflows
-remain planned. Architecture diagrams describe the target system unless stated otherwise.
+Commands currently run through the API's command runner. `apps/worker` and
+`packages/policy` are skeletons; `packages/engine` holds only the pure core of the engine
+(see below), with no database and no loop, so there is still no durable workflow system.
+CLI, probe agent, web terminal, panel writes and full deploy/rollback workflows remain
+planned. Architecture diagrams describe the target system unless stated otherwise.
 
 ## Before phase 4
 
@@ -25,7 +26,13 @@ remain planned. Architecture diagrams describe the target system unless stated o
    in the API process because the vault key lives there). Still open: policies P-001
    through P-016 get an ADR of their own before any code enforces approvals. Follow-ups
    also include operator access to `panel:console`, restricted SSH admin keys, snapshot
-   retention and how a separate worker process would get secrets. No engine code exists yet.
+   retention and how a separate worker process would get secrets. Built so far: the pure
+   core in `packages/engine`: the state tables of a run and of a step (the run diagram in
+   `docs/en/architecture.md` is checked against the table by a test), resource locks in one
+   fixed order, the lease and fence arithmetic, the plan with its approval hash, the order
+   and the verdict of an undo, the recovery of an interrupted step and the step contract.
+   Not built yet: the Prisma tables, the `RunStore`, the loop and the fault tests on a real
+   PostgreSQL.
 2. Verify deploy/resume/rollback with a disposable lab, independent fallback access, real
    PostgreSQL and fault injection. A PGlite development stand cannot establish correctness
    under concurrent PostgreSQL transactions.

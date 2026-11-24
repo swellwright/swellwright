@@ -2,7 +2,7 @@
   "name": "@swellwright/engine",
   "version": "0.0.0",
   "private": true,
-  "description": "Workflow engine: scenario DSL, run journal, rollback, strategies, policies",
+  "description": "The run engine core: the state machines of a run and of a step, resource locks, the plan and its hash, the order of an undo and the recovery of an interrupted step. Pure functions, no I/O (ADR 0048)",
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {
@@ -12,13 +12,18 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/**/*.test.*"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test \"dist/**/*.test.js\""
   },
   "dependencies": {
     "@swellwright/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6"
   }
 }

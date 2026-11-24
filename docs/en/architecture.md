@@ -42,22 +42,39 @@ A run is a database record (ADR 0048): a worker claims it from PostgreSQL with a
 
 Approval gates pause a run until a human decides; the decision is bound to a hash of the plan.
 
+The states of a run and the events that move it are one table in `packages/engine` (`run-state.ts`); the diagram below is that table, edge by edge, with the events as labels. A test reads this diagram and fails when it and the table differ, so neither can change alone. `claim` moves `queued` to `running` and takes a run over from a worker whose lease expired (`running` to `running`); a paused run goes back through `queued`, because it has let go of its lease and a worker must claim it again; `succeeded` and `rolled_back` are final.
+
 ```mermaid
 stateDiagram-v2
     [*] --> planned: dry run, changes nothing
-    planned --> awaiting_approval
-    awaiting_approval --> queued: approved
-    queued --> running
-    running --> succeeded
-    running --> failed
-    running --> cancelled
-    running --> paused: on request or by policy
-    paused --> running
-    failed --> rollback_requested
-    cancelled --> rollback_requested
-    rollback_requested --> rolling_back
-    rolling_back --> rolled_back
-    rolling_back --> rollback_partial
+    planned --> awaiting_approval: request_approval
+    planned --> queued: queue
+    planned --> cancelled: cancel
+    awaiting_approval --> queued: approve
+    awaiting_approval --> cancelled: reject, cancel
+    queued --> running: claim
+    queued --> paused: pause
+    queued --> cancelled: cancel
+    running --> running: claim
+    running --> queued: wait
+    running --> paused: pause
+    running --> awaiting_input: await_input
+    running --> succeeded: succeed
+    running --> failed: fail
+    running --> cancelled: cancel
+    paused --> queued: resume
+    paused --> cancelled: cancel
+    awaiting_input --> queued: retry, mark_done
+    awaiting_input --> rollback_requested: request_rollback
+    awaiting_input --> cancelled: cancel
+    failed --> queued: retry
+    failed --> rollback_requested: request_rollback
+    cancelled --> rollback_requested: request_rollback
+    rollback_requested --> rolling_back: claim
+    rolling_back --> rolling_back: claim
+    rolling_back --> rolled_back: rollback_done
+    rolling_back --> rollback_partial: rollback_partial
+    rollback_partial --> rollback_requested: request_rollback
     succeeded --> [*]
     rolled_back --> [*]
 ```
