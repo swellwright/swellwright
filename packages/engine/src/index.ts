@@ -1,5 +1,119 @@
-// @swellwright/engine: package skeleton. Implementation starts in the phase named in docs/en/roadmap.md.
-
 import { API_VERSION } from '@swellwright/contracts';
 
 export const ENGINE_API_VERSION = API_VERSION;
+
+export {
+  createMachine,
+  InvalidTransitionError,
+  type Edge,
+  type InvalidTransitionReason,
+  type Machine,
+  type MachineSpec,
+  type TransitionTable,
+} from './machine.js';
+export {
+  LEASED_RUN_STATES,
+  RUN_EVENTS,
+  RUN_STATES,
+  RUN_TRANSITIONS,
+  canApply,
+  holdsLease,
+  isFinalRunState,
+  isRunEvent,
+  isRunState,
+  legalEvents,
+  needsWorker,
+  runEdges,
+  runMachine,
+  transition,
+  type RunEvent,
+  type RunState,
+} from './run-state.js';
+export {
+  STEP_EVENTS,
+  STEP_STATES,
+  STEP_TRANSITIONS,
+  canApplyToStep,
+  isFinalStepState,
+  isStepEvent,
+  isStepState,
+  stepEdges,
+  stepMachine,
+  transitionStep,
+  type StepEvent,
+  type StepState,
+} from './step-state.js';
+export {
+  RESOURCE_KINDS,
+  InvalidResourceError,
+  dnsZoneResource,
+  lockKey,
+  nodeResource,
+  orderLocks,
+  panelResource,
+  parseLockKey,
+  planAcquisition,
+  resource,
+  serverResource,
+  waitingReason,
+  type Acquisition,
+  type HeldLock,
+  type ResourceKind,
+  type ResourceRef,
+} from './locks.js';
+export {
+  LEASE_TTL_FACTOR,
+  fenceAccepts,
+  isClaimable,
+  isLeaseExpired,
+  leaseExpiresAt,
+  leaseTtlMs,
+  nextFence,
+} from './lease.js';
+export {
+  CanonicalJsonError,
+  InvalidPlanError,
+  MAX_ITEMS_PER_STEP,
+  MAX_PLAN_STEPS,
+  buildPlan,
+  canonicalJson,
+  isKey,
+  planHash,
+  sha256Hex,
+  type JsonValue,
+  type PlanItem,
+  type PlannedStep,
+  type RunPlan,
+  type StepPlanInput,
+} from './plan.js';
+export {
+  UNDO_STATES,
+  rollbackVerdict,
+  undoOrder,
+  type RollbackVerdict,
+  type UndoRecordRef,
+  type UndoState,
+} from './undo.js';
+export {
+  RECONCILE_ANSWERS,
+  afterReconcile,
+  decideRecovery,
+  resumePoint,
+  type AfterReconcile,
+  type ReconcileAnswer,
+  type RecoveryAction,
+  type ResumePoint,
+  type StepDeclaration,
+} from './recovery.js';
+export {
+  InvalidStepError,
+  defineStep,
+  remoteId,
+  type DefinedStep,
+  type PlanContext,
+  type ReconcileResult,
+  type Schema,
+  type Step,
+  type StepContext,
+  type UndoRecordDraft,
+} from './step.js';
