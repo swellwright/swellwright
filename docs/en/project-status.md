@@ -20,9 +20,12 @@ remain planned. Architecture diagrams describe the target system unless stated o
 
 ## Before phase 4
 
-1. Make explicit decisions for workflow approval policies P-001 through P-016 and record
-   phase-4 architecture in the next ADR. Follow-ups also include operator access to
-   `panel:console`, restricted SSH admin keys and snapshot retention.
+1. The engine core is decided: [ADR 0048](../adr/0048-engine-core.md), accepted on
+   2026-11-25 (runs and locks in PostgreSQL only, a lease with a fence token, and the loop
+   in the API process because the vault key lives there). Still open: policies P-001
+   through P-016 get an ADR of their own before any code enforces approvals. Follow-ups
+   also include operator access to `panel:console`, restricted SSH admin keys, snapshot
+   retention and how a separate worker process would get secrets. No engine code exists yet.
 2. Verify deploy/resume/rollback with a disposable lab, independent fallback access, real
    PostgreSQL and fault injection. A PGlite development stand cannot establish correctness
    under concurrent PostgreSQL transactions.

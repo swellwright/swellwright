@@ -63,6 +63,8 @@ Prisma-схема ([`packages/db`](../../../packages/db/README.md), ADR 0013) с
 | `CertIssuer` (опц.) | модуль ACME: аккаунт, домены, срок |
 
 ## 6. Выполнение
+Таблицы первого среза движка решены в [ADR 0048](../../adr/0048-engine-core.md) (на английском): `Run`, `RunStep`, `UndoRecord`, `RunEvent` и `ResourceLock`. Где они расходятся с сущностями ниже (названия, lease и fence у запуска), ADR — более поздний и обязательный текст.
+
 | Сущность | Поля |
 |---|---|
 | `WorkflowDefinition` | код, версия, схема параметров (Zod → JSON Schema), оценка времени |

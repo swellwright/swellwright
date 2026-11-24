@@ -7,9 +7,9 @@
 |---|---|---|---|
 | `swellwright` | own image (multi-stage, non-root; API and console in one) | api + UI serving | internal + published on 127.0.0.1 only, behind nginx |
 | `migrate` | same image, another command | applies the database migrations once, before the server starts | internal only |
-| `swellwright-worker` | same image, different command (planned) | workflow execution, SSH, probes | internal + outbound by allowlist |
+| `swellwright-worker` | same image, different command (planned; the first engine slice runs in the API process, ADR 0048) | workflow execution, SSH, probes | internal + outbound by allowlist |
 | `postgres` | `postgres:17` (pinned by digest) | database | internal only |
-| `valkey` | `valkey/valkey:8` (pinned by digest) | queues, locks | internal only |
+| `valkey` | `valkey/valkey:8` (pinned by digest) | readiness check; rate limits and wake-ups later (runs and locks are in PostgreSQL, ADR 0048) | internal only |
 | `swellwright-probe` | own, separate image (planned, optional) | probe agent on observer machines | outbound HTTPS to the api only |
 
 The image is built by the `Dockerfile` at the repository root with `pnpm install --frozen-lockfile --ignore-scripts`; the base image, pnpm and the Prisma engine are pinned and checked (ADR 0019). Release images are tagged with the version (`swellwright:1.0.0`), never `latest`; CI builds and publishes them (section 10). Until then the image is built from a checkout by the compose file.

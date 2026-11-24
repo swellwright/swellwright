@@ -65,6 +65,8 @@ The Prisma schema ([`packages/db`](../../../packages/db/README.md), ADR 0013) is
 | `CertIssuer` (optional) | ACME module: account, domains, expiry |
 
 ## 6. Execution
+The tables of the first engine slice are decided in [ADR 0048](../../adr/0048-engine-core.md): `Run`, `RunStep`, `UndoRecord`, `RunEvent` and `ResourceLock`. Where they differ from the entities below (names, the lease and the fence on the run), the ADR is the later and the binding text.
+
 | Entity | Fields |
 |---|---|
 | `WorkflowDefinition` | code, version, parameter schema (Zod → JSON Schema), time estimate |
