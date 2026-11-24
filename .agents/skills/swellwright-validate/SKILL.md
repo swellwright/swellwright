@@ -3,8 +3,8 @@ name: swellwright-validate
 description: >-
   Use before running checks, opening a pull request, or merging in this
   repository. Operational detail for the commands in docs/en/development.md
-  and AGENTS.md: known CI flakiness, the hygiene secret, and the merge
-  conventions this project's history actually follows.
+  and AGENTS.md: how to read an intermittent CI failure, the hygiene secret, and
+  the merge conventions this project's history actually follows.
 ---
 
 # Validating and shipping a change in Swellwright
@@ -33,19 +33,42 @@ is not the same as them passing. CI has those services and runs them for real,
 so a change that only touches those paths still needs a report of what was
 and was not exercised locally.
 
-## Known CI flakiness — do not "fix" it by retrying inside the test
+## An intermittent CI failure is a finding — do not retry it away
 
-The SSH pool's acquire-timeout test (`gives up waiting for a free connection
-after the acquire timeout, and recovers`) can time out under a loaded CI
-runner; it is tracked as a real, unresolved issue in
-`docs/en/project-status.md` ("before phase 4"), not something to paper over.
-If a CI `build`/`test` job fails and the log shows exactly this one assertion
-failing, with everything else (including the same job locally) green:
+There is no known flaky test left to rerun. Every intermittent failure this
+project has seen had a cause in the code or in the test, and a loaded runner only
+made it show more often:
 
-1. Read the job log before assuming it is this one: `gh api repos/<owner>/<repo>/actions/jobs/<job-id>/logs --allow-escape-sequences`.
-2. `node --test --test-concurrency=1` stops the remaining test files once one fails, so a long list of `✖ dist/...` lines after it is that abort, not dozens of independent breakages.
-3. One rerun of the failed job (`gh run rerun <run-id> --failed`) is reasonable for this specific, already-documented flake. Do not loop retries, and do not rerun past a second failure without saying so — a second failure in the same run is a signal to investigate, not to retry again.
-4. Any other failing test is a real failure: do not rerun it away.
+- The step that ran twice (`does not start a step twice`): Ubuntu 25.10 and the
+  current `ubuntu-latest` ship the Rust coreutils, whose `mkdir` tells both of
+  two racing callers that it made the directory. Never use `mkdir` as a lock
+  on a server (use an exclusive create such as `set -C`, or `flock`).
+- A line of a run's output missing at the end: the step status measured the
+  size of the output before it looked at the exit marker, and the reader stops at
+  that size. A reading must decide the state first and measure after.
+- A test that looks at the whole machine (`ps | grep sleep 60`): other test
+  files and packages run beside it (turbo runs packages in parallel, and
+  `node --test` runs files in parallel). A test checks the process it started.
+- A timeout that also bounded something it should not (the pool's first
+  connection).
+
+So when a CI `build` job fails and the same code is green locally:
+
+1. Read the job log before guessing: `gh run view <run-id> --job <job-id> --log`.
+   When one package's test task fails, turbo stops the tasks still running, so a
+   long list of `✖ dist/...` lines after the first failure is that abort, not dozens
+   of independent breakages. Find the first failing assertion.
+2. Read the assertion and ask what it assumes about time, order or the machine.
+3. Reproduce it before changing anything: a throwaway branch named `diag/...` with
+   a workflow that repeats the failing suite (half of the passes with the machine
+   kept busy) shows whether it fails, and a test that forces the interleaving
+   (a stand-in `mkdir` or `wc` that finishes the step at the awkward moment) shows
+   why. Commit the test first and see it fail, then the fix. Delete the `diag/`
+   branch; never merge it.
+4. A single rerun (`gh run rerun <run-id> --failed`) is fine to see whether a
+   failure repeats, but it does not close the matter, and a second failure is a
+   signal to investigate, not to retry again. Never add a retry to the test
+   itself, and do not widen a timeout without saying what it bounds.
 
 ## The hygiene secret (`SW_FORBIDDEN_PATTERNS`)
 

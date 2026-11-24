@@ -20,29 +20,44 @@ remain planned. Architecture diagrams describe the target system unless stated o
 
 ## Before phase 4
 
-1. The intermittent SSH test failure `does not start a step twice` (two writes to the
-   counter instead of one) is explained and fixed. Ubuntu 25.10 and the current
-   `ubuntu-latest` runner ship the Rust coreutils (uutils), whose `mkdir` answers success
-   to both of two callers that race for one path (measured: 344 of 600 and 173 of 600
-   tight races). Both the launch (`mkdir "$D"`) and the wrapper (`mkdir .claimed`) used
-   `mkdir` as the claim, so two launches both became the owner and both wrappers ran the
-   script; the earlier `.claimed` fix could not help. The owner is now decided by an
-   exclusive create done by the shell (`set -C`: none in 600). Two regression tests make
-   `mkdir` untrustworthy on purpose. Servers that run Ubuntu 25.10 or later (nodes
-   included) must never rely on `mkdir` as a lock; the node installer uses `flock`.
-2. The SSH pool's acquire-timeout test was failing because `acquireTimeoutMs: 150`
-   bounded establishing the *first* connection too, not just waiting for a busy one;
-   a real handshake occasionally exceeds 150ms on a loaded shared CI runner. Raised to
-   1000ms (held connection to 3000ms, same ratio) rather than retried away; reproduced
-   4 times in a row before the fix, 0 since. The command-shell streaming test has not
-   been independently investigated; do not assume the same cause without reproducing it.
-3. Review `reconciliation.drift` warning severity for an empty inventory.
-4. Make explicit decisions for workflow approval policies P-001 through P-016 and
-   record phase-4 architecture in the next ADR. Follow-ups also include operator access
-   to `panel:console`, restricted SSH admin keys and snapshot retention.
-5. Verify deploy/resume/rollback with a disposable lab, independent fallback access,
-   real PostgreSQL and fault injection. A PGlite development stand cannot establish
-   correctness under concurrent PostgreSQL transactions.
+1. Make explicit decisions for workflow approval policies P-001 through P-016 and record
+   phase-4 architecture in the next ADR. Follow-ups also include operator access to
+   `panel:console`, restricted SSH admin keys and snapshot retention.
+2. Verify deploy/resume/rollback with a disposable lab, independent fallback access, real
+   PostgreSQL and fault injection. A PGlite development stand cannot establish correctness
+   under concurrent PostgreSQL transactions.
 
 This list records pending work; it does not authorize live fleet operations. Update it
 when a finding is resolved. Historical ADRs remain records of the decisions at that time.
+
+## Found and fixed before phase 4
+
+Every intermittent CI failure had a cause in the code or in the test; none was retried away.
+
+- **A step that ran twice** (`does not start a step twice`). Ubuntu 25.10 and the current
+  `ubuntu-latest` runner ship the Rust coreutils (uutils), whose `mkdir` answers success to
+  both of two callers that race for one path (measured: 344 of 600 and 173 of 600 tight
+  races). The launch and the wrapper used `mkdir` as the claim, so both became the owner.
+  The owner is now decided by an exclusive create done by the shell (`set -C`: none in
+  600). Servers that run Ubuntu 25.10 or later (nodes included) must never rely on `mkdir`
+  as a lock; the node installer uses `flock`.
+- **The last line of a run's output missing** (the command-shell streaming test). The step
+  status measured the size of `out` and `err` before it looked at the exit marker, and the
+  command runner reads no further than that size. A script that wrote its last line and
+  ended between the two looks was reported as over with the size from before that line.
+  The state is now decided first and the sizes measured after. A test makes `wc` end the
+  step right after it has counted: it failed in CI (`6 !== 11`) before the fix.
+- **The cancel test counted every `sleep 60` of the machine** (`ps | grep`). Other test
+  files, and the SSH package that turbo runs beside them, run `sleep 60` of their own. The
+  script now says the pid of its sleeper and the test waits for that process; a
+  `sleep 60` that belongs to nobody there is left running next to it. Whether this caused
+  the one failure seen on 22 November was not proven (12 repeats of the whole test run, six
+  of them with the machine kept busy, did not reproduce it); the dependence is removed.
+- **The SSH pool's acquire-timeout test**: `acquireTimeoutMs: 150` bounded establishing
+  the *first* connection too, not just waiting for a busy one; a real handshake
+  occasionally exceeds 150ms on a loaded shared CI runner. Raised to 1000ms (held
+  connection to 3000ms, same ratio) rather than retried away.
+- **`reconciliation.drift` on an empty inventory** was a warning ("13 differences") on a
+  new installation, where every node of the panel is simply not in the inventory yet. While
+  that is the only difference it is now `info`; any other difference, or an inventory with
+  even one server, keeps the warning.
