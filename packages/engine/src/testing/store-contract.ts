@@ -62,8 +62,13 @@ async function claimed(store: RunStore, n: number, now = T0 + 100, workerId = 'w
 
 const refused = (error: unknown): boolean => error instanceof FenceLostError;
 
-export function runStoreContract(name: string, make: () => Promise<StoreUnderTest>): void {
-  describe(`the run store contract: ${name}`, () => {
+export function runStoreContract(
+  name: string,
+  make: () => Promise<StoreUnderTest>,
+  /** `skip` says why the suite cannot run here (no database configured), as the options of `describe` do. */
+  options: { readonly skip?: string | boolean } = {},
+): void {
+  describe(`the run store contract: ${name}`, { skip: options.skip ?? false }, () => {
     describe('a new run', () => {
       it('is `planned`, with a `pending` step for every step of the plan and an event', async () => {
         await withStore(make, async (store) => {

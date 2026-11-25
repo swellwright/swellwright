@@ -63,7 +63,7 @@ Prisma-схема ([`packages/db`](../../../packages/db/README.md), ADR 0013) с
 | `CertIssuer` (опц.) | модуль ACME: аккаунт, домены, срок |
 
 ## 6. Выполнение
-Таблицы первого среза движка решены в [ADR 0048](../../adr/0048-engine-core.md) (на английском): `Run`, `RunStep`, `UndoRecord`, `RunEvent` и `ResourceLock`. Где они расходятся с сущностями ниже (названия, lease и fence у запуска), ADR — более поздний и обязательный текст.
+Таблицы первого среза движка решены в [ADR 0048](../../adr/0048-engine-core.md) (на английском): `Run`, `RunStep`, `UndoRecord`, `RunEvent` и `ResourceLock`. Где они расходятся с сущностями ниже (названия, lease и fence у запуска), ADR — более поздний и обязательный текст. Они существуют как миграция `20261125000000_create_runs` (таблицы `runs`, `run_steps`, `undo_records`, `run_events`, `resource_locks`).
 
 | Сущность | Поля |
 |---|---|

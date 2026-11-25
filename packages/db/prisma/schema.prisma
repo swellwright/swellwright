@@ -988,3 +988,162 @@ model CheckResult {
   @@index([runId, position])
   @@map("check_results")
 }
+
+/// The state of a run of the engine (ADR 0048). The table of transitions is in packages/engine.
+enum RunState {
+  planned
+  awaiting_approval
+  queued
+  running
+  paused
+  awaiting_input
+  succeeded
+  failed
+  cancelled
+  rollback_requested
+  rolling_back
+  rolled_back
+  rollback_partial
+
+  @@map("run_state")
+}
+
+enum RunRisk {
+  low
+  medium
+  high
+
+  @@map("run_risk")
+}
+
+enum RunStepState {
+  pending
+  running
+  succeeded
+  failed
+  skipped
+  undone
+  undo_failed
+
+  @@map("run_step_state")
+}
+
+enum UndoRecordState {
+  pending
+  done
+  failed
+
+  @@map("undo_record_state")
+}
+
+/// A run of the engine: a plan that is executed step by step with a checkpoint after each (ADR 0048). Everything the loop
+/// and the people need to know about it is in the rows, never in a queue or in memory. No secrets in any column: a secret
+/// is a reference to the vault.
+model Run {
+  /// A UUIDv7 made by the engine.
+  id                String    @id @db.Uuid
+  workflowKey       String    @map("workflow_key") @db.VarChar(80)
+  /// What the person gave the workflow.
+  params            Json
+  /// The plan the run is executed by: its steps with their inputs, locks and planned changes.
+  plan              Json
+  /// SHA-256 of the canonical plan; the approvals of a later ADR are bound to it.
+  planHash          String    @map("plan_hash") @db.VarChar(64)
+  state             RunState  @default(planned)
+  risk              RunRisk
+  /// Who asked, as text. No foreign key, like the audit chain: the run outlives the user.
+  requestedBy       String?   @map("requested_by") @db.VarChar(64)
+  /// The times are given by the engine (its clock is a port), so there is no default.
+  createdAt         DateTime  @map("created_at") @db.Timestamptz(3)
+  startedAt         DateTime? @map("started_at") @db.Timestamptz(3)
+  finishedAt        DateTime? @map("finished_at") @db.Timestamptz(3)
+  /// A person asked while a worker held the run; the worker reads it when it renews the lease.
+  cancelRequestedAt DateTime? @map("cancel_requested_at") @db.Timestamptz(3)
+  pauseRequestedAt  DateTime? @map("pause_requested_at") @db.Timestamptz(3)
+  /// The worker that holds the run and when its lease runs out; both null when nobody holds it.
+  workerId          String?   @map("worker_id") @db.VarChar(128)
+  leaseExpiresAt    DateTime? @map("lease_expires_at") @db.Timestamptz(3)
+  /// Only grows, by one for every claim: a write about the run that carries another fence is refused.
+  fence             Int       @default(0)
+  /// Why a run that is queued or waits for a person is not going on.
+  waiting           String?   @db.VarChar(300)
+  /// A run that waited is not claimed before this time, so it does not keep the others from their turn.
+  retryAfter        DateTime? @map("retry_after") @db.Timestamptz(3)
+
+  steps  RunStep[]
+  events RunEvent[]
+  locks  ResourceLock[]
+
+  @@index([state, createdAt, id])
+  @@map("runs")
+}
+
+model RunStep {
+  runId         String       @map("run_id") @db.Uuid
+  /// The place of the step in the run, from 0.
+  index         Int
+  key           String       @db.VarChar(80)
+  state         RunStepState @default(pending)
+  /// How many times the step was started.
+  attempt       Int          @default(0)
+  /// The id of the step on a server: the same for every worker that runs it (`<run id>-<index>`).
+  remoteId      String       @map("remote_id") @db.VarChar(64)
+  input         Json
+  output        Json?
+  errorCode     String?      @map("error_code") @db.VarChar(80)
+  errorMessage  String?      @map("error_message") @db.VarChar(500)
+  startedAt     DateTime?    @map("started_at") @db.Timestamptz(3)
+  finishedAt    DateTime?    @map("finished_at") @db.Timestamptz(3)
+  /// A person chose to retry a step that a crash interrupted and that cannot be retried by itself.
+  retryApproved Boolean      @default(false) @map("retry_approved")
+
+  run         Run          @relation(fields: [runId], references: [id], onDelete: Cascade)
+  undoRecords UndoRecord[]
+
+  @@id([runId, index])
+  @@map("run_steps")
+}
+
+/// How to undo one thing a step did; written in the transaction that records the step's success.
+model UndoRecord {
+  runId     String          @map("run_id") @db.Uuid
+  stepIndex Int             @map("step_index")
+  /// The place among the records of the step, from 0, in the order they were written.
+  seq       Int
+  kind      String          @db.VarChar(80)
+  data      Json
+  state     UndoRecordState @default(pending)
+
+  step RunStep @relation(fields: [runId, stepIndex], references: [runId, index], onDelete: Cascade)
+
+  @@id([runId, stepIndex, seq])
+  @@map("undo_records")
+}
+
+/// The timeline of a run: every event has a number that is the next one of its run, without gaps.
+model RunEvent {
+  runId String   @map("run_id") @db.Uuid
+  seq   Int
+  at    DateTime @db.Timestamptz(3)
+  type  String   @db.VarChar(40)
+  data  Json
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@id([runId, seq])
+  @@map("run_events")
+}
+
+/// A lock on a resource (`server:<id>`, `node:<name>`, `dns-zone:<zone>`, `panel`), held by a run with the fence of its
+/// worker. A lock whose time has passed can be taken over by another run.
+model ResourceLock {
+  key       String   @id @db.VarChar(160)
+  runId     String   @map("run_id") @db.Uuid
+  fence     Int
+  expiresAt DateTime @map("expires_at") @db.Timestamptz(3)
+
+  run Run @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@map("resource_locks")
+}
