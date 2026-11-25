@@ -272,7 +272,7 @@ describe('the client of the API console', () => {
         assert.ok(!decoded.includes(secret), `the template holds ${secret}`);
         assert.ok(!result.body.includes(secret));
       }
-      assert.ok(decoded.includes('node-1.example.com'), 'what is not secret is readable');
+      assert.match(decoded, /node-1\.example\.com/u, 'what is not secret is readable');
       assert.ok(result.maskedCount >= 3);
     } finally {
       client.close();

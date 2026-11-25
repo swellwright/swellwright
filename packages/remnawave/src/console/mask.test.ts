@@ -294,7 +294,7 @@ describe('masking for the API console', () => {
     const line = `see vless://00000000-0000-4000-8000-0000000091aa${AT}node.example.com:443`;
     const byShape = maskConsoleText(line, 'standard', KEY);
     assert.ok(!byShape.value.includes('0000000091aa'));
-    assert.ok(byShape.value.includes('node.example.com'));
+    assert.match(byShape.value, /node\.example\.com/u);
     assert.ok(byShape.count >= 1);
   });
 
@@ -336,7 +336,7 @@ describe('masking for the API console', () => {
     }
     // The document is still the template: its structure and its harmless values are readable.
     assert.ok(decoded.includes('type: trojan'));
-    assert.ok(decoded.includes('node-1.example.com'));
+    assert.match(decoded, /node-1\.example\.com/u);
     assert.match(decoded, /\[masked:[0-9a-f]{8}\]/u);
     assert.ok(count >= 3);
   });
@@ -664,7 +664,7 @@ describe('masking for the API console', () => {
     const input = `https://user:synthetic-pass${AT}example.com: label # comment\n`;
     const { value } = maskConsoleText(input, 'standard', KEY);
     assert.ok(!value.includes('synthetic-pass'), value);
-    assert.ok(value.includes('example.com'));
+    assert.match(value, /example\.com/u);
     const template = maskConsoleJson(
       { encodedTemplateYaml: Buffer.from(input, 'utf8').toString('base64') },
       'standard',
