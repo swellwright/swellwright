@@ -400,6 +400,18 @@ describe('the panel client against a fake panel', () => {
       assert.equal(away.reason, 'redirect_refused');
       assert.equal(panel.requests.filter((r) => r.path.includes('steal')).length, 0);
 
+      // Same origin, but with credentials in the address: not followed.
+      panel.clearInjections();
+      panel.requests.length = 0;
+      const withUser = new URL('/api/hosts', panel.url);
+      withUser.username = 'someone';
+      withUser.password = 'something';
+      panel.inject('/api/nodes', { kind: 'redirect', location: withUser.href }, 1);
+      const credentials = await failure(() => make().nodes());
+      assert.ok(credentials instanceof PanelUnavailableError);
+      assert.equal(credentials.reason, 'redirect_refused');
+      assert.equal(panel.countRequests('/api/hosts'), 0);
+
       panel.clearInjections();
       panel.requests.length = 0;
       panel.inject('/api/nodes', { kind: 'redirect', location: '/api/nodes' });

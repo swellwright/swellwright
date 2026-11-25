@@ -26,6 +26,7 @@ import { CodedHttpException, VaultSealedException } from '../http.js';
 import { ServersService } from '../servers/servers.service.js';
 import { type SshSession, SshService } from '../servers/ssh.service.js';
 import { CONFIG, DATABASE } from '../tokens.js';
+import { deadlineBudget, REGEX_DEADLINE_MS, testWithDeadline } from '../common/regex-deadline.js';
 import { BaselinesService } from './baselines.service.js';
 import { countOf, evaluateCheck } from './evaluate.js';
 import { diffResults, trendOf } from './diff.js';
@@ -398,9 +399,14 @@ export class CheckRunner implements OnApplicationBootstrap, BeforeApplicationShu
         `The server answered, but not with the output of the observation script (exit status ${String(observed.exitCode)}). A restricted shell, a forced command or a login banner can cause this.`,
       );
     }
+    // All the `matches` of one run share a budget of blocking time: a document of many slow patterns ends in errors,
+    // not in a long stall of the API.
+    const budget = deadlineBudget();
+    const test = (regex: RegExp, text: string): boolean | 'timeout' =>
+      testWithDeadline(regex, text, REGEX_DEADLINE_MS, budget);
     const rows = document.checks.map((check, position) => {
       const observation = parsed.observations.get(plan.observationOf[position] ?? 0);
-      const outcome = evaluateCheck(check, observation);
+      const outcome = evaluateCheck(check, observation, test);
       const expectation = Object.entries(check.expect)[0] ?? ['equals', null];
       return {
         position,

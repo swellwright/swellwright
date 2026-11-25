@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { regexBudgetIssue } from './regex-budget.js';
 import { ServerNameSchema } from './servers.js';
 import { RUN_SECRET_TYPES } from './vault.js';
 
@@ -152,13 +153,108 @@ export function parameterEnvName(name: string): string {
   return `SW_PARAM_${name.toUpperCase()}`;
 }
 
-/** The expression that decides whether a string value is allowed: the whole value must match, `u` flag. */
-export function compileParameterPattern(pattern: string): RegExp | undefined {
+/**
+ * Why the pattern of a string parameter is refused: it does not compile, or matching a value of up to
+ * `MAX_STRING_PARAMETER_LENGTH` characters could backtrack for a long time (the check runs in the API process).
+ */
+export function parameterPatternIssue(pattern: string): string | undefined {
+  return parameterPatternSyntaxIssue(pattern) ?? regexBudgetIssue(`^(?:${pattern})$`);
+}
+
+/**
+ * Whether the pattern of a string parameter is a regular expression at all: the rule a stored definition has always
+ * been checked against. The schema reads stored scripts with this rule only, so a script saved before the bound on
+ * matching keeps its parameters (an editor shows them and can correct them); the bound applies when a definition is
+ * written (`parameterWriteIssues`) and when a value is checked against the pattern.
+ */
+export function parameterPatternSyntaxIssue(pattern: string): string | undefined {
   try {
-    return new RegExp(`^(?:${pattern})$`, 'u');
+    new RegExp(`^(?:${pattern})$`, 'u');
   } catch {
+    return 'The pattern is not a valid regular expression.';
+  }
+  return undefined;
+}
+
+/**
+ * What the rules for writing a script check beyond the schema, the checks that run a pattern or depend on the bound on
+ * matching: a pattern whose matching could backtrack for long is refused, and a default must match its pattern (run
+ * through the configured runner, so under the API's deadline; a match that could not be decided in time is refused with
+ * a sentence that says so, never taken as a match). A pattern and a default that are stored already on the parameter of
+ * the same name (`stored`) are not checked again: saving an unrelated change of an old script must not lose or block
+ * its definitions, whatever the state of the runner.
+ */
+export function parameterWriteIssues(
+  parameters: readonly ScriptParameter[],
+  stored: readonly ScriptParameter[] = [],
+): ParameterIssue[] {
+  const issues: ParameterIssue[] = [];
+  for (const parameter of parameters) {
+    if (parameter.type !== 'string' || parameter.pattern === undefined) {
+      continue;
+    }
+    const before = stored.find((candidate) => candidate.name === parameter.name);
+    const samePattern = before?.type === 'string' && before.pattern === parameter.pattern;
+    const sameDefault = samePattern && before.default === parameter.default;
+    if (!samePattern) {
+      const issue = parameterPatternIssue(parameter.pattern);
+      if (issue !== undefined) {
+        issues.push({ name: parameter.name, message: issue });
+        continue;
+      }
+    }
+    if (
+      parameter.default === undefined ||
+      sameDefault ||
+      parameter.default.length > parameter.maxLength ||
+      parameterPatternIssue(parameter.pattern) !== undefined
+    ) {
+      continue;
+    }
+    const regex = compileParameterPattern(parameter.pattern);
+    const result = regex === undefined ? false : patternTest(regex, parameter.default);
+    if (result === 'timeout') {
+      issues.push({
+        name: parameter.name,
+        message:
+          'The default could not be checked against the pattern in time (the pattern is too slow, or the time for patterns is spent). Try again in a minute or simplify the pattern.',
+      });
+    } else if (!result) {
+      issues.push({ name: parameter.name, message: 'The default does not match the pattern.' });
+    }
+  }
+  return issues;
+}
+
+/** Runs a parameter's pattern on a value: a match, no match, or `timeout` when it was stopped at a deadline. */
+export type ParameterPatternTest = (regex: RegExp, value: string) => boolean | 'timeout';
+
+let patternTest: ParameterPatternTest = (regex, value) => regex.test(value);
+
+/**
+ * Sets how the patterns of parameters are run. The API sets a runner with a deadline at start (a pattern a person wrote
+ * must not hold its event loop, whatever its estimate said); the console's form keeps the direct one. A `timeout` is
+ * treated like a value that does not match.
+ */
+export function configureParameterPatternTest(test: ParameterPatternTest): void {
+  patternTest = test;
+}
+
+/** Whether a value matches a parameter's pattern; a refused pattern and a stopped match are no. */
+export function matchesParameterPattern(pattern: string, value: string): boolean {
+  const regex = compileParameterPattern(pattern);
+  return regex !== undefined && patternTest(regex, value) === true;
+}
+
+/**
+ * The expression that decides whether a string value is allowed: the whole value must match, `u` flag. Undefined for
+ * a pattern that is refused, also one stored before the bound on matching existed: no value matches it then.
+ */
+export function compileParameterPattern(pattern: string): RegExp | undefined {
+  if (parameterPatternIssue(pattern) !== undefined) {
     return undefined;
   }
+  return new RegExp(`^(?:${pattern})$`, 'u');
 }
 
 export interface ParameterIssue {
@@ -186,17 +282,19 @@ export function parameterDefinitionIssues(
     }
     seen.add(name);
     if (parameter.type === 'string') {
-      const matcher =
-        parameter.pattern === undefined ? undefined : compileParameterPattern(parameter.pattern);
-      if (parameter.pattern !== undefined && matcher === undefined) {
-        issues.push({ name, message: 'The pattern is not a valid regular expression.' });
+      // Only the rule a stored definition has always met (see `parameterPatternSyntaxIssue`).
+      const patternIssue =
+        parameter.pattern === undefined
+          ? undefined
+          : parameterPatternSyntaxIssue(parameter.pattern);
+      if (patternIssue !== undefined) {
+        issues.push({ name, message: patternIssue });
       }
-      if (parameter.default !== undefined) {
-        if (parameter.default.length > parameter.maxLength) {
-          issues.push({ name, message: 'The default is longer than the maximum length.' });
-        } else if (matcher !== undefined && !matcher.test(parameter.default)) {
-          issues.push({ name, message: 'The default does not match the pattern.' });
-        }
+      // Static checks only: the schema also reads stored definitions, and a read never runs a pattern (its answer
+      // would depend on the runner and its budgets). The default is matched against the pattern when a definition is
+      // written (`parameterWriteIssues`) and when a run uses it (`checkParameterValues`).
+      if (parameter.default !== undefined && parameter.default.length > parameter.maxLength) {
+        issues.push({ name, message: 'The default is longer than the maximum length.' });
       }
     } else if (parameter.type === 'integer') {
       if (parameter.min > parameter.max) {
@@ -297,7 +395,16 @@ export function checkParameterValues(
           issues.push({ name, message: `At most ${String(parameter.maxLength)} characters.` });
         } else if (
           parameter.pattern !== undefined &&
-          !(compileParameterPattern(parameter.pattern)?.test(value) ?? false)
+          parameterPatternIssue(parameter.pattern) !== undefined
+        ) {
+          // A pattern stored before the bound on matching that the bound refuses: it is not run.
+          issues.push({
+            name,
+            message: `The pattern of this parameter is refused and is not run: ${parameterPatternIssue(parameter.pattern) ?? ''} Change the script before running it.`,
+          });
+        } else if (
+          parameter.pattern !== undefined &&
+          !matchesParameterPattern(parameter.pattern, value)
         ) {
           issues.push({ name, message: 'The value does not have the expected form.' });
         } else {

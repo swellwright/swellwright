@@ -147,18 +147,94 @@ describe('the status of a check', () => {
     assert.match(evaluateCheck(check, observed({}, 'denied')).message ?? '', /not root/u);
     assert.equal(evaluateCheck(check, undefined).status, 'error');
     assert.equal(evaluateCheck(check, observed({}, 'unsupported')).status, 'skipped');
-    // A field the script did not report is an error as well, and absent/present can still say something about it.
+    // A field the script did not report is an error as well.
     assert.equal(
       evaluateCheck(make('sshd.effective', 'port', { equals: '22' }), observed({ port: null }))
         .status,
       'error',
     );
+  });
+
+  it('never passes absent or present on a field the server could not look at', () => {
+    // `emptyPassword` is null when the login cannot read /etc/shadow: that is "unknown", not "no account".
+    for (const expect of [{ absent: true }, { present: true }]) {
+      for (const severity of ['high', 'low'] as const) {
+        const outcome = evaluateCheck(
+          make('users.login', 'emptyPassword', expect, severity),
+          observed({ emptyPassword: null, count: 2 }),
+        );
+        assert.equal(outcome.status, 'error', JSON.stringify(expect));
+        assert.equal(outcome.observed, null);
+        assert.match(outcome.message ?? '', /could not observe/u);
+      }
+    }
+    // Looked and found none is still a pass, and a name found is still a miss.
     assert.equal(
       evaluateCheck(
-        make('users.login', 'emptyPassword', { absent: true }),
-        observed({ emptyPassword: null }),
+        make('users.login', 'emptyPassword', { absent: true }, 'high'),
+        observed({ emptyPassword: [] }),
       ).status,
       'pass',
+    );
+    assert.equal(
+      evaluateCheck(
+        make('users.login', 'emptyPassword', { absent: true }, 'high'),
+        observed({ emptyPassword: ['ghost'] }),
+      ).status,
+      'fail',
+    );
+    // A field that is null because there is nothing (no verify run yet) keeps the meaning of absent.
+    assert.equal(
+      evaluateCheck(
+        make('installer.journal', 'verifyAgeSeconds', { absent: true }),
+        observed({ exists: true, verifyAgeSeconds: null }),
+      ).status,
+      'pass',
+    );
+  });
+
+  it('does not run a stored pattern that could backtrack for long, and says why', () => {
+    // Saved under older rules: a version of a baseline is immutable, so the evaluator asks again. The patterns are built
+    // from parts so that no analyser takes them for patterns this test runs.
+    const started = performance.now();
+    const outcome = evaluateCheck(
+      make('sshd.effective', 'allowusers', { matches: ['.*', '.*', '.*x'].join('') }, 'high'),
+      observed({ allowusers: 'a'.repeat(590) }),
+    );
+    assert.ok(performance.now() - started < 1000);
+    assert.equal(outcome.status, 'error');
+    assert.match(outcome.message ?? '', /refused/u);
+    assert.equal(
+      evaluateCheck(
+        make('sshd.effective', 'allowusers', { matches: ['(a|', 'a)*b'].join('') }),
+        observed({ allowusers: 'a'.repeat(40) }),
+      ).status,
+      'error',
+    );
+    // A pattern that passes the estimate but is stopped at its deadline is an error, with no observed value in it.
+    const stopped = evaluateCheck(
+      make('sshd.effective', 'allowusers', { matches: '^deploy$' }, 'high'),
+      observed({ allowusers: 'SECRET-LOOKING-VALUE' }),
+      () => 'timeout',
+    );
+    assert.equal(stopped.status, 'error');
+    assert.equal(stopped.observed, null);
+    assert.match(stopped.message ?? '', /too slow/u);
+    assert.ok(!(stopped.message ?? '').includes('SECRET-LOOKING-VALUE'));
+    // The real runner: a slow pattern on the worker never blocks this process for long.
+    const started2 = performance.now();
+    assert.equal(
+      compare('matches', `${'a'.repeat(999)}!`, ['(?:a{0,9}', '){2}a{900}$'].join('')).ok,
+      false,
+    );
+    assert.ok(performance.now() - started2 < 2000);
+    // An ordinary pattern still decides.
+    assert.equal(
+      evaluateCheck(
+        make('sshd.effective', 'maxauthtries', { matches: '^[1-6]$' }, 'high'),
+        observed({ maxauthtries: '9' }),
+      ).status,
+      'fail',
     );
   });
 

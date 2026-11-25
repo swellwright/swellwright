@@ -36,6 +36,8 @@ import { ZodError } from 'zod';
 
 import { AuditService } from '../audit/audit.service.js';
 import { type RequestMeta, requireDatabase } from '../auth/context.js';
+// Sets the deadline under which the patterns of script parameters run in this process.
+import '../common/regex-deadline.js';
 import { WindowLimiter } from '../auth/rate-limit.js';
 import { type AppConfig } from '../config.js';
 import { CodedHttpException, RateLimitedException } from '../http.js';

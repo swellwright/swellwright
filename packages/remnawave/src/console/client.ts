@@ -90,12 +90,41 @@ export class ConsoleClient {
    * back under a name nobody predicted; this client holds the token, so it can. The count is of what was taken out.
    */
   private scrub(text: string): { text: string; count: number } {
-    // A token shorter than this is not a token: scrubbing every "a" of an answer would be worse than useless.
-    if (this.#token.length < 12 || !text.includes(this.#token)) {
-      return { text, count: 0 };
+    let out = text;
+    let count = 0;
+    for (const form of this.#tokenForms) {
+      if (out.includes(form)) {
+        const parts = out.split(form);
+        count += parts.length - 1;
+        out = parts.join('[masked]');
+      }
     }
-    const parts = text.split(this.#token);
-    return { text: parts.join('[masked]'), count: parts.length - 1 };
+    return { text: out, count };
+  }
+
+  /**
+   * The token as it can appear in an answer: itself, in base64 (with and without padding, and the URL form), encoded
+   * for a URL and escaped for JSON. A token shorter than 12 characters is not scrubbed: scrubbing every "a" of an
+   * answer would be worse than useless.
+   */
+  get #tokenForms(): string[] {
+    const token = this.#token;
+    if (token.length < 12) {
+      return [];
+    }
+    const base64 = Buffer.from(token, 'utf8').toString('base64');
+    const forms = [
+      token,
+      base64,
+      base64.replace(/=+$/u, ''),
+      Buffer.from(token, 'utf8').toString('base64url'),
+      encodeURIComponent(token),
+      JSON.stringify(token).slice(1, -1),
+    ];
+    // Longest first, so that a form that contains another is replaced whole.
+    return [...new Set(forms)]
+      .filter((form) => form.length >= 12)
+      .sort((a, b) => b.length - a.length);
   }
 
   close(): void {
@@ -112,7 +141,9 @@ export class ConsoleClient {
         this.scrub(value).text,
       ]),
     );
-    const contentType = raw.headers['content-type']?.split(';')[0]?.trim().toLowerCase() ?? null;
+    // The raw type decides how the answer is read; what is shown or put in an error is the scrubbed one.
+    const rawType = raw.headers['content-type']?.split(';')[0]?.trim().toLowerCase() ?? null;
+    const contentType = rawType === null ? null : this.scrub(rawType).text;
     const common = {
       status: raw.status,
       durationMs: raw.durationMs,
@@ -124,7 +155,7 @@ export class ConsoleClient {
     if (raw.body.length === 0) {
       return { ...common, bodyFormat: 'empty', body: '', truncated: false, maskedCount: 0 };
     }
-    if (contentType !== null && !TEXT_TYPES.test(contentType)) {
+    if (rawType !== null && !TEXT_TYPES.test(rawType)) {
       throw new PanelUnsupportedResponseError(operation.operationId, contentType);
     }
     let decoded: string;
@@ -157,13 +188,16 @@ export class ConsoleClient {
       shown = JSON.stringify(masked.value, null, 2);
       maskedCount = masked.count;
     }
-    const cut = cutToBytes(shown, this.maxBodyBytes);
+    // Once more after decoding: an escape in the answer (`s...` in JSON, `\x73...` in YAML) writes the token only
+    // when it is decoded, and the decoded strings and names are what is shown.
+    const rescrubbed = this.scrub(shown);
+    const cut = cutToBytes(rescrubbed.text, this.maxBodyBytes);
     return {
       ...common,
       bodyFormat: parsed === undefined ? 'text' : 'json',
       body: cut.text,
       truncated: cut.truncated,
-      maskedCount: maskedCount + scrubbed.count,
+      maskedCount: maskedCount + scrubbed.count + rescrubbed.count,
     };
   }
 }

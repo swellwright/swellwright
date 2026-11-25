@@ -200,7 +200,9 @@ obs_systemd_failed() {
   have systemctl || return 1
   _state=$(bounded 5 systemctl is-system-running)
   kv state "${_state:-unknown}"
-  _list=$(bounded 5 systemctl --failed --no-legend --plain --no-pager | awk '{ print $1 }' | head -n "$MAX_LINES")
+  # The status of systemctl itself is kept: a list that could not be read is a failed observation, not "none failed".
+  _raw=$(bounded 5 systemctl --failed --no-legend --plain --no-pager) || return 1
+  _list=$(printf '%s\n' "$_raw" | awk 'NF { print $1 }' | head -n "$MAX_LINES")
   if [ -z "$_list" ]; then
     kv failedCount 0
   else
@@ -222,10 +224,17 @@ obs_service_state() {
   kv enabled "${_enb:-unknown}"
 }
 
-# The listening sockets of a protocol (tcp or udp), as ss prints them: State Recv-Q Send-Q Local Peer [Process].
+# The listening sockets of a protocol (tcp or udp), as ss prints them: State Recv-Q Send-Q Local Peer [Process]. Fails
+# when ss fails (an old ss without -H is asked again without it), so that a caller never takes "could not list" for
+# "nothing listens".
 listening() {
   if [ "$1" = udp ]; then _flag=-lunp; else _flag=-ltnp; fi
-  bounded 10 ss -H "$_flag" 2>/dev/null || bounded 10 ss "$_flag" | tail -n +2
+  if _ss=$(bounded 10 ss -H "$_flag"); then
+    [ -z "$_ss" ] || printf '%s\n' "$_ss"
+    return 0
+  fi
+  _ss=$(bounded 10 ss "$_flag") || return 1
+  printf '%s\n' "$_ss" | tail -n +2
 }
 # The address of a local-address column without its port: [::]:22 -> ::, 0.0.0.0:22 -> 0.0.0.0, *:22 -> *
 addr_of() { printf '%s' "${1%:*}" | sed -e 's/^\[//' -e 's/\]$//'; }
@@ -236,7 +245,8 @@ obs_port_listener() {
   _port=${P_port:-}
   [ -n "$_port" ] || return 1
   _proto=${P_proto:-tcp}
-  _rows=$(listening "$_proto" | awk -v want="$_port" '{ n = split($4, a, ":"); if (a[n] == want) print }')
+  _sockets=$(listening "$_proto") || return 1
+  _rows=$(printf '%s\n' "$_sockets" | awk -v want="$_port" 'NF { n = split($4, a, ":"); if (a[n] == want) print }')
   if [ -z "$_rows" ]; then
     kv listening no
     kv publicly no
@@ -255,9 +265,11 @@ obs_port_listener() {
 
 obs_ports_public() {
   have ss || return 1
+  _tcp=$(listening tcp) || return 1
+  _udp=$(listening udp) || return 1
   _all=$({
-    listening tcp | awk '{ print "tcp " $4 }'
-    listening udp | awk '{ print "udp " $4 }'
+    printf '%s\n' "$_tcp" | awk 'NF { print "tcp " $4 }'
+    printf '%s\n' "$_udp" | awk 'NF { print "udp " $4 }'
   } | while read -r _proto _local; do
     _a=$(addr_of "$_local")
     is_loopback "$_a" && continue
@@ -486,11 +498,27 @@ obs_docker_container() {
   else
     kv uptimeSeconds 0
   fi
-  # The names of the variables are printed. A value never leaves the pipe, except the four that are named here.
-  bounded 10 docker container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$_name" |
-    awk -F= '
-      NF { print "n " $1 }
-      $1 == "SNI_VERIFICATION" || $1 == "NODE_PORT" || $1 == "NODE_ENV" || $1 == "TZ" { print "f " $0 }' |
+  # The names of the variables are printed. A value is never printed, except the four that are named here, and only
+  # when they are plain words. Docker writes every entry as one JSON string, so a value with a line break in it (a PEM
+  # key, a YAML document) stays inside its own line and can never pass for a name: a line that is not a quoted entry is
+  # dropped, and a name must be a variable name. The status of the inspection is kept: a list that could not be read
+  # (a timeout, a container removed meanwhile) fails the observation instead of reading as "no variables".
+  _env=$(bounded 10 docker container inspect --format '{{range .Config.Env}}{{println (json .)}}{{end}}' "$_name") || return 1
+  [ -n "$_env" ] || return 0
+  printf '%s\n' "$_env" |
+    awk '
+      !/^".*"$/ { next }
+      {
+        e = substr($0, 2, length($0) - 2)
+        i = index(e, "=")
+        name = (i > 0) ? substr(e, 1, i - 1) : e
+        if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) next
+        print "n " name
+        if (i > 0 && (name == "SNI_VERIFICATION" || name == "NODE_PORT" || name == "NODE_ENV" || name == "TZ")) {
+          v = substr(e, i + 1)
+          if (v ~ /^[A-Za-z0-9._:\/+-]*$/) print "f " name "=" v
+        }
+      }' |
     head -n 300 | while IFS= read -r _l; do
       case $_l in
         "n "*) kv envNames "${_l#n }" ;;

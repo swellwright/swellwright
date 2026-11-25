@@ -227,6 +227,58 @@ describe('the client of the API console', () => {
     }
   });
 
+  it('follows no redirect at all, not even one inside the origin: the operation that was allowed is the one answered', async () => {
+    const client = open();
+    try {
+      // An open operation redirected to an operation about people, and to a path outside the panel's API.
+      for (const location of ['/api/users', `${panel.url}/api/users`, '/outside-the-api']) {
+        panel.requests.length = 0;
+        panel.inject('/api/nodes', { kind: 'redirect', location }, 1);
+        await assert.rejects(client.send(prepare('NodesController_getNodes')), (error) => {
+          assert.ok(error instanceof PanelUnavailableError);
+          assert.equal(error.reason, 'redirect_refused');
+          return true;
+        });
+        assert.deepEqual(
+          panel.requests.map((r) => r.path),
+          ['/api/nodes'],
+          `the redirect to ${location} was not followed`,
+        );
+      }
+    } finally {
+      client.close();
+    }
+  });
+
+  it('never returns the credentials in the base64 YAML of a subscription template', async () => {
+    const client = open();
+    try {
+      const template = must(
+        panel.fixtures.templates.find((entry) => entry['name'] === 'Template Yaml'),
+      );
+      const result = await client.send(
+        prepare('SubscriptionTemplateController_getTemplateByUuid', {
+          pathParams: { uuid: String(template['uuid']) },
+        }),
+      );
+      assert.equal(result.status, 200);
+      const parsed = JSON.parse(result.body) as { response: { encodedTemplateYaml: string } };
+      const decoded = Buffer.from(parsed.response.encodedTemplateYaml, 'base64').toString('utf8');
+      for (const secret of [
+        FAKE_SECRETS.clientId,
+        FAKE_SECRETS.yamlShortId,
+        FAKE_SECRETS.yamlPassword,
+      ]) {
+        assert.ok(!decoded.includes(secret), `the template holds ${secret}`);
+        assert.ok(!result.body.includes(secret));
+      }
+      assert.ok(decoded.includes('node-1.example.com'), 'what is not secret is readable');
+      assert.ok(result.maskedCount >= 3);
+    } finally {
+      client.close();
+    }
+  });
+
   it('keeps only the headers that are allowed, and drops control characters from them', async () => {
     const client = open();
     try {
@@ -342,6 +394,44 @@ describe('the client of the API console', () => {
       assert.ok(!result.body.includes('0000000091bb'));
       assert.ok(result.body.includes('plain answer'));
       assert.ok(result.maskedCount >= 1);
+    } finally {
+      client.close();
+    }
+  });
+
+  it('takes the panel token out of decoded strings, names, encodings, the content type and errors', async () => {
+    const client = open();
+    const token = panel.token;
+    // The token written with an escape: only decoding the JSON (or the YAML) writes it out.
+    const escapedJson = `\\u${token.charCodeAt(0).toString(16).padStart(4, '0')}${token.slice(1)}`;
+    const escapedYaml = `\\x${token.charCodeAt(0).toString(16).padStart(2, '0')}${token.slice(1)}`;
+    try {
+      for (const [contentType, body] of [
+        ['application/json', `{"echo":"${escapedJson}"}`],
+        ['application/json', `{"${escapedJson}":"as a name"}`],
+        ['application/json', JSON.stringify({ b64: Buffer.from(token).toString('base64') })],
+        ['application/json', JSON.stringify({ url: `x?t=${encodeURIComponent(token)}` })],
+        ['application/yaml', `echo: "${escapedYaml}"\nother: 1\n`],
+        [`text/${token}`, 'ok'],
+      ] as const) {
+        panel.inject('/api/system/health', { kind: 'raw', contentType, body }, 1);
+        const result = await client.send(prepare('SystemController_getRemnawaveHealth'));
+        assert.ok(!JSON.stringify(result).includes(token), `${contentType}: ${body}`);
+        assert.ok(
+          !JSON.stringify(result).includes(Buffer.from(token).toString('base64').slice(0, 40)),
+        );
+      }
+      panel.inject(
+        '/api/system/health',
+        { kind: 'raw', contentType: `image/${token}`, body: 'x' },
+        1,
+      );
+      await assert.rejects(client.send(prepare('SystemController_getRemnawaveHealth')), (error) => {
+        assert.ok(error instanceof PanelUnsupportedResponseError);
+        const everything = `${error.message} ${JSON.stringify(error)} ${String(error.stack)}`;
+        assert.ok(!everything.includes(token), everything);
+        return true;
+      });
     } finally {
       client.close();
     }
@@ -494,6 +584,52 @@ describe('the raw read of the HTTP layer', () => {
     await assert.rejects(async () => http.getRaw('x', '/../other/api'), PanelUrlError);
     await assert.rejects(async () => http.getRaw('x', '/api/../../x'), PanelUrlError);
     assert.equal(seen.length, 1);
+  });
+
+  it('follows a redirect of a typed read only under the prefix of the panel', async () => {
+    const seen: URL[] = [];
+    const redirecting = (location: string) => ({
+      get(request: { url: URL }) {
+        seen.push(request.url);
+        const first = seen.length === 1;
+        return Promise.resolve({
+          status: first ? 302 : 200,
+          headers: first
+            ? { location, 'content-type': 'application/json' }
+            : { 'content-type': 'application/json' },
+          body: new TextEncoder().encode('{"response":[]}'),
+        });
+      },
+      close() {
+        // nothing is open
+      },
+    });
+    for (const outside of [
+      '/other/api/users',
+      '/api/users',
+      'https://panel.example.com/remnax/api',
+    ]) {
+      seen.length = 0;
+      const http = new PanelHttp({
+        baseUrl: 'https://panel.example.com/remna',
+        token: 'a-token-of-some-length',
+        transport: redirecting(outside),
+      });
+      await assert.rejects(http.getJson('x', '/api/nodes'), (error) => {
+        assert.ok(error instanceof PanelUnavailableError);
+        assert.equal(error.reason, 'redirect_refused');
+        return true;
+      });
+      assert.equal(seen.length, 1, `${outside} was not followed`);
+    }
+    seen.length = 0;
+    const inside = new PanelHttp({
+      baseUrl: 'https://panel.example.com/remna',
+      token: 'a-token-of-some-length',
+      transport: redirecting('/remna/api/nodes/'),
+    });
+    assert.deepEqual(await inside.getJson('x', '/api/nodes'), { response: [] });
+    assert.equal(seen.length, 2);
   });
 
   it('does not put the token in an error or a result', async () => {

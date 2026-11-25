@@ -116,13 +116,31 @@ function fieldValue(def: ObservationFieldDef, lines: readonly string[] | undefin
   return def.type === 'number' ? numberOf(first) : booleanOf(first);
 }
 
+/**
+ * Entries of a list that must have a fixed form, whatever the script printed: a container's variables are reported by
+ * name only (ADR 0045), so an entry that is not a variable name (a fragment of a value) is dropped here as well as on
+ * the server, and the four flags must be a known name with a plain word.
+ */
+const ENTRY_FORMS: Readonly<Record<string, Readonly<Record<string, RegExp>>>> = {
+  'docker.container': {
+    envNames: /^[A-Za-z_][A-Za-z0-9_]*$/u,
+    envFlags: /^(?:SNI_VERIFICATION|NODE_PORT|NODE_ENV|TZ)=[A-Za-z0-9._:/+-]*$/u,
+  },
+};
+
 /** Reads the fields of one observation of the catalogue. Keys the catalogue does not know are ignored. */
 function fieldsOf(kind: string, lines: readonly string[]): Record<string, ObservedValue> {
   const def = observationKind(kind);
   const grouped = groupLines(lines);
+  const forms = ENTRY_FORMS[kind];
   const fields: Record<string, ObservedValue> = {};
   for (const field of def?.fields ?? []) {
-    fields[field.name] = fieldValue(field, grouped.get(field.name));
+    const form = forms?.[field.name];
+    const raw = grouped.get(field.name);
+    fields[field.name] = fieldValue(
+      field,
+      form === undefined || raw === undefined ? raw : raw.filter((entry) => form.test(entry)),
+    );
   }
   return fields;
 }

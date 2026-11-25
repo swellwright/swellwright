@@ -33,12 +33,14 @@ checks:
 |---|---|
 | `equals: X` / `notEquals: X` | is exactly X / is not X |
 | `in: [X, Y]` | is one of these (for a list: every entry is one of these, so an empty list passes) |
-| `matches: 'regex'` | the text matches (JavaScript syntax, at most 200 characters, no back reference, no repeated repeating group) |
+| `matches: 'regex'` | the text matches (JavaScript syntax, at most 200 characters, no back reference, and bounded: see below) |
 | `atLeast: N` / `atMost: N` | the number |
 | `contains: X` / `notContains: X` | the list has this entry (for a text: contains it) |
-| `absent: true` / `present: true` | is empty (nothing, an empty text or list) / is not |
+| `absent: true` / `present: true` | is empty (nothing, an empty text or list) / is not. A field the server could not look at (`emptyPassword` without root) is neither: the check is `error` |
 | `versionAtLeast: '3.4.6'` | the version, compared by its numbers part by part (`6.8.0-36-generic` is at least `6.8`) |
 | `ageLessThan: 7d` | a number of seconds is below `30m`, `12h` or `7d` |
+
+A pattern runs in the API process, so one that could make the engine backtrack for long is refused: a repetition of a part that has choices of its own (`(a|b)*` where the branches can begin alike, `(a+)+`, `(a?)*`), or several open-ended repetitions that can take the same characters as what follows them (`.*.*x`, `.*a.*b`). A repetition that the next character decides is fine: `^\d+\.\d+$`, `PermitRootLogin\s+no`, `--ctorigdstport 62050 .*-j DROP`. The pattern of a version saved before this rule is checked again when it runs, and a refused one makes the check `error`. Whatever the check says, a pattern also runs under a deadline of 50 ms: a match that takes longer is stopped and the check is `error`. All the patterns of one run share 300 ms, and a pattern that was stopped once is not run again; the checks past that are `error` as well.
 
 The editor checks the whole document as you type and underlines what is wrong: an unknown kind or field, a parameter the kind does not take, a comparator that does not fit the type of the field (`atMost` on a list).
 

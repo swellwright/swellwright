@@ -3,8 +3,13 @@ import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
-import { ScriptListSchema, ScriptViewSchema } from '@swellwright/contracts';
+import {
+  configureParameterPatternTest,
+  ScriptListSchema,
+  ScriptViewSchema,
+} from '@swellwright/contracts';
 
+import { testWithDeadline } from '../common/regex-deadline.js';
 import { databaseUrl, errorCode } from '../test-support.js';
 import { Harness, eventsOf } from './commands-test-support.js';
 
@@ -107,6 +112,153 @@ describe('the script library', { skip: !databaseUrl }, () => {
       (await h.operator.post('/scripts', { ...goodScript, name: 'x', body: 'a\0b' })).status,
       400,
     );
+  });
+
+  it('keeps the definitions of a script stored with a pattern the rules now refuse, and refuses new ones and its runs', async () => {
+    const client = h.instance.isolated.database.client;
+    // Saved before the bound on matching: a pattern the bound refuses, and an ordinary parameter beside it.
+    const legacy = ['(a|', 'a)*'].join('');
+    const parameters = [
+      {
+        name: 'word',
+        label: 'Word',
+        type: 'string',
+        required: true,
+        pattern: legacy,
+        maxLength: 40,
+      },
+      { name: 'loud', label: 'Loud', type: 'boolean', required: false },
+    ];
+    const row = await client.script.create({
+      data: {
+        name: 'legacy pattern',
+        description: 'Saved before the bound.',
+        body: 'echo "$SW_PARAM_WORD"\n',
+        dangerLevel: 'read',
+        sudo: false,
+        parameters,
+        builtin: false,
+        version: 1,
+        bodySha256: '0'.repeat(64),
+      },
+    });
+    // It is listed with every definition, so an editor shows them.
+    const shown = ScriptViewSchema.parse((await h.observer.get(`/scripts/${row.id}`)).body);
+    assert.deepEqual(
+      shown.parameters.map((parameter) => parameter.name),
+      ['word', 'loud'],
+    );
+    // Saving an unrelated change with the definitions as shown keeps them.
+    const described = await h.operator.call('PATCH', `/scripts/${row.id}`, {
+      description: 'Still saved before the bound.',
+      parameters: shown.parameters,
+    });
+    assert.equal(described.status, 200, JSON.stringify(described.body));
+    assert.deepEqual(
+      ScriptViewSchema.parse(described.body).parameters.map((parameter) => parameter.name),
+      ['word', 'loud'],
+    );
+    // A new pattern of that kind is refused, on a change and on a new script, with the reason.
+    const added = await h.operator.call('PATCH', `/scripts/${row.id}`, {
+      parameters: [
+        ...shown.parameters,
+        {
+          name: 'other',
+          label: 'O',
+          type: 'string',
+          required: false,
+          pattern: legacy,
+          maxLength: 9,
+        },
+      ],
+    });
+    assert.equal(added.status, 400, JSON.stringify(added.body));
+    assert.equal(errorCode(added), 'validation_failed');
+    assert.match(JSON.stringify(added.body), /repeats a part/u);
+    const fresh = await h.operator.post('/scripts', {
+      ...goodScript,
+      name: 'new legacy',
+      parameters,
+    });
+    assert.equal(fresh.status, 400, JSON.stringify(fresh.body));
+    // A run of it is refused before anything is queued, saying why.
+    const run = await h.operator.post('/command-runs', {
+      mode: 'script',
+      scriptId: row.id,
+      serverIds: ['00000000-0000-4000-8000-000000000000'],
+      parameters: { word: 'aaa' },
+    });
+    assert.equal(run.status, 400, JSON.stringify(run.body));
+    assert.match(JSON.stringify(run.body), /refused and is not run/u);
+    await client.script.delete({ where: { id: row.id } });
+  });
+
+  it('reads a stored script without running a pattern, even when the time for patterns is spent', async () => {
+    const client = h.instance.isolated.database.client;
+    const parameters = [
+      {
+        name: 'unit',
+        label: 'Unit',
+        type: 'string',
+        required: false,
+        pattern: '[a-z]+\\.service',
+        maxLength: 40,
+        default: 'nginx.service',
+      },
+      { name: 'loud', label: 'Loud', type: 'boolean', required: false },
+    ];
+    const row = await client.script.create({
+      data: {
+        name: 'stored default',
+        description: 'A default that matches its pattern.',
+        body: 'systemctl status "$SW_PARAM_UNIT"\n',
+        dangerLevel: 'read',
+        sudo: false,
+        parameters,
+        builtin: false,
+        version: 1,
+        bodySha256: '0'.repeat(64),
+      },
+    });
+    // As when the process's budget for patterns is spent: every run of a pattern answers `timeout`, and is counted.
+    let calls = 0;
+    configureParameterPatternTest(() => {
+      calls += 1;
+      return 'timeout';
+    });
+    try {
+      const shown = ScriptViewSchema.parse((await h.observer.get(`/scripts/${row.id}`)).body);
+      assert.deepEqual(
+        shown.parameters.map((parameter) => parameter.name),
+        ['unit', 'loud'],
+      );
+      const listed = ScriptListSchema.parse((await h.observer.get('/scripts')).body);
+      assert.equal(listed.scripts.find((script) => script.id === row.id)?.parameters.length, 2);
+      // An unrelated save keeps every definition.
+      const saved = await h.operator.call('PATCH', `/scripts/${row.id}`, {
+        description: 'Saved while the time for patterns is spent.',
+        parameters: shown.parameters,
+      });
+      assert.equal(saved.status, 200, JSON.stringify(saved.body));
+      assert.equal(ScriptViewSchema.parse(saved.body).parameters.length, 2);
+      assert.equal(calls, 0, 'reading or saving unchanged definitions ran a pattern');
+      // A new default cannot be checked now: it is refused, saying so, and nothing is lost.
+      const changed = await h.operator.call('PATCH', `/scripts/${row.id}`, {
+        parameters: [{ ...parameters[0], default: 'sshd.service' }, parameters[1]],
+      });
+      assert.equal(changed.status, 400, JSON.stringify(changed.body));
+      assert.match(
+        JSON.stringify(changed.body),
+        /could not be checked against the pattern in time/u,
+      );
+      assert.equal(
+        ScriptViewSchema.parse((await h.observer.get(`/scripts/${row.id}`)).body).parameters.length,
+        2,
+      );
+    } finally {
+      configureParameterPatternTest((regex, value) => testWithDeadline(regex, value));
+      await client.script.delete({ where: { id: row.id } });
+    }
   });
 
   it('raises the version with a change of the text only, and records what changed', async () => {

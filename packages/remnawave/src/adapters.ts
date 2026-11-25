@@ -16,9 +16,9 @@ import type {
   PanelSubscriptionSettingsView,
   PanelSubscriptionTemplateView,
 } from '@swellwright/contracts';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { stringify as stringifyYaml } from 'yaml';
 
-import { contentHash, maskSecrets, type MaskOptions, maskText } from './mask.js';
+import { contentHash, maskSecrets, type MaskOptions, maskText, readYamlDocuments } from './mask.js';
 import type {
   ApiTokenDtoType,
   BillingNodeDtoType,
@@ -370,8 +370,10 @@ export function maskedYaml(
   }
   try {
     const text = Buffer.from(encoded, 'base64').toString('utf8');
-    const parsed: unknown = parseYaml(text, { schema: 'core', maxAliasCount: 100, strict: true });
-    if (parsed === null || typeof parsed !== 'object') {
+    // Read with bounds and without the parser's log, which quotes the source (see `readYamlDocuments`).
+    const documents = readYamlDocuments(text);
+    const [parsed] = documents ?? [];
+    if (documents?.length !== 1 || parsed === null || typeof parsed !== 'object') {
       return null;
     }
     const masked = maskSecrets(parsed, context).value;

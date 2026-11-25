@@ -171,6 +171,34 @@ describe('the parser', () => {
     assert.deepEqual(parsed.warnings, []);
   });
 
+  it('keeps only variable names in envNames and plain flags in envFlags, whatever the script printed', () => {
+    const output = [
+      '@@swb v1',
+      '@@swb begin 1 docker.container',
+      '| exists=yes',
+      '| envNames=PATH',
+      // Built from two pieces: a key header written out whole is what the repository hygiene check looks for.
+      ['| envNames=-----BEGIN', 'PRIVATE', 'KEY-----'].join(' '),
+      '| envNames=LEAKED=fragment-of-a-value',
+      '| envNames=two words',
+      '| envNames=_OK_2',
+      '| envFlags=TZ=UTC',
+      '| envFlags=TZ=UTC\\nINJECTED=1',
+      '| envFlags=SECRET_KEY=hunter2',
+      '',
+      '@@swb end 1 0',
+      '@@swb done',
+      '',
+    ].join('\n');
+    const fields = parseObservations(
+      Buffer.from(output),
+      planned(['docker.container name=x']),
+    ).observations.get(1)?.fields;
+    assert.ok(fields);
+    assert.deepEqual(fields['envNames'], ['PATH', '_OK_2']);
+    assert.deepEqual(fields['envFlags'], ['TZ=UTC']);
+  });
+
   it('refuses to guess when an observation is announced twice or never ends', () => {
     const twice = parseObservations(
       Buffer.from(

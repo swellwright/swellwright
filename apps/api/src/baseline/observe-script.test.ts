@@ -8,6 +8,7 @@ import { after, before, describe, it } from 'node:test';
 import { OBSERVATION_KINDS } from '@swellwright/contracts';
 
 import { findShell } from '../servers/ssh-test-support.js';
+import { evaluateCheck } from './evaluate.js';
 import { parseObservations } from './parse.js';
 import type { PlannedObservation } from './plan.js';
 import { loadObserveScript } from './script.js';
@@ -189,11 +190,14 @@ describe('the observation script, read as text', () => {
     assert.ok(!/docker[^\n]*inspect[^\n]*\.Config\.Env[^\n]*>/u.test(code));
     const envUse = functionBody('obs_docker_container');
     assert.ok(envUse.includes('{{range .Config.Env}}'));
-    // Of every variable only the name is kept, besides the four that are not secret.
-    assert.ok(envUse.includes('NF { print "n " $1 }'));
+    // Every entry comes as one JSON string, so a line break inside a value cannot start a line of its own.
+    assert.ok(envUse.includes('{{range .Config.Env}}{{println (json .)}}{{end}}'));
+    assert.ok(!envUse.includes('{{println .}}'));
+    // Of every variable only the name is kept, and only when it is a variable name; besides the four that are not secret.
+    assert.ok(envUse.includes('if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) next'));
     assert.ok(
       envUse.includes(
-        '$1 == "SNI_VERIFICATION" || $1 == "NODE_PORT" || $1 == "NODE_ENV" || $1 == "TZ"',
+        'name == "SNI_VERIFICATION" || name == "NODE_PORT" || name == "NODE_ENV" || name == "TZ"',
       ),
     );
   });
@@ -316,6 +320,16 @@ function buildMachine(options: { root: boolean }): Machine {
   const homeDir = posix(join(root, 'home/deploy'));
   const srvDir = posix(join(root, 'srv'));
   const secretEnv = 'SECRET_KEY=hunter2-this-is-the-node-secret-value';
+  // Values with line breaks whose continuation lines look like `NAME=value`: what docker prints for them is one JSON
+  // string per entry (`\n` written as two characters); the old `{{println .}}` printed the breaks themselves.
+  const multilineEnv = [
+    'SSL_CERT=-----BEGIN CERTIFICATE-----',
+    'LEAKED_NAME=value-fragment-from-a-pem',
+    'MIIBfakecertificatebody',
+    '-----END CERTIFICATE-----',
+  ];
+  const multilineFlag = ['NODE_ENV=production', 'INJECTED_FLAG=1'];
+  const jsonEntry = (entry: string): string => JSON.stringify(entry);
   const answers: Record<string, readonly Answer[]> = {
     id: [['-u', options.root ? '0\n' : '1000\n']],
     uname: [['-r', '6.8.0-36-generic\n']],
@@ -401,8 +415,23 @@ function buildMachine(options: { root: boolean }): Machine {
     ],
     docker: [
       [
-        'container inspect --format {{range .Config.Env}}',
-        `PATH=/usr/bin\n${secretEnv}\nSNI_VERIFICATION=true\nTZ=UTC\nNODE_PORT=62050\n`,
+        'container inspect --format {{range .Config.Env}}{{println .}}',
+        `PATH=/usr/bin\n${secretEnv}\n${multilineEnv.join('\n')}\n${multilineFlag.join('\n')}\nSNI_VERIFICATION=true\nTZ=UTC\nNODE_PORT=62050\n`,
+      ],
+      [
+        'container inspect --format {{range .Config.Env}}{{println (json .)}}',
+        [
+          'PATH=/usr/bin',
+          secretEnv,
+          multilineEnv.join('\n'),
+          multilineFlag.join('\n'),
+          'SNI_VERIFICATION=true',
+          'TZ=UTC',
+          'NODE_PORT=62050',
+        ]
+          .map(jsonEntry)
+          .join('\n')
+          .concat('\n'),
       ],
       [
         'container inspect --format {{.State.Status}}',
@@ -450,7 +479,17 @@ function buildMachine(options: { root: boolean }): Machine {
     root,
     bin,
     work,
-    secrets: [secretKey, shadowHash, 'hunter2-this-is-the-node-secret-value'],
+    secrets: [
+      secretKey,
+      shadowHash,
+      'hunter2-this-is-the-node-secret-value',
+      'LEAKED_NAME',
+      'value-fragment-from-a-pem',
+      'MIIBfakecertificatebody',
+      'BEGIN CERTIFICATE',
+      'INJECTED_FLAG',
+      'production',
+    ],
   };
 }
 
@@ -648,9 +687,12 @@ describe('the observation script against stand-in tools', { skip: !available() }
     });
     assert.equal(fields(25)?.['tag'], '3.4.6');
     assert.equal(fields(25)?.['restartPolicy'], 'always');
+    // Names only: no line of a value, even one that looks like `NAME=value`; a multi-line flag gives its name and no value.
     assert.deepEqual(fields(25)?.['envNames'], [
       'PATH',
       'SECRET_KEY',
+      'SSL_CERT',
+      'NODE_ENV',
       'SNI_VERIFICATION',
       'TZ',
       'NODE_PORT',
@@ -765,6 +807,80 @@ describe('the observation script against stand-in tools', { skip: !available() }
     assert.equal(parsed.observations.get(2)?.fields?.['seconds'], 25_355);
     // The forged marker is in the output only behind "| ".
     assert.ok(!stdout.split('\n').some((line) => line.startsWith('@@swb end 3')));
+  });
+
+  it('reports a failed systemctl or ss as a failed observation, never as "nothing failed" or "nothing listens"', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    // systemctl answers the state and then times out listing the failed units; ss fails with and without -H.
+    makeShim(machine.bin, 'systemctl', [
+      ['is-system-running', 'running\n'],
+      ['--failed', '', 124],
+    ]);
+    makeShim(machine.bin, 'ss', []);
+    const plan = '1\tsystemd.failed\n2\tports.public\n3\tport.listener\tport=22\n';
+    const { stdout } = runScript(machine, plan);
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'systemd.failed', params: {} },
+      { index: 2, kind: 'ports.public', params: {} },
+      { index: 3, kind: 'port.listener', params: { port: '22' } },
+    ]);
+    for (const index of [1, 2, 3]) {
+      assert.equal(parsed.observations.get(index)?.status, 'error', `observation ${String(index)}`);
+    }
+    const check = (kind: string, field: string, expect: Record<string, unknown>) =>
+      evaluateCheck(
+        {
+          id: 'a.b',
+          title: 'A check',
+          category: 'system',
+          severity: 'high',
+          observe: { kind, field },
+          expect,
+        },
+        parsed.observations.get(kind === 'systemd.failed' ? 1 : kind === 'ports.public' ? 2 : 3),
+      ).status;
+    assert.equal(check('systemd.failed', 'failedCount', { atMost: 0 }), 'error');
+    assert.equal(check('ports.public', 'ports', { in: ['tcp/22'] }), 'error');
+    assert.equal(check('port.listener', 'publicly', { equals: false }), 'error');
+  });
+
+  it('fails the container observation when its variables cannot be read, and tells an empty list from it', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    const row =
+      'running|remnawave/node:3.4.6|sha256:abcdef0123456789|always|none|2026-11-20T10:00:00.123456789Z\n';
+    const plan = '1\tdocker.container\tname=remnanode\n';
+    const planned1 = [{ index: 1, kind: 'docker.container', params: { name: 'remnanode' } }];
+    const verdict = (parsed: ReturnType<typeof parseObservations>) =>
+      evaluateCheck(
+        {
+          id: 'a.b',
+          title: 'A check',
+          category: 'system',
+          severity: 'high',
+          observe: { kind: 'docker.container', field: 'envNames', params: { name: 'remnanode' } },
+          expect: { notContains: 'DEBUG' },
+        },
+        parsed.observations.get(1),
+      ).status;
+    // The state is read, then the inspection of the variables fails (a timeout, the container removed meanwhile).
+    makeShim(machine.bin, 'docker', [
+      ['container inspect --format {{.State.Status}}', row],
+      ['container inspect --format {{range .Config.Env}}', '', 1],
+    ]);
+    const failed = parseObservations(Buffer.from(runScript(machine, plan).stdout), planned1);
+    assert.equal(failed.observations.get(1)?.status, 'error');
+    assert.equal(verdict(failed), 'error');
+    // A container without variables is a readable, empty list, and the check passes.
+    makeShim(machine.bin, 'docker', [
+      ['container inspect --format {{.State.Status}}', row],
+      ['container inspect --format {{range .Config.Env}}', ''],
+    ]);
+    const empty = parseObservations(Buffer.from(runScript(machine, plan).stdout), planned1);
+    assert.equal(empty.observations.get(1)?.status, 'ok');
+    assert.deepEqual(empty.observations.get(1)?.fields?.['envNames'], []);
+    assert.equal(verdict(empty), 'pass');
   });
 
   it('answers a plan line it cannot read by skipping it, and an unknown kind by 99', () => {
