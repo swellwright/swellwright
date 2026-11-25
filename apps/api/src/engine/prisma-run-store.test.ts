@@ -13,7 +13,7 @@ import {
 } from '@swellwright/engine/testing';
 
 import { databaseUrl } from '../test-support.js';
-import { PrismaRunStore } from './prisma-run-store.js';
+import { PrismaRunStore, resourceLockName } from './prisma-run-store.js';
 
 const skip = databaseUrl === undefined ? 'SW_TEST_DATABASE_URL is not set' : false;
 
@@ -104,6 +104,67 @@ describe(
         assert.equal(holders[0], results[0].ok ? first.claim.runId : second.claim.runId);
       } finally {
         await close?.();
+      }
+    });
+
+    it('make the renewal, the intent and the release of a run wait for whoever works on the locks of its resources', async () => {
+      for (const operation of ['renewLease', 'beginStep', 'finishRun'] as const) {
+        const isolated = await createIsolatedDatabase(databaseUrl ?? '');
+        let release: () => void = () => undefined;
+        const released = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        try {
+          const store = new PrismaRunStore(isolated.database.client);
+          const run = await store.createRun({
+            id: runId(1),
+            plan: plan([{ locks: [node('n-1')] }]),
+            risk: 'low',
+            requestedBy: null,
+            now: T0,
+          });
+          await store.applyEvent(run.id, 'queue', { now: T0 });
+          const claimed = await store.claimNext({ workerId: 'a', now: T0 + 100, leaseMs: LEASE });
+          assert.ok(claimed);
+          await store.acquireLocks(claimed.claim, { now: T0 + 200, ttlMs: LEASE });
+
+          // Another transaction is deciding about the lock of `node:n-1`, as the acquisition of a competing run does.
+          let started: () => void = () => undefined;
+          const startedPromise = new Promise<void>((resolve) => {
+            started = resolve;
+          });
+          const holder = isolated.database.client.$transaction(async (tx) => {
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${resourceLockName('node:n-1')}))`;
+            started();
+            await released;
+          });
+          await startedPromise;
+
+          const call =
+            operation === 'renewLease'
+              ? store.renewLease(claimed.claim, { now: T0 + 300, leaseMs: LEASE })
+              : operation === 'beginStep'
+                ? store.beginStep(claimed.claim, 0, { now: T0 + 300 })
+                : store.finishRun(claimed.claim, 'wait', { now: T0 + 300, retryAfter: T0 + 9_000 });
+          const early = await Promise.race([
+            call.then(
+              () => 'done',
+              () => 'done',
+            ),
+            new Promise<string>((resolve) => {
+              setTimeout(() => {
+                resolve('waiting');
+              }, 400);
+            }),
+          ]);
+          assert.equal(early, 'waiting', `${operation} did not wait for the lock of the resource`);
+          release();
+          await holder;
+          await call;
+        } finally {
+          release();
+          await isolated.drop();
+        }
       }
     });
 

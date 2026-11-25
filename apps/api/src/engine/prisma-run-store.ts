@@ -51,8 +51,11 @@ type RunRow = Prisma.RunGetPayload<object>;
 type StepRow = Prisma.RunStepGetPayload<object>;
 
 const MAX_ERROR_MESSAGE = 500;
-/** An advisory lock is taken per resource key, in key order, before the rows of the locks are read. */
-const lockOf = (key: string): string => `resource-lock:${key}`;
+/**
+ * The name of the advisory lock of a resource. Whoever reads or writes the lock row of a resource (to take it, to renew it,
+ * to release it, or to check that it is still the run's) holds it until the end of its transaction.
+ */
+export const resourceLockName = (key: string): string => `resource-lock:${key}`;
 /** The advisory lock of a run: whoever writes about the run holds it until the end of the transaction. */
 const runLockOf = (id: string): string => `run:${id}`;
 /** How many claimable runs `claimNext` looks at before it gives up for this poll. */
@@ -162,12 +165,25 @@ export class PrismaRunStore implements RunStore {
     return run;
   }
 
+  /**
+   * Takes the advisory locks of the resources of the run's plan, in the fixed order of the keys, after the lock of the run: an
+   * operation holds the lock of one run and then those of its resources in order, so two operations cannot wait for each
+   * other. Every operation that touches the lock rows of the run (the acquisition of a competing run included) goes
+   * through here, so nobody decides on a row that another transaction is changing.
+   */
+  private async lockResources(tx: Tx, run: RunRow): Promise<void> {
+    for (const key of (run.plan as unknown as RunPlan).locks) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${resourceLockName(key)}))`;
+    }
+  }
+
   /** Every lock of the plan is still a row of this run with this worker's fence. */
   private async verifyLocks(tx: Tx, run: RunRow, claim: Claim): Promise<void> {
     const keys = (run.plan as unknown as RunPlan).locks;
     if (keys.length === 0) {
       return;
     }
+    await this.lockResources(tx, run);
     const rows = await tx.resourceLock.findMany({ where: { key: { in: [...keys] } } });
     const byKey = new Map(rows.map((row) => [row.key, row]));
     for (const key of keys) {
@@ -480,7 +496,9 @@ export class PrismaRunStore implements RunStore {
     input: { readonly now: number; readonly leaseMs: number },
   ): Promise<RunRecord> {
     return this.transaction(async (tx) => {
-      await this.verifyClaim(tx, claim);
+      const run = await this.verifyClaim(tx, claim);
+      // The renewal of the locks must not overlap the decision of another run to take over a lock that looks expired.
+      await this.lockResources(tx, run);
       const expiresAt = at(input.now + input.leaseMs);
       await tx.run.update({ where: { id: claim.runId }, data: { leaseExpiresAt: expiresAt } });
       await tx.resourceLock.updateMany({
@@ -498,11 +516,9 @@ export class PrismaRunStore implements RunStore {
     return this.transaction(async (tx): Promise<LockResult> => {
       const run = await this.verifyClaim(tx, claim);
       const keys = (run.plan as unknown as RunPlan).locks;
-      // The keys are already in the fixed order. Taking the advisory locks in that order, a run that wants a lock that is
-      // being taken waits for the other transaction to end and then sees its rows, and two runs cannot wait for each other.
-      for (const key of keys) {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockOf(key)}))`;
-      }
+      // A run that wants a lock that another transaction is taking, renewing or releasing waits for it to end and then
+      // sees its rows.
+      await this.lockResources(tx, run);
       const rows =
         keys.length === 0
           ? []
@@ -670,6 +686,8 @@ export class PrismaRunStore implements RunStore {
         );
       }
       const run = await this.verifyClaim(tx, claim);
+      // Releasing the locks is a change of their rows too.
+      await this.lockResources(tx, run);
       if (event === 'succeed') {
         await this.verifyLocks(tx, run, claim);
       }
