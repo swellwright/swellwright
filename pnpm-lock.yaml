@@ -58,6 +58,9 @@ importers:
       '@swellwright/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@swellwright/engine':
+        specifier: workspace:*
+        version: link:../../packages/engine
       '@swellwright/plugin-api':
         specifier: workspace:*
         version: link:../../packages/plugin-api

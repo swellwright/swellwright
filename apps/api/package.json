@@ -24,6 +24,7 @@
     "@swellwright/contracts": "workspace:*",
     "@swellwright/conventions": "workspace:*",
     "@swellwright/db": "workspace:*",
+    "@swellwright/engine": "workspace:*",
     "@swellwright/plugin-api": "workspace:*",
     "@swellwright/remnawave": "workspace:*",
     "@swellwright/ssh": "workspace:*",
