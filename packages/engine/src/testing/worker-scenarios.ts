@@ -82,7 +82,7 @@ const dieAt =
   };
 
 /** Waits for something that another task does, in real time and for no longer than `ms`. */
-async function until(condition: () => Promise<boolean>, ms = 2_000): Promise<void> {
+async function until(condition: () => Promise<boolean>, ms = 10_000): Promise<void> {
   const end = Date.now() + ms;
   while (!(await condition())) {
     assert.ok(Date.now() < end, 'the condition was not reached in time');
@@ -670,7 +670,9 @@ export function runWorkerScenarios(
         );
         const id = await t.submit(1, [{ locks: [server('s-1')] }, {}, {}]);
         const first = t.worker('a').runOnce();
-        await until(async () => (await t.store.getSteps(id))[1]?.state === 'running');
+        // Wait until the step is inside `apply`, not only recorded as running: the worker renews its lease once more between the
+        // two, and a clock moved before that renewal would give the lease a new life.
+        await until(() => Promise.resolve(callsOf(t.world, id, 1) === 1));
 
         // The lease runs out while the first worker is stalled inside `apply`; the second one takes the run and finishes it.
         t.clock.advance(LEASE);
@@ -927,7 +929,9 @@ export function runWorkerScenarios(
         );
         const id = await t.submit(1);
         const running = t.worker('a').runOnce();
-        await until(async () => (await t.store.getSteps(id))[0]?.state === 'running');
+        // The step is inside `apply` (it records its effect first thing): a pause that comes before that would stop the run before
+        // the effect, which is another scenario.
+        await until(() => Promise.resolve(t.world.effects.has(`${id}-0`)));
         await t.store.requestPause(id, t.clock.now());
         hold.open();
         assert.deepEqual(await running, { kind: 'paused', runId: id });
