@@ -35,6 +35,11 @@ services:
   swellwright:
     <<: *swellwright
     restart: unless-stopped
+    # On `docker compose stop` the run engine inside the server stops first: it waits for the step in hand for
+    # SW_ENGINE_STOP_TIMEOUT_MS (8 s unless you changed it), then up to 5 s for the writes that were already on their way, and
+    # the rest of the server closes after that. Docker kills the container after 10 s when this is not set, which is a crash for
+    # the run in hand. If you raise SW_ENGINE_STOP_TIMEOUT_MS, raise this by as much: it must stay above that timeout plus 15 s.
+    stop_grace_period: 30s
     # Nothing is written inside the container; /tmp is memory.
     read_only: true
     tmpfs: [/tmp]

@@ -145,6 +145,13 @@ export class StoreError extends Error {
 
 export class NotFoundError extends StoreError {}
 
+/**
+ * A value that no store can keep: a code or a kind longer than its column, a text with a NUL, a lone surrogate. Both stores
+ * refuse it the same way (`limits.ts`), so a value that is stored in memory in a test is stored in PostgreSQL in production,
+ * and the loop never meets a write that only the database refuses (it would repeat the step for ever).
+ */
+export class InvalidDataError extends StoreError {}
+
 /** The run is not in the state the caller saw or expects, or the operation is not for a run in that state. */
 export class StateConflictError extends StoreError {}
 
@@ -206,20 +213,34 @@ export interface RunStore {
       readonly actor?: string | null;
     },
   ): Promise<RunRecord>;
-  /** A run a worker holds gets a flag that the worker reads; any other run that can be cancelled is cancelled now. */
+  /**
+   * A run a worker holds gets a flag that the worker reads; any other run that can be cancelled is cancelled now. A pause for a
+   * run that has a cancel pending (kept for it by a wait) is a cancel: the cancel that was accepted comes first.
+   */
   requestCancel(runId: string, now: number): Promise<RunRecord>;
   requestPause(runId: string, now: number): Promise<RunRecord>;
 
   /**
    * Takes the oldest run a worker can take (`queued`, or `running` with an expired lease) in one step: state, worker, lease,
-   * a fence one higher, and the event.
+   * a fence one higher, and the event. A run that asked for a rollback is not taken: nothing executes an undo yet, and the
+   * loop would run its steps forward.
+   *
+   * `skipWaiting` lists the reasons a run may be waiting with (`vault_sealed`) that this worker cannot do anything about: a
+   * run that waits with one of them is left for a worker that can, so a worker that cannot never takes it just to put it
+   * back with a later time. A run with a request of the people pending (a cancel or a pause that was accepted) is never left:
+   * a cancel needs no vault, and a request that was accepted must not wait for one.
    */
   claimNext(input: {
     readonly workerId: string;
     readonly now: number;
     readonly leaseMs: number;
+    readonly skipWaiting?: readonly string[];
   }): Promise<Claimed | null>;
-  /** Extends the lease and the expiry of the run's locks. Returns the run, with the flags of the people. */
+  /**
+   * Extends the lease and the expiry of the run's locks. Returns the run, with the flags of the people. It fails with
+   * `LockLostError` when a lock of the plan is another run's now, so a worker whose resource was taken learns it at its next
+   * renewal and not at its checkpoint.
+   */
   renewLease(
     claim: Claim,
     input: { readonly now: number; readonly leaseMs: number },
@@ -242,6 +263,7 @@ export interface RunStore {
       readonly undo: readonly UndoRecordDraft[];
     },
   ): Promise<StepRecord>;
+  /** Like every write that changes a step, it fails with `LockLostError` when a lock of the run is another run's now. */
   failStep(
     claim: Claim,
     index: number,
@@ -253,7 +275,15 @@ export interface RunStore {
     index: number,
     input: { readonly now: number; readonly reason: string },
   ): Promise<StepRecord>;
-  /** Lets go of the run: its new state, no worker and no lease, its locks released. */
+  /**
+   * Lets go of the run: its new state, no worker and no lease, its locks released. With `failedStep` the step is written as
+   * failed in the same transaction, so a worker that dies here leaves either the run as it was or the failure whole, never a
+   * run that is `running` with a `failed` step. A finished or paused run has no pending flag of the people left: a cancel
+   * that came too late for a step that failed is moot, and must not turn a later retry into a cancel. A worker that asks for a
+   * person (`await_input`) or pauses while a cancel is pending does not park the run: the cancel that was accepted is carried
+   * out, in the same transaction, and the run is `cancelled` (the returned run says so). Nothing claims a run that waits for a
+   * person or is paused, so a cancel kept for it would never be read.
+   */
   finishRun(
     claim: Claim,
     event: FinishEvent,
@@ -263,6 +293,11 @@ export interface RunStore {
       /** For `wait`: the time before which the run is not claimed again. */
       readonly retryAfter?: number | null;
       readonly data?: JsonValue;
+      readonly failedStep?: {
+        readonly index: number;
+        readonly code: string;
+        readonly message: string;
+      };
     },
   ): Promise<RunRecord>;
   appendEvent(claim: Claim, type: TimelineType, data: JsonValue, now: number): Promise<RunEventRow>;

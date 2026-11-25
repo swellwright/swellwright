@@ -14,9 +14,10 @@ implementation, not a production release. API description version: 0.31.0.
   reconciliation, impact calculation, read API console, baseline checks and dashboard.
 
 Commands currently run through the API's command runner. `apps/worker` and
-`packages/policy` are skeletons; `packages/engine` holds the core and the loop of the engine
-and `apps/api` the store over PostgreSQL (see below), but nothing runs them yet: there is
-still no workflow, so no durable workflow system for people.
+`packages/policy` are skeletons; `packages/engine` holds the core and the loop of the engine,
+and `apps/api` the store over PostgreSQL and the runner that starts the loop with the
+application (see below), but the catalogue of workflows is empty: there is still no durable
+workflow system for people.
 CLI, probe agent, web terminal, panel writes and full deploy/rollback workflows remain
 planned. Architecture diagrams describe the target system unless stated otherwise.
 
@@ -36,9 +37,15 @@ planned. Architecture diagrams describe the target system unless stated otherwis
    PostgreSQL (the tables `runs`, `run_steps`, `undo_records`, `run_events` and
    `resource_locks`, migration `20261125000000_create_runs`), both held to the same suite
    and the same scenarios: a worker killed at each point, a stalled worker, contested
-   locks, cancel and pause; several loops on one server are tested in CI. Not built yet:
-   undo execution, the wiring of the loop into the API process (the ports for SSH, the
-   panel and the vault), and the lab acceptance on a real panel and real nodes.
+   locks, cancel and pause; several loops on one server are tested in CI. The loop now runs
+   inside the API process (`EngineRunner`: it starts with the application and stops
+   before the database and the vault, a step in hand is asked to give up, and a run
+   waits with `vault_sealed` while the vault is sealed); a run is made from a workflow
+   and its parameters (`EngineRunsService`, no route yet, the catalogue of the build is
+   empty). The slice was read in full by three reviewers before it was published and
+   hardened (ADR 0048, "The review of the fourth slice"). Not built yet: the ports for SSH and the panel, undo execution, delivery of
+   secret values to steps with the check of their output, and the lab acceptance on a
+   real panel and real nodes.
 2. Verify deploy/resume/rollback with a disposable lab, independent fallback access, real
    PostgreSQL and fault injection. A PGlite development stand cannot establish correctness
    under concurrent PostgreSQL transactions.

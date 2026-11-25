@@ -2,7 +2,7 @@
   "name": "@swellwright/worker",
   "version": "0.0.0",
   "private": true,
-  "description": "Queue processors and the workflow engine runtime",
+  "description": "Reserved for a standalone process of the run engine; the loop runs in the API process (ADR 0048)",
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {

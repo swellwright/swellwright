@@ -321,3 +321,52 @@ describe('snapshot configuration', () => {
     }
   });
 });
+
+describe('run engine configuration', () => {
+  it('is on, with one loop, a one-second poll and a lease of 30 seconds by default', () => {
+    assert.deepEqual(loadConfig({}, 'v').engine, {
+      enabled: true,
+      concurrency: 1,
+      pollMs: 1000,
+      renewMs: 10_000,
+      waitBackoffMs: 15_000,
+      stopTimeoutMs: 8000,
+    });
+  });
+
+  it('reads every value, switches the loop off with the usual spellings, and bounds each one', () => {
+    const engine = loadConfig(
+      {
+        SW_ENGINE_ENABLED: 'false',
+        SW_ENGINE_CONCURRENCY: '4',
+        SW_ENGINE_POLL_MS: '50',
+        SW_ENGINE_RENEW_MS: '100',
+        SW_ENGINE_WAIT_BACKOFF_MS: '600000',
+        SW_ENGINE_STOP_TIMEOUT_MS: '0',
+      },
+      'v',
+    ).engine;
+    assert.deepEqual(engine, {
+      enabled: false,
+      concurrency: 4,
+      pollMs: 50,
+      renewMs: 100,
+      waitBackoffMs: 600_000,
+      stopTimeoutMs: 0,
+    });
+    assert.equal(loadConfig({ SW_ENGINE_ENABLED: '' }, 'v').engine.enabled, true);
+    for (const bad of [
+      { SW_ENGINE_ENABLED: 'maybe' },
+      { SW_ENGINE_CONCURRENCY: '0' },
+      { SW_ENGINE_CONCURRENCY: '5' },
+      { SW_ENGINE_POLL_MS: '49' },
+      { SW_ENGINE_RENEW_MS: '99' },
+      { SW_ENGINE_RENEW_MS: '60001' },
+      { SW_ENGINE_WAIT_BACKOFF_MS: '99' },
+      { SW_ENGINE_STOP_TIMEOUT_MS: '-1' },
+      { SW_ENGINE_STOP_TIMEOUT_MS: '120001' },
+    ]) {
+      assert.throws(() => loadConfig(bad, 'v'), /Invalid configuration/u, JSON.stringify(bad));
+    }
+  });
+});

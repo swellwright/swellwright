@@ -9,7 +9,7 @@ import {
   leaseTtlMs,
   nextFence,
 } from './lease.js';
-import { RUN_STATES, type RunState } from './run-state.js';
+import { RUN_STATES, needsWorker, type RunState } from './run-state.js';
 
 describe('the lease of a run', () => {
   it('lasts three renewal intervals, so two lost renewals do not cost a live worker its run', () => {
@@ -52,19 +52,24 @@ describe('what a worker can claim', () => {
   const claimable = (state: RunState, lease: number | null): boolean =>
     isClaimable(state, lease, NOW);
 
-  it('claims a queued run and a rollback that was asked for, whatever the lease says', () => {
-    for (const state of ['queued', 'rollback_requested'] as const) {
-      assert.equal(claimable(state, null), true);
-      assert.equal(claimable(state, NOW + 50), true);
-    }
+  it('claims a queued run, whatever the lease says', () => {
+    assert.equal(claimable('queued', null), true);
+    assert.equal(claimable('queued', NOW + 50), true);
   });
 
-  it('claims a run that is running or rolling back only when its lease is out', () => {
-    for (const state of ['running', 'rolling_back'] as const) {
-      assert.equal(claimable(state, NOW + 1), false, `${state} with a live lease`);
-      assert.equal(claimable(state, NOW), true, `${state} at the moment its lease runs out`);
-      assert.equal(claimable(state, NOW - 1), true, `${state} with an expired lease`);
-      assert.equal(claimable(state, null), true, `${state} with no lease at all`);
+  it('claims a running run only when its lease is out', () => {
+    assert.equal(claimable('running', NOW + 1), false, 'a live lease');
+    assert.equal(claimable('running', NOW), true, 'the moment the lease runs out');
+    assert.equal(claimable('running', NOW - 1), true, 'an expired lease');
+    assert.equal(claimable('running', null), true, 'no lease at all');
+  });
+
+  it('leaves a rollback alone: the loop has no executor of undo and would run the steps forward', () => {
+    for (const state of ['rollback_requested', 'rolling_back'] as const) {
+      assert.ok(needsWorker(state), `${state} is a state that wants a worker`);
+      for (const lease of [null, NOW - 1, NOW, NOW + 50]) {
+        assert.equal(claimable(state, lease), false, `${state}, lease ${String(lease)}`);
+      }
     }
   });
 

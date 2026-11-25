@@ -42,15 +42,20 @@ export function fenceAccepts(rowFence: number, writerFence: number): boolean {
 }
 
 /**
- * Can a worker claim a run in this state now? A queued run and a rollback that was asked for can always be claimed; a run
- * that is `running` or `rolling_back` only when the worker that had it let its lease run out.
+ * Can this loop claim a run in this state now? A queued run can always be claimed; a `running` run only when the worker that
+ * had it let its lease run out.
+ *
+ * A run that asked for a rollback (`rollback_requested`, `rolling_back`) needs a worker, but the loop has no executor of undo
+ * yet and goes only forward: it would run the steps of the workflow that the person wanted undone. Such a run is left alone
+ * until the executor exists (ADR 0048, "What is not here"); `needsWorker` says what the machine wants, this says what this
+ * loop can do.
  */
 export function isClaimable(
   state: RunState,
   leaseExpiresAtMs: number | null,
   now: number,
 ): boolean {
-  if (!needsWorker(state)) {
+  if (!needsWorker(state) || state === 'rollback_requested' || state === 'rolling_back') {
     return false;
   }
   return holdsLease(state) ? isLeaseExpired(leaseExpiresAtMs, now) : true;

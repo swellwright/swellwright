@@ -89,7 +89,8 @@ export class StepFailure extends Error {
 /**
  * What a step throws when it cannot go on now and has done nothing yet (the vault is sealed, a port is not ready): the step
  * goes back to waiting and the run waits with the reason. It is only for the time before the first effect; after it the
- * step must finish, fail, or leave the decision to its recovery.
+ * step must finish, fail, or leave the decision to its recovery. The worker enforces that: only a wait from `apply` sends
+ * the step back to `pending`; a wait from `reconcile`, `verify` or `undo` leaves it `running`, as a crash would.
  */
 export class StepDeferredError extends Error {
   readonly reason: string;
@@ -110,6 +111,17 @@ export class InvalidStepError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'InvalidStepError';
+  }
+}
+
+/** A workflow gives a step an input that the step's own schema refuses: the build is wrong, not the caller. */
+export class InvalidStepInputError extends Error {
+  constructor(
+    readonly stepKey: string,
+    detail: string,
+  ) {
+    super(`The input given to the step ${stepKey} is not valid: ${detail.slice(0, 300)}`);
+    this.name = 'InvalidStepInputError';
   }
 }
 

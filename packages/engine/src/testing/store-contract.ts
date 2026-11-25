@@ -9,6 +9,7 @@ import { InvalidTransitionError } from '../machine.js';
 import { planHash } from '../plan.js';
 import {
   FenceLostError,
+  InvalidDataError,
   LockLostError,
   StateConflictError,
   type Claim,
@@ -61,6 +62,14 @@ async function claimed(store: RunStore, n: number, now = T0 + 100, workerId = 'w
 }
 
 const refused = (error: unknown): boolean => error instanceof FenceLostError;
+
+/** A queued run, claimed, with its first step begun: the claim of a worker that is in the middle of a step. */
+async function begun(store: RunStore): Promise<Claim> {
+  await queued(store, 1);
+  const got = await claimed(store, 1);
+  await store.beginStep(got.claim, 0, { now: T0 + 120 });
+  return got.claim;
+}
 
 export function runStoreContract(
   name: string,
@@ -263,6 +272,89 @@ export function runStoreContract(
             takeover: true,
           });
         });
+      });
+
+      it('leaves a run that asked for a rollback alone: nothing executes undo yet, and the loop would run the steps forward', async () => {
+        await withStore(make, async (store) => {
+          const id = await queued(store, 1);
+          await store.applyEvent(id, 'cancel', { now: T0 + 50 });
+          const asked = await store.applyEvent(id, 'request_rollback', { now: T0 + 60 });
+          assert.equal(asked.state, 'rollback_requested');
+          assert.equal(
+            await store.claimNext({ workerId: 'w1', now: T0 + 100, leaseMs: LEASE }),
+            null,
+          );
+          assert.equal((await store.getRun(id))?.state, 'rollback_requested');
+          assert.deepEqual(
+            (await store.getSteps(id)).map((step) => step.state),
+            ['pending', 'pending'],
+          );
+        });
+      });
+
+      it('leaves a run alone that waits with a reason the worker cannot serve, and takes the next one', async () => {
+        await withStore(make, async (store) => {
+          await queued(store, 1);
+          await queued(store, 2);
+          const first = await claimed(store, 1, T0 + 100);
+          await store.finishRun(first.claim, 'wait', {
+            now: T0 + 200,
+            waiting: 'vault_sealed',
+            retryAfter: T0 + 300,
+          });
+          // Run 1 is the older and its time has come, but this worker cannot do anything about a sealed vault.
+          const other = await store.claimNext({
+            workerId: 'sealed',
+            now: T0 + 400,
+            leaseMs: LEASE,
+            skipWaiting: ['vault_sealed'],
+          });
+          assert.equal(other?.claim.runId, runId(2));
+          assert.equal(
+            await store.claimNext({
+              workerId: 'sealed',
+              now: T0 + 400,
+              leaseMs: LEASE,
+              skipWaiting: ['vault_sealed'],
+            }),
+            null,
+          );
+          assert.equal((await store.getRun(runId(1)))?.waiting, 'vault_sealed');
+          // A worker that can serve it takes it, and a reason that is not in the list is no reason to leave a run.
+          const served = await store.claimNext({
+            workerId: 'open',
+            now: T0 + 400,
+            leaseMs: LEASE,
+            skipWaiting: ['something_else'],
+          });
+          assert.equal(served?.claim.runId, runId(1));
+        });
+      });
+
+      it('takes a run that has a request of the people pending even for a worker that cannot serve its reason: a cancel needs no vault', async () => {
+        for (const ask of ['requestCancel', 'requestPause'] as const) {
+          await withStore(make, async (store) => {
+            const id = await queued(store, 1);
+            const first = await claimed(store, 1, T0 + 100);
+            await store[ask](id, T0 + 110);
+            await store.finishRun(first.claim, 'wait', {
+              now: T0 + 120,
+              waiting: 'vault_sealed',
+              retryAfter: T0 + 200,
+            });
+            const got = await store.claimNext({
+              workerId: 'sealed',
+              now: T0 + 300,
+              leaseMs: LEASE,
+              skipWaiting: ['vault_sealed'],
+            });
+            assert.equal(got?.claim.runId, id, ask);
+            assert.equal(
+              ask === 'requestCancel' ? got.run.cancelRequestedAt : got.run.pauseRequestedAt,
+              T0 + 110,
+            );
+          });
+        }
       });
 
       it('leaves a run that waited alone until its time, and then takes it', async () => {
@@ -480,6 +572,40 @@ export function runStoreContract(
         });
       });
 
+      it('are checked at the renewal and at every write about a step: a worker whose lock went to another run learns it at once', async () => {
+        await withStore(make, async (store) => {
+          await queued(store, 2, 2, [{ locks: [node('n-1')] }]);
+          const first = await claimed(store, 2, T0 + 100, 'w1');
+          await store.acquireLocks(first.claim, { now: T0 + 100, ttlMs: LEASE });
+          await store.beginStep(first.claim, 0, { now: T0 + 105 });
+          await queued(store, 1, 2, [{ locks: [node('n-1')] }]);
+          const second = await claimed(store, 1, T0 + 100 + LEASE, 'w2');
+          assert.deepEqual(
+            await store.acquireLocks(second.claim, { now: T0 + 100 + LEASE, ttlMs: LEASE }),
+            { ok: true, keys: ['node:n-1'] },
+          );
+          const lost = (error: unknown): boolean =>
+            error instanceof LockLostError && error.key === 'node:n-1';
+          const now = T0 + 100 + LEASE + 1;
+          await assert.rejects(store.renewLease(first.claim, { now, leaseMs: LEASE }), lost);
+          await assert.rejects(
+            store.failStep(first.claim, 0, { now, code: 'step_error', message: 'm' }),
+            lost,
+          );
+          await assert.rejects(store.deferStep(first.claim, 0, { now, reason: 'r' }), lost);
+          await assert.rejects(
+            store.finishRun(first.claim, 'fail', {
+              now,
+              failedStep: { index: 0, code: 'step_error', message: 'm' },
+            }),
+            lost,
+          );
+          // None of it was written: the step is still running and the lease was not extended.
+          assert.equal((await store.getSteps(runId(2)))[0]?.state, 'running');
+          assert.equal((await store.getRun(runId(2)))?.leaseExpiresAt, T0 + 100 + LEASE);
+        });
+      });
+
       it("are kept by a renewal, and are the same worker's after a takeover of the same run", async () => {
         await withStore(make, async (store) => {
           await queued(store, 1, 2, [{ locks: [node('n-1')] }]);
@@ -612,7 +738,227 @@ export function runStoreContract(
       });
     });
 
+    describe('what a store keeps, the same in every store', () => {
+      it('refuses a code or a kind that does not fit its column, and a text that holds a NUL, and writes nothing of it', async () => {
+        await withStore(make, async (store) => {
+          const claim = await begun(store);
+          const refusedData = (error: unknown): boolean => error instanceof InvalidDataError;
+          await assert.rejects(
+            store.failStep(claim, 0, { now: T0 + 130, code: 'c'.repeat(81), message: 'm' }),
+            refusedData,
+          );
+          await assert.rejects(
+            store.failStep(claim, 0, { now: T0 + 130, code: 'bad\u0000code', message: 'm' }),
+            refusedData,
+          );
+          await assert.rejects(
+            store.checkpointStep(claim, 0, {
+              now: T0 + 130,
+              output: null,
+              undo: [{ kind: 'k'.repeat(81), data: null }],
+            }),
+            refusedData,
+          );
+          await assert.rejects(
+            store.checkpointStep(claim, 0, { now: T0 + 130, output: { a: 'x\u0000y' }, undo: [] }),
+            refusedData,
+          );
+          await assert.rejects(
+            store.checkpointStep(claim, 0, {
+              now: T0 + 130,
+              output: null,
+              undo: [{ kind: 'file.remove', data: { 'k\u0000': 1 } }],
+            }),
+            refusedData,
+          );
+          await assert.rejects(
+            store.checkpointStep(claim, 0, { now: T0 + 130, output: { a: '\ud800' }, undo: [] }),
+            refusedData,
+          );
+          // The step is as it was, no undo record exists, and the run can still be written about.
+          assert.equal((await store.getSteps(runId(1)))[0]?.state, 'running');
+          assert.deepEqual(await store.getUndoRecords(runId(1)), []);
+          assert.deepEqual(
+            (await store.listEvents(runId(1), 0, 50)).map((e) => e.type),
+            ['run.created', 'run.queue', 'run.claim', 'step.start'],
+          );
+          const done = await store.checkpointStep(claim, 0, {
+            now: T0 + 140,
+            output: { fine: true },
+            undo: [{ kind: 'k'.repeat(80), data: { a: 'é€😀' } }],
+          });
+          assert.equal(done.state, 'succeeded');
+        });
+      });
+
+      it('cleans and cuts a message and a reason, which are diagnostics: a NUL is removed, a lone surrogate replaced', async () => {
+        await withStore(make, async (store) => {
+          const claim = await begun(store);
+          const deferred = await store.deferStep(claim, 0, {
+            now: T0 + 125,
+            reason: `r\u0000${'x'.repeat(400)}`,
+          });
+          assert.equal(deferred.state, 'pending');
+          const reason = (await store.listEvents(runId(1), 0, 50)).find(
+            (e) => e.type === 'step.defer',
+          )?.data;
+          assert.deepEqual(reason, { index: 0, reason: `r${'x'.repeat(299)}` });
+          await store.beginStep(claim, 0, { now: T0 + 130 });
+          const failed = await store.failStep(claim, 0, {
+            now: T0 + 140,
+            code: 'step_error',
+            message: `a\u0000b\ud800c${'z'.repeat(900)}`,
+          });
+          assert.equal(failed.errorMessage?.length, 500);
+          assert.ok(failed.errorMessage.startsWith('ab\ufffdc'));
+          assert.ok(!failed.errorMessage.includes('\u0000'));
+          const waiting = await store.finishRun(claim, 'wait', {
+            now: T0 + 150,
+            waiting: `w${'y'.repeat(900)}`,
+            retryAfter: T0 + 9_000,
+          });
+          assert.equal(waiting.waiting?.length, 300);
+        });
+      });
+    });
+
     describe('letting go of a run', () => {
+      it('writes the failure of a step and the end of the run together, and a failure that is refused leaves the run as it was', async () => {
+        await withStore(make, async (store) => {
+          const claim = await begun(store);
+          await assert.rejects(
+            store.finishRun(claim, 'fail', {
+              now: T0 + 130,
+              failedStep: { index: 0, code: 'c'.repeat(81), message: 'm' },
+            }),
+            InvalidDataError,
+          );
+          assert.equal((await store.getRun(runId(1)))?.state, 'running');
+          assert.equal((await store.getSteps(runId(1)))[0]?.state, 'running');
+          const ended = await store.finishRun(claim, 'fail', {
+            now: T0 + 140,
+            data: { index: 0, code: 'host_unreachable' },
+            failedStep: { index: 0, code: 'host_unreachable', message: 'no route' },
+          });
+          assert.equal(ended.state, 'failed');
+          assert.equal(ended.workerId, null);
+          const step = (await store.getSteps(runId(1)))[0];
+          assert.equal(step?.state, 'failed');
+          assert.equal(step.errorCode, 'host_unreachable');
+          assert.equal(step.errorMessage, 'no route');
+          assert.deepEqual(
+            (await store.listEvents(runId(1), 0, 50)).slice(-2).map((e) => e.type),
+            ['step.fail', 'run.fail'],
+          );
+        });
+      });
+
+      it('carries out a cancel that was asked for when the worker asks for a person, instead of parking a run that nothing claims', async () => {
+        await withStore(make, async (store) => {
+          const id = await queued(store, 1);
+          const got = await claimed(store, 1);
+          await store.requestCancel(id, T0 + 110);
+          const after = await store.finishRun(got.claim, 'await_input', {
+            now: T0 + 120,
+            waiting: 'step 0 needs a person',
+          });
+          assert.equal(after.state, 'cancelled');
+          assert.equal(after.cancelRequestedAt, null);
+          assert.equal(after.waiting, null);
+          assert.equal(after.workerId, null);
+          assert.equal(after.finishedAt, T0 + 120);
+          const last = (await store.listEvents(id, 0, 50)).at(-1);
+          assert.equal(last?.type, 'run.cancel');
+          assert.deepEqual(last.data, {
+            from: 'running',
+            to: 'cancelled',
+            data: { instead: 'await_input', reason: 'step 0 needs a person' },
+            waiting: null,
+          });
+        });
+      });
+
+      it('cancels a run that a worker pauses while a cancel is pending: a paused run is claimed by nobody', async () => {
+        await withStore(make, async (store) => {
+          const id = await queued(store, 1);
+          const got = await claimed(store, 1);
+          await store.requestPause(id, T0 + 110);
+          await store.requestCancel(id, T0 + 111);
+          const after = await store.finishRun(got.claim, 'pause', { now: T0 + 120 });
+          assert.equal(after.state, 'cancelled');
+          assert.equal(after.cancelRequestedAt, null);
+          assert.equal(after.pauseRequestedAt, null);
+          const last = (await store.listEvents(id, 0, 50)).at(-1);
+          assert.equal(last?.type, 'run.cancel');
+          assert.deepEqual(last.data, {
+            from: 'running',
+            to: 'cancelled',
+            data: { instead: 'pause', reason: null },
+            waiting: null,
+          });
+        });
+      });
+
+      it('parks a run for a person when only a pause is pending, and the pause is gone with it', async () => {
+        await withStore(make, async (store) => {
+          const id = await queued(store, 1);
+          const got = await claimed(store, 1);
+          await store.requestPause(id, T0 + 110);
+          const after = await store.finishRun(got.claim, 'await_input', {
+            now: T0 + 120,
+            waiting: 'step 0 needs a person',
+          });
+          assert.equal(after.state, 'awaiting_input');
+          assert.equal(after.waiting, 'step 0 needs a person');
+          assert.equal(after.pauseRequestedAt, null);
+        });
+      });
+
+      it('leaves no request of the people for a run that ended or stopped for a person; a wait keeps them', async () => {
+        await withStore(make, async (store) => {
+          const id = await queued(store, 1);
+          const first = await claimed(store, 1, T0 + 100);
+          await store.requestCancel(id, T0 + 110);
+          await store.requestPause(id, T0 + 111);
+          const waiting = await store.finishRun(first.claim, 'wait', {
+            now: T0 + 120,
+            waiting: 'lock',
+            retryAfter: T0 + 200,
+          });
+          assert.equal(waiting.cancelRequestedAt, T0 + 110);
+          assert.equal(waiting.pauseRequestedAt, T0 + 111);
+          // The run that was claimed again with both pending ends by the cancel: it came first.
+          const second = await claimed(store, 1, T0 + 200);
+          assert.equal(second.run.cancelRequestedAt, T0 + 110);
+          const ended = await store.finishRun(second.claim, 'pause', { now: T0 + 210 });
+          assert.equal(ended.state, 'cancelled');
+          assert.equal(ended.cancelRequestedAt, null);
+          assert.equal(ended.pauseRequestedAt, null);
+        });
+      });
+
+      it('leaves no request of the people for a run that failed, so that its retry is not a cancel', async () => {
+        await withStore(make, async (store) => {
+          const id = await queued(store, 1);
+          const first = await claimed(store, 1, T0 + 100);
+          await store.requestPause(id, T0 + 110);
+          const paused = await store.finishRun(first.claim, 'pause', { now: T0 + 120 });
+          assert.equal(paused.state, 'paused');
+          assert.equal(paused.pauseRequestedAt, null);
+          await store.applyEvent(id, 'resume', { now: T0 + 130 });
+          const second = await claimed(store, 1, T0 + 140);
+          await store.requestCancel(id, T0 + 150);
+          await store.requestPause(id, T0 + 151);
+          const failed = await store.finishRun(second.claim, 'fail', { now: T0 + 160 });
+          assert.equal(failed.cancelRequestedAt, null);
+          assert.equal(failed.pauseRequestedAt, null);
+          // A retry of the failed run is not a cancel that nobody asked for now.
+          const again = await store.applyEvent(id, 'retry', { now: T0 + 170 });
+          assert.equal(again.state, 'queued');
+          assert.equal(again.cancelRequestedAt, null);
+        });
+      });
+
       it('ends it, with no worker, no lease and the time it ended', async () => {
         await withStore(make, async (store) => {
           await queued(store, 1, 1);
@@ -687,6 +1033,44 @@ export function runStoreContract(
           assert.equal(paused.state, 'paused');
           const queuedAgain = await store.applyEvent(id, 'resume', { now: T0 + 60 });
           assert.equal(queuedAgain.state, 'queued');
+        });
+      });
+    });
+
+    describe('a pause that meets a cancel that was accepted', () => {
+      it('is a cancel: a run that waits with a cancel kept for it is cancelled by the pause of a person, not paused', async () => {
+        await withStore(make, async (store) => {
+          const id = await queued(store, 1);
+          const first = await claimed(store, 1, T0 + 100);
+          await store.requestCancel(id, T0 + 110);
+          await store.finishRun(first.claim, 'wait', {
+            now: T0 + 120,
+            waiting: 'lock',
+            retryAfter: T0 + 9_000,
+          });
+          const after = await store.requestPause(id, T0 + 130);
+          assert.equal(after.state, 'cancelled');
+          assert.equal(after.cancelRequestedAt, null);
+          assert.equal(after.finishedAt, T0 + 130);
+          const last = (await store.listEvents(id, 0, 50)).at(-1);
+          assert.equal(last?.type, 'run.cancel');
+          assert.deepEqual(last.data, {
+            from: 'queued',
+            to: 'cancelled',
+            actor: null,
+            instead: 'pause',
+          });
+        });
+      });
+
+      it('is a pause when nothing is pending, and the event says pause', async () => {
+        await withStore(make, async (store) => {
+          const id = await queued(store, 1);
+          const after = await store.requestPause(id, T0 + 130);
+          assert.equal(after.state, 'paused');
+          const last = (await store.listEvents(id, 0, 50)).at(-1);
+          assert.equal(last?.type, 'run.pause');
+          assert.deepEqual(last.data, { from: 'queued', to: 'paused', actor: null });
         });
       });
     });

@@ -107,6 +107,7 @@ export {
 } from './recovery.js';
 export {
   InvalidStepError,
+  InvalidStepInputError,
   StepDeferredError,
   StepFailure,
   defineStep,
@@ -119,10 +120,16 @@ export {
   type StepContext,
   type UndoRecordDraft,
 } from './step.js';
-export { StepRegistry, type RegisteredStep } from './registry.js';
+export {
+  StepRegistry,
+  type CheckedOutput,
+  type RegisteredReconcileResult,
+  type RegisteredStep,
+} from './registry.js';
 export {
   FINISH_EVENTS,
   FenceLostError,
+  InvalidDataError,
   LockLostError,
   NotFoundError,
   PERSON_EVENTS,
@@ -145,7 +152,33 @@ export {
 } from './store.js';
 export { MemoryRunStore } from './memory-store.js';
 export {
+  MAX_ERROR_CODE,
+  MAX_ERROR_MESSAGE,
+  MAX_UNDO_KIND,
+  MAX_WAITING,
+  assertIdentifier,
+  assertStorableCheckpoint,
+  cleanText,
+  isIdentifier,
+  storableJson,
+} from './limits.js';
+export { uuidv7 } from './id.js';
+export { type EnginePorts, type VaultGate } from './ports.js';
+export {
+  InvalidWorkflowParamsError,
+  UnknownWorkflowError,
+  UnregisteredStepError,
+  WorkflowRegistry,
+  callStep,
+  planRun,
+  type RegisteredWorkflow,
+  type StepCall,
+  type Workflow,
+} from './workflow.js';
+export {
   CRASH_POINTS,
+  STOP_DRAIN_MS,
+  ShutdownError,
   Worker,
   WorkerCrash,
   type CrashPoint,
