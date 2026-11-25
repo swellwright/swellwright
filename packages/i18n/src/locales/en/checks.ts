@@ -251,7 +251,7 @@ export const checks = {
         title: 'DNS',
         summary:
           'Names looked up: {{names}}. Resolved: {{resolved}}, failed: {{failed}}, {{ms}} ms.',
-        cached: '{{count}} answers came from a short memory.',
+        cached: 'Answers that came from a short memory: {{count}}.',
         capped:
           '{{skipped}} names were left out: a run looks up at most the number of names the server allows.',
         off: 'Lookups are switched off in the pack: checks that need DNS say "unknown".',

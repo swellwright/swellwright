@@ -12,7 +12,9 @@ import {
 import { type Database, Prisma, type User } from '@swellwright/db';
 
 import { AuditService } from '../audit/audit.service.js';
+import { lockAccount } from '../auth/account-lock.js';
 import { type RequestMeta, requireDatabase, toUserSummary } from '../auth/context.js';
+import { revokeLiveApiTokens } from '../auth/token.service.js';
 import { DATABASE } from '../tokens.js';
 import { issueInvitation } from './invitations.js';
 
@@ -49,6 +51,32 @@ export function toUserView(row: UserRow): UserView {
     createdAt: row.createdAt.toISOString(),
     invitationExpiresAt: row.invitation?.expiresAt.toISOString() ?? null,
   };
+}
+
+/**
+ * An owner who can sign in and act now: active, with a confirmed authenticator (the same mark that makes the
+ * console show the account as `active`). An owner who was invited but never finished the sign-in cannot.
+ */
+function isEnrolledActiveOwner(row: UserRow): boolean {
+  return row.role === 'owner' && row.status === 'active' && row.credential?.totpConfirmedAt != null;
+}
+
+/** Refuses with 409 when no enrolled active owner other than `id` would remain. Run under `USERS_LOCK_KEY`. */
+async function assertAnotherEnrolledOwner(
+  tx: Pick<Database['client'], 'user'>,
+  id: string,
+): Promise<void> {
+  const others = await tx.user.count({
+    where: {
+      role: 'owner',
+      status: 'active',
+      id: { not: id },
+      credential: { is: { totpConfirmedAt: { not: null } } },
+    },
+  });
+  if (others === 0) {
+    throw new ConflictException('There must be at least one enrolled active owner.');
+  }
 }
 
 const isUniqueViolation = (error: unknown): boolean =>
@@ -135,7 +163,8 @@ export class UsersService {
     try {
       await this.db.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`;
-        const target = await tx.user.findUnique({ where: { id } });
+        await lockAccount(tx, id);
+        const target = await tx.user.findUnique({ where: { id }, include: WITH_SETUP });
         if (!target) {
           throw new NotFoundException('There is no such user.');
         }
@@ -146,13 +175,8 @@ export class UsersService {
         }
         const staysActiveOwner =
           (body.role ?? target.role) === 'owner' && (body.status ?? target.status) === 'active';
-        if (target.role === 'owner' && target.status === 'active' && !staysActiveOwner) {
-          const others = await tx.user.count({
-            where: { role: 'owner', status: 'active', id: { not: id } },
-          });
-          if (others === 0) {
-            throw new ConflictException('There must be at least one active owner.');
-          }
+        if (isEnrolledActiveOwner(target) && !staysActiveOwner) {
+          await assertAnotherEnrolledOwner(tx, id);
         }
 
         const data: Prisma.UserUpdateInput = {};
@@ -183,9 +207,12 @@ export class UsersService {
           return;
         }
         await tx.user.update({ where: { id }, data });
+        let tokensRevoked: number | undefined;
         if (body.status === 'disabled' && statusChanges) {
-          // A disabled user is refused on the next request anyway; the rows go as well.
+          // A disabled user is refused on the next request anyway; the rows go as well, and the API tokens are
+          // revoked for good, so enabling the account again does not bring them back.
           await tx.session.deleteMany({ where: { userId: id } });
+          tokensRevoked = await revokeLiveApiTokens(tx, id, new Date());
         }
         await this.audit.record(
           {
@@ -193,7 +220,11 @@ export class UsersService {
             outcome: 'success',
             actor,
             object: { type: 'user', id },
-            details: { changed: changed.join(','), ...details },
+            details: {
+              changed: changed.join(','),
+              ...details,
+              ...(tokensRevoked === undefined ? {} : { tokens_revoked: tokensRevoked }),
+            },
             meta,
           },
           tx,
@@ -222,7 +253,8 @@ export class UsersService {
   ): Promise<UserInvitation> {
     const invitation = await this.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`;
-      const target = await tx.user.findUnique({ where: { id } });
+      await lockAccount(tx, id);
+      const target = await tx.user.findUnique({ where: { id }, include: WITH_SETUP });
       if (!target) {
         throw new NotFoundException('There is no such user.');
       }
@@ -231,9 +263,15 @@ export class UsersService {
           'You cannot reset your own credentials here. Change your password.',
         );
       }
+      // A reset removes the authenticator, so it can take away the last owner who can sign in. The server command
+      // (no actor) stays the way back in when that owner has lost everything.
+      if (via === 'console' && isEnrolledActiveOwner(target)) {
+        await assertAnotherEnrolledOwner(tx, id);
+      }
       await tx.credential.deleteMany({ where: { userId: id } });
       await tx.recoveryCode.deleteMany({ where: { userId: id } });
       await tx.session.deleteMany({ where: { userId: id } });
+      const tokensRevoked = await revokeLiveApiTokens(tx, id, new Date());
       const invite = await issueInvitation(tx, id, 'reset', actor?.id ?? null);
       await this.audit.record(
         {
@@ -241,7 +279,7 @@ export class UsersService {
           outcome: 'success',
           actor,
           object: { type: 'user', id },
-          details: { via },
+          details: { via, tokens_revoked: tokensRevoked },
           meta,
         },
         tx,

@@ -57,6 +57,8 @@ export const apiConsole = {
       'The panel answers an API token with 403 for this operation; only an administrator session can read it. The answer you get here is the panel’s own.',
     noRole:
       'Your role can browse the operations but not send them: sending needs the permission for the API console.',
+    noReveal:
+      'Your role can send the other operations but not this one: an operation about people also needs the permission to reveal secrets.',
     notConnectedTitle: 'No panel is connected',
     notConnected: 'Connect a panel before sending a request.',
     connectLink: 'Open the connection',

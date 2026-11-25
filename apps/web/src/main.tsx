@@ -13,28 +13,29 @@ import '@mantine/nprogress/styles.css';
 import '@swellwright/ui/styles.css';
 
 import { MantineProvider } from '@mantine/core';
-import { ModalsProvider } from '@mantine/modals';
 import { Notifications } from '@mantine/notifications';
 import { NavigationProgress } from '@mantine/nprogress';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { polyfillCountryFlagEmojis } from 'country-flag-emoji-polyfill';
 import flagFont from 'country-flag-emoji-polyfill/dist/TwemojiCountryFlags.woff2?url';
 import { MotionConfig } from 'motion/react';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import { cssVariablesResolver, theme } from '@swellwright/ui';
+import { cssVariablesResolver, forgetTableFilters, theme } from '@swellwright/ui';
 
 import { App } from './app.js';
+import { createConsoleQueryClient } from './auth/session-cache.js';
 import './i18n.js';
 import { ConnectionStatusOverlay } from './shell/connection-status.js';
 
 // Windows draws no flag emoji. The font for them is self-hosted, like the others.
 polyfillCountryFlagEmojis('Twemoji Country Flags', flagFont);
+// Older versions kept what people typed into the table filters in this browser, for everyone who signs in after.
+forgetTableFilters();
 
-const queryClient = new QueryClient({
-  defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
-});
+// The sign-in screens and the connection probe. The signed-in console gets a cache of its own for each session.
+const queryClient = createConsoleQueryClient();
 const root = document.getElementById('root');
 if (!root) {
   throw new Error('Missing #root element.');
@@ -48,17 +49,15 @@ createRoot(root).render(
       deduplicateInlineStyles
       theme={theme}
     >
-      <ModalsProvider>
-        <Notifications position="top-right" />
-        <NavigationProgress />
-        {/* The panel's entrances use `motion`; a person who asked their system for less motion gets none of them. */}
-        <MotionConfig reducedMotion="user">
-          <QueryClientProvider client={queryClient}>
-            <ConnectionStatusOverlay />
-            <App />
-          </QueryClientProvider>
-        </MotionConfig>
-      </ModalsProvider>
+      <Notifications position="top-right" />
+      <NavigationProgress />
+      {/* The panel's entrances use `motion`; a person who asked their system for less motion gets none of them. */}
+      <MotionConfig reducedMotion="user">
+        <QueryClientProvider client={queryClient}>
+          <ConnectionStatusOverlay />
+          <App />
+        </QueryClientProvider>
+      </MotionConfig>
     </MantineProvider>
   </StrictMode>,
 );

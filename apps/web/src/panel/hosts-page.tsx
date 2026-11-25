@@ -489,7 +489,12 @@ function HostsTable({
       />
     ),
     filtering: (filters.boolean[field.key] ?? 'all') !== 'all',
-    render: (host) => <BooleanCell value={field.value(host)} />,
+    render: (host) => (
+      <BooleanCell
+        labels={{ yes: t('common:yes'), no: t('common:no') }}
+        value={field.value(host)}
+      />
+    ),
   });
 
   const statusColumn: DataTableColumn<PanelHostView> = {

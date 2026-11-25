@@ -11,6 +11,7 @@ import { type AppConfig } from './config.js';
 import { API_PREFIX } from './contract-route.js';
 import {
   ApiExceptionFilter,
+  bodyParserErrors,
   ContractRequestInterceptor,
   ContractResponseInterceptor,
   requestContext,
@@ -108,12 +109,14 @@ export async function createApp(
       bodyParser: false,
     },
   );
-  app.useBodyParser('json', { limit: '3mb' });
   app.disable('x-powered-by');
   // Behind a reverse proxy the address of the connection is the proxy's. Only the proxies named in the
   // configuration may say who the client is, or anyone could write any address into the audit chain.
   app.set('trust proxy', config.trustProxy);
+  // The request id and the safe headers come first, so that even a body that cannot be read is answered with them.
   app.use(requestContext);
+  app.useBodyParser('json', { limit: '3mb' });
+  app.use(bodyParserErrors);
   if (config.webDir) {
     if (!existsSync(join(config.webDir, 'index.html'))) {
       throw new Error(`SW_WEB_DIR has no index.html: ${config.webDir}`);

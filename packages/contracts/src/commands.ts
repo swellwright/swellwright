@@ -809,6 +809,12 @@ export const CreateCommandRunRequestSchema = z
       ...RunCommon,
       scriptId: z.uuid(),
       parameters: ParameterValuesSchema.optional(),
+      expectedScriptRevision: z.iso
+        .datetime()
+        .optional()
+        .describe(
+          'The `updatedAt` of the script as the person saw it when they confirmed the run. Recommended: when the script was changed since (its text, parameters, level or sudo), the run is refused with 409 `conflict` instead of running something nobody reviewed. Left out, the current script runs.',
+        ),
     }),
     z.object({
       mode: z.literal('inline'),

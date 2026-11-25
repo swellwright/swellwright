@@ -7,6 +7,7 @@ import {
   ApiErrorSchema,
   CommandOutputPageSchema,
   CommandRunListSchema,
+  ScriptViewSchema,
 } from '@swellwright/contracts';
 
 import { databaseUrl, errorCode } from '../test-support.js';
@@ -453,6 +454,59 @@ describe('runs on several servers', { skip: !databaseUrl }, () => {
     assert.equal(after.scriptName, 'history subject');
     assert.equal(after.scriptId, null, 'the link to the script is gone');
     assert.equal(after.label, 'history subject');
+  });
+
+  it('refuses a run confirmed for a revision of the script that is no longer the current one', async () => {
+    const host = await h.host(programsWith('r'));
+    const id = await h.server(host);
+    const script = await h.script(h.operator, {
+      name: 'revision subject',
+      description: 'Subject.',
+      dangerLevel: 'change',
+      sudo: false,
+      parameters: [],
+      body: '# fake:hello\n# reviewed\n',
+    });
+    const seen = script.updatedAt;
+    const body = {
+      mode: 'script',
+      serverIds: [id],
+      scriptId: script.id,
+      confirmedLevel: 'change',
+      expectedScriptRevision: seen,
+    };
+    // Changed after the person looked: the text, or only sudo, which leaves the version as it was.
+    const edited = await h.operator.call('PATCH', `/scripts/${script.id}`, {
+      body: '# fake:hello\n# not reviewed\n',
+    });
+    assert.equal(edited.status, 200);
+    const stale = await h.operator.post('/command-runs', body);
+    assert.equal(stale.status, 409);
+    assert.equal(errorCode(stale), 'conflict');
+    const current = ScriptViewSchema.parse(edited.body);
+    const sudo = await h.operator.call('PATCH', `/scripts/${script.id}`, { sudo: true });
+    assert.equal(ScriptViewSchema.parse(sudo.body).version, current.version);
+    const staleSudo = await h.operator.post('/command-runs', {
+      ...body,
+      expectedScriptRevision: current.updatedAt,
+    });
+    assert.equal(staleSudo.status, 409, 'sudo changed since: also a different revision');
+    assert.equal(host.launches.created, 0, 'nothing was sent to a server');
+
+    // The revision on show runs; a client that sends none runs the current script, as before.
+    const latest = ScriptViewSchema.parse(sudo.body);
+    const run = await h.finished(
+      (await h.createRun(h.operator, { ...body, expectedScriptRevision: latest.updatedAt })).id,
+    );
+    assert.equal(run.body, '# fake:hello\n# not reviewed\n');
+    const legacy = { ...body } as Record<string, unknown>;
+    delete legacy['expectedScriptRevision'];
+    await h.finished((await h.createRun(h.operator, legacy)).id);
+    assert.equal(
+      (await h.operator.post('/command-runs', { ...body, expectedScriptRevision: 'yesterday' }))
+        .status,
+      400,
+    );
   });
 
   it('lists the history newest first, with the counts, and filters by state and by server', async () => {

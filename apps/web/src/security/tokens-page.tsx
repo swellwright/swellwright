@@ -73,6 +73,7 @@ import { confirmAction, notifyError, notifySuccess } from '../shell/feedback.js'
 import { useIsMobile } from '../shell/use-is-mobile.js';
 import { FilterPopover } from './filter-popover.js';
 import { notifyFailure } from './notify-failure.js';
+import { NOT_RETAINED } from './secret-form.js';
 import {
   groupByResource,
   kindOf,
@@ -372,7 +373,7 @@ function CreateDialog({
 
   // The value of the token stays out of the cache once the dialog is closed (`gcTime: 0`).
   const mutation = useMutation({
-    gcTime: 0,
+    ...NOT_RETAINED,
     mutationFn: (request: CreateTokenInput) => step.run(() => createToken(request)),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ['tokens'] });

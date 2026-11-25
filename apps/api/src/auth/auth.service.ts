@@ -10,13 +10,15 @@ import { type Credential, type Database, SessionStage } from '@swellwright/db';
 
 import { AuditService } from '../audit/audit.service.js';
 import { type AppConfig } from '../config.js';
-import { RateLimitedException } from '../http.js';
+import { RateLimitedException, StepUpRequiredException } from '../http.js';
 import { CONFIG, DATABASE, PASSWORD_HASHER, SECRET_BOX } from '../tokens.js';
+import { lockAccount } from './account-lock.js';
 import { type AuthContext, type RequestMeta, requireDatabase } from './context.js';
 import { PasswordHasher } from './password.js';
 import { WindowLimiter } from './rate-limit.js';
 import { SecretBox } from './secret-box.js';
 import { type IssuedSession, SessionService } from './session.service.js';
+import { revokeLiveApiTokens } from './token.service.js';
 import { base32Encode, generateTotpSecret, otpauthUri, verifyTotp } from './totp.js';
 import {
   looksLikeTotpCode,
@@ -193,8 +195,9 @@ export class AuthService {
   }
 
   /**
-   * Changes the password of the signed-in user. Needs the current one; a wrong one counts towards the
-   * lockout. The other sessions of the user end, this one stays. (No second factor yet: step-up comes later.)
+   * Changes the password of the signed-in user. Needs the current one and an elevated session; a wrong one counts
+   * towards the lockout. The other sessions of the user end, this one stays, and every live API token of the user
+   * is revoked.
    */
   async changePassword(
     ctx: AuthContext,
@@ -217,16 +220,42 @@ export class AuthService {
     }
     const passwordHash = await this.hasher.hash(newPassword);
     await this.db.$transaction(async (tx) => {
+      // Hashing is slow and happens outside the lock; under it, the session must still be signed in and elevated
+      // and the password must still be the one that was checked, or a reset or another change came in between.
+      await lockAccount(tx, ctx.user.id);
+      const now = new Date();
+      const session = await tx.session.findUnique({
+        where: { id: ctx.sessionId },
+        include: { user: { include: { credential: true } } },
+      });
+      if (!session) {
+        throw new UnauthorizedException('Authentication required.');
+      }
+      if (
+        session.userId !== ctx.user.id ||
+        session.stage !== SessionStage.active ||
+        session.expiresAt.getTime() <= now.getTime() ||
+        session.absoluteExpiresAt.getTime() <= now.getTime() ||
+        session.user.status !== 'active' ||
+        session.user.credential?.passwordHash !== credential.passwordHash
+      ) {
+        throw new UnauthorizedException('Authentication required.');
+      }
+      if (!session.elevatedUntil || session.elevatedUntil.getTime() <= now.getTime()) {
+        throw new StepUpRequiredException();
+      }
       await tx.credential.update({
         where: { userId: ctx.user.id },
-        data: { passwordHash, passwordChangedAt: new Date(), failedAttempts: 0, lockedUntil: null },
+        data: { passwordHash, passwordChangedAt: now, failedAttempts: 0, lockedUntil: null },
       });
       await tx.session.deleteMany({ where: { userId: ctx.user.id, id: { not: ctx.sessionId } } });
+      const tokensRevoked = await revokeLiveApiTokens(tx, ctx.user.id, now);
       await this.audit.record(
         {
           action: 'auth.password.changed',
           outcome: 'success',
           actor: this.actorOf(ctx),
+          details: { tokens_revoked: tokensRevoked },
           meta,
         },
         tx,

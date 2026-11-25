@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { buildOpenApi } from './openapi.js';
-import { routes } from './routes.js';
+import { type RouteDef, routes } from './routes.js';
 import { ApiErrorSchema, HealthResponseSchema, ReadyResponseSchema } from './index.js';
 
 type Json = Record<string, unknown>;
@@ -59,6 +59,46 @@ describe('OpenAPI document', () => {
     for (const [name, schema] of Object.entries(doc.components.schemas)) {
       assert.ok(!('$id' in (schema as Json)) && !('$schema' in (schema as Json)), name);
     }
+  });
+
+  it('describes a request as it is read: a field with a default may be left out', () => {
+    const create = doc.components.schemas['CreateTokenRequest'] as Json;
+    assert.deepEqual([...(create['required'] as string[])].sort(), ['name', 'permissions']);
+    const properties = create['properties'] as Record<string, Json>;
+    assert.equal(properties['expiresInDays']?.['default'], 90);
+    assert.deepEqual(properties['ipAllowlist']?.['default'], []);
+    // Responses keep every field required that is always there.
+    const view = doc.components.schemas['TokenView'] as Json;
+    assert.ok((view['required'] as string[]).includes('ipAllowlist'));
+  });
+
+  it('declares the token of a sidecar on its gateway instead of calling the route public', () => {
+    const gateway = doc.paths['/plugins/{id}/gateway']?.['post'] as Json;
+    assert.deepEqual(gateway['security'], [{ sidecar: [] }]);
+    const schemes = (doc as unknown as { components: { securitySchemes: Record<string, Json> } })
+      .components.securitySchemes;
+    const sidecar = schemes['sidecar'];
+    assert.ok(sidecar);
+    assert.equal(sidecar['type'], 'http');
+    assert.equal(sidecar['scheme'], 'bearer');
+    for (const route of routes as readonly RouteDef[]) {
+      const op = doc.paths[route.path]?.[route.method] as Json;
+      if (route.handlerAuth === undefined) {
+        assert.ok(
+          !JSON.stringify(op['security']).includes('sidecar'),
+          `${route.operationId} does not take a sidecar token`,
+        );
+      }
+    }
+  });
+
+  it('names the media type of every download as the server sends it', () => {
+    const content = (path: string): string[] => {
+      const responses = (doc.paths[path]?.['get'] as Json)['responses'] as Record<string, Json>;
+      return Object.keys(responses['200']?.['content'] as Json);
+    };
+    assert.deepEqual(content('/panel/snapshots/{id}/export'), ['application/json']);
+    assert.deepEqual(content('/artifacts/{name}/content'), ['application/octet-stream']);
   });
 
   it('marks probes as public and documents the error envelope', () => {

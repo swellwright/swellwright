@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { type AddressInfo, createServer, type Socket } from 'node:net';
 import { describe, it } from 'node:test';
 
 import { Database, DatabaseNotReadyError } from '@swellwright/db';
@@ -49,6 +50,106 @@ describe('readiness', () => {
     };
     await new ReadinessService([check, check]).close();
     assert.equal(closed, 2);
+  });
+});
+
+/**
+ * A Valkey stand-in on the loopback address: `silent` accepts the socket and never answers (a hung peer); otherwise it
+ * answers the ready check and `PING`. It counts connections and notices when the client closes one.
+ */
+async function fakeValkey(mode: { silent: boolean }): Promise<{
+  url: string;
+  opened: () => number;
+  open: () => number;
+  close: () => Promise<void>;
+}> {
+  let opened = 0;
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    opened += 1;
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.on('error', () => undefined);
+    socket.on('data', (chunk) => {
+      if (mode.silent) {
+        return;
+      }
+      const text = chunk.toString('utf8');
+      if (/info/iu.test(text)) {
+        const info = 'loading:0\r\n';
+        socket.write(`$${String(info.length)}\r\n${info}\r\n`);
+      }
+      if (/ping/iu.test(text)) {
+        socket.write('+PONG\r\n');
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return {
+    url: `redis://127.0.0.1:${String(port)}`,
+    opened: () => opened,
+    open: () => sockets.size,
+    close: () =>
+      new Promise<void>((resolve) => {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        server.close(() => {
+          resolve();
+        });
+      }),
+  };
+}
+
+const settle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+describe('the Valkey probe against a peer that does not answer', () => {
+  it('times out within its own deadline and closes the connection itself', async () => {
+    const mode = { silent: true };
+    const peer = await fakeValkey(mode);
+    try {
+      const check = new ValkeyCheck(peer.url, 300);
+      const started = performance.now();
+      // Two readiness calls at once share one probe and one connection.
+      const results = await Promise.allSettled([check.run(), check.run()]);
+      assert.ok(
+        performance.now() - started < 1500,
+        'bounded by the probe, not the readiness backstop',
+      );
+      for (const result of results) {
+        assert.equal(result.status, 'rejected');
+        assert.equal(reasonOf(result.reason), 'timeout');
+      }
+      assert.equal(peer.opened(), 1, 'one connection for overlapping calls');
+      await settle(100);
+      assert.equal(peer.open(), 0, 'the peer saw the probe hang up');
+
+      // Through the service, the reason is the short one and the body the usual 503 shape.
+      const ready = await new ReadinessService([check]).run();
+      assert.equal(ready.status, 'not_ready');
+      assert.equal(ready.checks['valkey']?.error, 'timeout');
+      await settle(100);
+      assert.equal(peer.open(), 0);
+
+      // Shutting down while a probe hangs closes its client at once.
+      // The expectation is attached at once: the probe fails while the test still waits below.
+      const pending = assert.rejects(check.run());
+      await settle(50);
+      assert.equal(peer.open(), 1);
+      await check.close();
+      await settle(100);
+      assert.equal(peer.open(), 0, 'shutdown closed the probe in flight');
+      await pending;
+
+      // When the peer answers again, the next probe works.
+      mode.silent = false;
+      await check.run();
+      await settle(100);
+      assert.equal(peer.open(), 0);
+    } finally {
+      await peer.close();
+    }
   });
 });
 

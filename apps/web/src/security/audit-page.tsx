@@ -220,9 +220,16 @@ function ExportDialog({ opened, onClose }: { opened: boolean; onClose: () => voi
       const mine = { stopped: false };
       run.current = mine;
       setFetched(0);
+      // Every page after the first is bounded by the head the first one saw, so the export ends although each page
+      // writes an event of its own.
+      let through: number | undefined;
       const fetchPage = (from: number | undefined) =>
         step.run(() =>
-          exportAudit({ limit: EXPORT_PAGE_SIZE, ...(from === undefined ? {} : { from }) }),
+          exportAudit({
+            limit: EXPORT_PAGE_SIZE,
+            ...(from === undefined ? {} : { from }),
+            ...(through === undefined ? {} : { through }),
+          }),
         );
 
       const parts = [
@@ -235,6 +242,12 @@ function ExportDialog({ opened, onClose }: { opened: boolean; onClose: () => voi
         const page = await fetchPage(from);
         if (mine.stopped) {
           return undefined;
+        }
+        if (through === undefined) {
+          if (page.head === null) {
+            break;
+          }
+          through = page.head.seq;
         }
         for (const event of page.events) {
           parts.push(`${JSON.stringify(event)}\n`);

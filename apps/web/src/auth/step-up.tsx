@@ -10,6 +10,7 @@ import {
   useEffect,
   useMemo,
   useState,
+  useSyncExternalStore,
 } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -19,6 +20,7 @@ import { ApiRequestError, StepUpCancelledError, stepUp } from '../api.js';
 import { notifyError } from '../shell/feedback.js';
 import { CODE_LENGTH, CodeInput } from './code-input.js';
 import { describeError } from './messages.js';
+import { StepUpWaiters } from './step-up-waiters.js';
 
 interface StepUp {
   /**
@@ -38,28 +40,28 @@ export function useStepUp(): StepUp {
   return context;
 }
 
-interface Waiting {
-  readonly resolve: () => void;
-  readonly reject: (error: Error) => void;
-}
-
 /** Holds the confirmation dialog and the helper that every sensitive call goes through. */
 export function StepUpProvider({ children }: { children: ReactNode }) {
-  const [waiting, setWaiting] = useState<Waiting | undefined>(undefined);
+  // Every call that needs the code waits on the one dialog; none replaces another.
+  const [waiters] = useState(() => new StepUpWaiters());
+  const opened = useSyncExternalStore(waiters.subscribe, waiters.isPending);
+  // The console goes away (signed out, the session ended): nothing is left waiting for a dialog that is gone, and a
+  // request that asks for the code later fails at once instead of waiting for ever.
+  useEffect(() => {
+    waiters.activate();
+    return () => {
+      waiters.dispose(new StepUpCancelledError());
+    };
+  }, [waiters]);
 
-  const run = useCallback(async <T,>(action: () => Promise<T>): Promise<T> => {
-    try {
-      return await action();
-    } catch (error) {
-      if (!(error instanceof ApiRequestError && error.code === 'step_up_required')) {
-        throw error;
-      }
-    }
-    await new Promise<void>((resolve, reject) => {
-      setWaiting({ resolve, reject });
-    });
-    return action();
-  }, []);
+  const run = useCallback(
+    <T,>(action: () => Promise<T>): Promise<T> =>
+      waiters.run(
+        action,
+        (error) => error instanceof ApiRequestError && error.code === 'step_up_required',
+      ),
+    [waiters],
+  );
   const value = useMemo<StepUp>(() => ({ run }), [run]);
 
   return (
@@ -67,14 +69,12 @@ export function StepUpProvider({ children }: { children: ReactNode }) {
       {children}
       <StepUpDialog
         onCancel={() => {
-          waiting?.reject(new StepUpCancelledError());
-          setWaiting(undefined);
+          waiters.rejectAll(new StepUpCancelledError());
         }}
         onDone={() => {
-          waiting?.resolve();
-          setWaiting(undefined);
+          waiters.resolveAll();
         }}
-        opened={waiting !== undefined}
+        opened={opened}
       />
     </StepUpContext.Provider>
   );

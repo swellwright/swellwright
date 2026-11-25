@@ -136,7 +136,7 @@ export const commands = {
       noSecrets: 'The vault has no secret of a kind a run can be given.',
       forbidden:
         'Your role may not hand secrets to a run. It needs the permission to reveal secrets.',
-      full: 'At most {{count}} secrets in one run.',
+      full: 'Secrets in one run: at most {{count}}.',
       parameterForbidden:
         'This script needs a secret of the vault, and your role may not hand secrets to a run.',
       parameterNoChoice: 'Choose a secret of the vault.',
@@ -172,7 +172,7 @@ export const commands = {
     },
     errors: {
       noServers: 'Choose at least one server.',
-      tooMany: 'At most {{count}} servers in one run.',
+      tooMany: 'Servers in one run: at most {{count}}.',
       noScript: 'Choose a script.',
       parameters: 'Some of the values do not fit the parameters.',
       noCommand: 'Type a command.',
@@ -271,6 +271,8 @@ export const commands = {
       going: 'Going now',
       problems: 'With problems',
     },
+    loaded: 'The table has the newest {{shown}} of {{total}} runs; its filters search only those.',
+    loadOlder: 'Load older runs',
     table: {
       state: 'State',
       what: 'What ran',
@@ -312,7 +314,7 @@ export const commands = {
     stderr: 'Standard error',
     bytes: 'Bytes: {{count}}',
     showAll: 'Show all',
-    onlyEnd: 'Only the end is shown: the last {{count}} characters.',
+    onlyEnd: 'Only the end is shown: the last characters ({{count}}).',
     loadFailed: 'The whole output could not be loaded.',
     outputLabel: '{{stream}} of {{name}}',
     truncated:

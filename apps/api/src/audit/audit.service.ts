@@ -1,4 +1,11 @@
-import { ConflictException, Inject, Injectable, Logger, Optional } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Inject,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
 import {
   AUDIT_EXPORT_DEFAULT,
   AUDIT_EXPORT_FORMAT,
@@ -231,14 +238,29 @@ export class AuditService {
   ): Promise<AuditExport> {
     const from = BigInt(query.from ?? 1);
     const limit = query.limit ?? AUDIT_EXPORT_DEFAULT;
-    const [rows, headRow] = await Promise.all([
-      this.db.auditEvent.findMany({
-        where: { seq: { gte: from } },
-        orderBy: { seq: 'asc' },
-        take: limit + 1,
-      }),
-      this.db.auditEvent.findFirst({ orderBy: { seq: 'desc' }, select: { seq: true, hash: true } }),
-    ]);
+    // The head is read first and bounds the page. A continuation names the head of its first page (`through`), so an
+    // export ends where it began even though every page appends an `audit.exported` event of its own.
+    const headRow =
+      query.through === undefined
+        ? await this.db.auditEvent.findFirst({
+            orderBy: { seq: 'desc' },
+            select: { seq: true, hash: true },
+          })
+        : await this.db.auditEvent.findUnique({
+            where: { seq: BigInt(query.through) },
+            select: { seq: true, hash: true },
+          });
+    if (query.through !== undefined && !headRow) {
+      throw new BadRequestException('`through` is not a sequence number of this log.');
+    }
+    const rows =
+      headRow && from <= headRow.seq
+        ? await this.db.auditEvent.findMany({
+            where: { seq: { gte: from, lte: headRow.seq } },
+            orderBy: { seq: 'asc' },
+            take: limit + 1,
+          })
+        : [];
     const page = rows.slice(0, limit);
     const next = rows.length > limit ? rows[limit] : undefined;
     await this.record({

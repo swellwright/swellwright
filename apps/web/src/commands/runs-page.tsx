@@ -3,9 +3,9 @@
 // users-table/user-table.widget.tsx): `@kastov/mantine-react-table-open` with its filters under the head, a card with
 // icon-only actions in its title, a row that opens the object in a drawer. Changes: the rows are runs of a script or a
 // command; the list asks again by itself while a run is going, as the panel's live lists do.
-import { Group, SimpleGrid, Stack, Text } from '@mantine/core';
+import { Button, Group, SimpleGrid, Stack, Text } from '@mantine/core';
 import { IconFilterOff, IconListCheck, IconRefresh, IconRestore } from '@tabler/icons-react';
-import { useQuery } from '@tanstack/react-query';
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { motion } from 'motion/react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -38,9 +38,7 @@ import { useTimeFirst } from '../security/time-first.js';
 import { useTableLocalization } from '../tables.js';
 import { DangerBadge, isGoing, RUN_STATE_KIND } from './danger.js';
 import { formatDuration, RunDrawer, spanOf, useNow } from './run-drawer.js';
-
-/** How many runs the page loads: the newest. */
-const PAGE_SIZE = 200;
+import { countRunsByState, mergeRunPages, nextRunOffset, RUN_PAGE_SIZE } from './run-pages.js';
 /** How often the list asks again: quickly while a run is going, slowly otherwise. */
 const GOING_MS = 2000;
 const IDLE_MS = 15_000;
@@ -54,45 +52,59 @@ export function RunsPage({ permissions }: { permissions: readonly Permission[] }
   const openedRun = params.get('run') ?? undefined;
   const canExec = permissions.includes('servers:exec');
 
-  const list = useQuery({
+  // The newest page first; older pages when the person asks for them. The table filters and sorts what is loaded.
+  const list = useInfiniteQuery({
     queryKey: ['command-runs'],
-    queryFn: () => listCommandRuns({ limit: PAGE_SIZE }),
+    queryFn: ({ pageParam }) => listCommandRuns({ limit: RUN_PAGE_SIZE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (_last, pages) => nextRunOffset(pages),
     refetchInterval: (query) =>
-      query.state.data?.runs.some((run) => isGoing(run.state)) ? GOING_MS : IDLE_MS,
+      query.state.data?.pages.some((page) => page.runs.some((run) => isGoing(run.state)))
+        ? GOING_MS
+        : IDLE_MS,
     retry: false,
   });
-  const runs = useMemo(() => list.data?.runs ?? [], [list.data]);
+  const runs = useMemo(() => mergeRunPages(list.data?.pages ?? []), [list.data]);
+  const total = list.data?.pages[0]?.total ?? 0;
+  // The cards count the whole history, not only the pages that are loaded.
+  const counts = useQuery({
+    queryKey: ['command-runs', 'counts'],
+    queryFn: () => countRunsByState(listCommandRuns),
+    refetchInterval: (query) =>
+      (query.state.data?.pending ?? 0) + (query.state.data?.running ?? 0) > 0 ? GOING_MS : IDLE_MS,
+    retry: false,
+  });
 
-  const count = (predicate: (run: CommandRunSummary) => boolean): string =>
-    list.isError ? '–' : formatNumber(runs.filter(predicate).length);
+  const count = (pick: (data: NonNullable<typeof counts.data>) => number): string =>
+    counts.data === undefined ? '–' : formatNumber(pick(counts.data));
   const metrics = [
     {
       id: 'total',
       icon: IconListCheck,
       color: 'blue',
       title: t('commands:runs.metrics.total'),
-      value: list.isError ? '–' : formatNumber(list.data?.total ?? 0),
+      value: list.isError ? '–' : formatNumber(total),
     },
     {
       id: 'going',
       icon: PiPlayCircleDuotone,
       color: 'cyan',
       title: t('commands:runs.metrics.going'),
-      value: count((run) => isGoing(run.state)),
+      value: count((data) => data.pending + data.running),
     },
     {
       id: 'ok',
       icon: PiCheckCircleDuotone,
       color: 'teal',
       title: t('commands:runState.succeeded'),
-      value: count((run) => run.state === 'succeeded'),
+      value: count((data) => data.succeeded),
     },
     {
       id: 'bad',
       icon: PiWarningCircleDuotone,
       color: 'red',
       title: t('commands:runs.metrics.problems'),
-      value: count((run) => run.state === 'failed' || run.state === 'partial'),
+      value: count((data) => data.failed + data.partial),
     },
   ];
 
@@ -290,7 +302,7 @@ export function RunsPage({ permissions }: { permissions: readonly Permission[] }
             <MetricCard
               icon={icon}
               iconColor={color}
-              isLoading={list.isPending}
+              isLoading={list.isPending || counts.isPending}
               title={title}
               value={value}
             />
@@ -326,7 +338,10 @@ export function RunsPage({ permissions }: { permissions: readonly Permission[] }
                   icon={IconRefresh}
                   label={t('common:refresh')}
                   loading={list.isPending || list.isRefetching}
-                  onClick={() => void list.refetch()}
+                  onClick={() => {
+                    void list.refetch();
+                    void counts.refetch();
+                  }}
                 />
               </HeaderActionGroup>
             </HeaderActions>
@@ -336,6 +351,24 @@ export function RunsPage({ permissions }: { permissions: readonly Permission[] }
         />
         <DataTableCard.Content>
           <MantineReactTable table={table} />
+          {runs.length > 0 && runs.length < total ? (
+            // Only the loaded runs are in the table (and its filters): say so, and offer the older ones.
+            <Group gap="md" justify="space-between" mt="md" wrap="wrap">
+              <Text c="dimmed" size="sm">
+                {t('commands:runs.loaded', {
+                  shown: formatNumber(runs.length),
+                  total: formatNumber(total),
+                })}
+              </Text>
+              <Button
+                loading={list.isFetchingNextPage}
+                onClick={() => void list.fetchNextPage()}
+                variant="default"
+              >
+                {t('commands:runs.loadOlder')}
+              </Button>
+            </Group>
+          ) : null}
         </DataTableCard.Content>
       </DataTableCard.Container>
 

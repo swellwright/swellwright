@@ -1,7 +1,7 @@
 # Project status
 
 Baseline: `phase-3-complete`, commit `19cdee2`, 2026-11-22. This is a pre-alpha
-implementation, not a production release. API description version: 0.31.0.
+implementation, not a production release. API description version: 0.32.0.
 
 ## Implemented
 
@@ -84,3 +84,24 @@ Every intermittent CI failure had a cause in the code or in the test; none was r
   new installation, where every node of the panel is simply not in the inventory yet. While
   that is the only difference it is now `info`; any other difference, or an inventory with
   even one server, keeps the warning.
+- **Sign-in, tokens and contract (review of 2026-11-25, first part).** The "last owner"
+  rule counts only active owners with a confirmed authenticator, also for a credential
+  reset from the console (the host command stays the way back in). A credential reset,
+  a password change and disabling an account revoke the user's live API tokens in the
+  same transaction (`tokens_revoked` in the audit record; enabling the account again does
+  not bring them back), and token issuance re-reads the session, the role and the
+  elevation under a per-account PostgreSQL lock, so the quota of 20 holds under
+  concurrency. A token's address list compares an address only with ranges of its own
+  family (`::/0` no longer admits IPv4). `Authorization: Basic` from a proxy no longer
+  breaks the routes that take a session or a token, and a handler without a route of the
+  registry is refused with 500 instead of being public. A body that cannot be read is
+  answered with a fixed envelope that carries the request id. A chosen password is
+  counted after NFKC normalization. An audit export ends at the head of its first page
+  (`through`), the offline checkpoint lookup no longer depends on the order of the JSON
+  members, and the Valkey readiness probe closes its own connection when it times out.
+  The OpenAPI document marks fields with a default as optional in requests, declares the
+  sidecar gateway's token and the JSON type of a snapshot export, and a script run can
+  name the revision the person confirmed (`expectedScriptRevision`). Still open from the
+  same review: a separate password throttle and second-factor lockout and a credential
+  epoch for browser sessions (a later change), and the one-time rotation of API tokens
+  issued before this change (an owner decision).

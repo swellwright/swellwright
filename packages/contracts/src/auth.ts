@@ -11,8 +11,32 @@ export const UsernameSchema = z.string().regex(USERNAME_PATTERN, {
 
 export const PASSWORD_MIN_LENGTH = 12;
 export const PASSWORD_MAX_LENGTH = 128;
-/** The policy applies when a password is chosen. A login only checks the length bounds. */
-export const PasswordSchema = z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH);
+/** The most UTF-16 code units a password field takes at all, before normalization (also the bound of a login). */
+export const PASSWORD_RAW_MAX_LENGTH = 256;
+
+/** The length of a password as it is hashed: the server derives the hash from its NFKC form. */
+export const normalizedPasswordLength = (value: string): number => value.normalize('NFKC').length;
+
+/**
+ * The policy applies when a password is chosen: 12 to 128 characters counted after NFKC normalization, the form the
+ * hash is made of (a ligature such as `ﬃ` is three characters, compatibility forms fold). The value itself is kept as
+ * typed. A login and the current password only check the raw bounds, so a password chosen earlier still works.
+ */
+export const PasswordSchema = z
+  .string()
+  .max(PASSWORD_RAW_MAX_LENGTH)
+  .refine(
+    (value) => {
+      const length = normalizedPasswordLength(value);
+      return length >= PASSWORD_MIN_LENGTH && length <= PASSWORD_MAX_LENGTH;
+    },
+    {
+      message: `Use ${String(PASSWORD_MIN_LENGTH)} to ${String(PASSWORD_MAX_LENGTH)} characters, counted after Unicode NFKC normalization.`,
+    },
+  )
+  .describe(
+    `${String(PASSWORD_MIN_LENGTH)} to ${String(PASSWORD_MAX_LENGTH)} characters after Unicode NFKC normalization (the form the hash is made of); at most ${String(PASSWORD_RAW_MAX_LENGTH)} UTF-16 code units as sent.`,
+  );
 
 export const UserSummarySchema = z
   .object({
