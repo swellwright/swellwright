@@ -39,6 +39,11 @@ export const auth = {
     noDatabaseHint:
       'The server is running without a database, so nobody can sign in yet. Set SW_DATABASE_URL, apply the migrations and restart it.',
     serverDownHint: 'Check that the server is running, then reload this page.',
+    accountChangedTitle: 'Another account',
+    accountChanged:
+      'This browser was signed in as another account in another tab. The console now shows that account.',
+    sessionEndedTitle: 'Signed out',
+    sessionEnded: 'Your session has ended: it expired or was closed. Sign in again to continue.',
   },
 
   login: {

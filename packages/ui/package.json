@@ -13,6 +13,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./table-state": {
+      "types": "./dist/table-state.d.ts",
+      "default": "./dist/table-state.js"
+    },
     "./styles.css": "./src/styles.css"
   },
   "files": [

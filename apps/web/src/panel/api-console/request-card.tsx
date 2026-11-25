@@ -113,6 +113,7 @@ export function RequestCard({
   onChange,
   issues,
   canSend,
+  canSendUserData,
   userDataEnabled,
   connected,
   sending,
@@ -127,6 +128,8 @@ export function RequestCard({
   issues: Readonly<Record<string, string>>;
   /** The role may send (`panel:console`). */
   canSend: boolean;
+  /** The role may also send an operation about people (`vault:reveal` besides `panel:console`). */
+  canSendUserData: boolean;
   userDataEnabled: boolean;
   /** Whether a panel is connected: `undefined` while that is not known yet. */
   connected: boolean | undefined;
@@ -208,6 +211,13 @@ export function RequestCard({
       </Callout>,
     );
   }
+  if (operation.availability === 'user_data' && userDataEnabled && canSend && !canSendUserData) {
+    notes.push(
+      <Callout color="blue" icon={<IconInfoCircle size={20} />} key="reveal">
+        {t('apiConsole:note.noReveal')}
+      </Callout>,
+    );
+  }
   if (sendable && connected === false) {
     notes.push(
       <Callout
@@ -226,7 +236,7 @@ export function RequestCard({
     !sendable ||
     !canSend ||
     connected !== true ||
-    (operation.availability === 'user_data' && !userDataEnabled);
+    (operation.availability === 'user_data' && (!userDataEnabled || !canSendUserData));
   const disabledFields = !sendable;
 
   const submit = (event: SyntheticEvent) => {

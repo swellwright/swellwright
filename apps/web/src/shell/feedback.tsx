@@ -2,6 +2,8 @@ import { modals } from '@mantine/modals';
 import { notifications } from '@mantine/notifications';
 import type { ReactNode } from 'react';
 
+import { sessionQueryClients } from '../auth/session-cache.js';
+
 /**
  * Feedback the way the panel gives it: a toast at the top right (teal for what worked, red for what did not) and a
  * confirmation dialog with a red soft confirm button and a subtle cancel. Inline banners are not used for these.
@@ -49,6 +51,13 @@ export function confirmAction({
     centered: true,
     cancelProps: { variant: 'subtle' },
     confirmProps: { color: danger ? 'red' : 'teal', variant: 'soft' },
-    onConfirm,
+    // Bound to the session that opened the dialog: confirmed after that session ended, it does nothing.
+    onConfirm: sessionQueryClients.fence(onConfirm),
   });
+}
+
+/** A session ends: its dialogs close and its toasts go, so nothing of it stays over the next screen. */
+export function closeSessionFeedback(): void {
+  modals.closeAll();
+  notifications.clean();
 }

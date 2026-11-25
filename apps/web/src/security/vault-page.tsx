@@ -106,6 +106,7 @@ import { useIsMobile } from '../shell/use-is-mobile.js';
 import { useTableLocalization } from '../tables.js';
 import { LABEL_WEIGHT } from './form-styles.js';
 import { expiryState, SecretExpiryBadge } from './secret-expiry.js';
+import { expiryChange, expiryDateOf, NOT_RETAINED } from './secret-form.js';
 import { useTimeFirst } from './time-first.js';
 
 const HIDE_AFTER_SECONDS = 30;
@@ -495,7 +496,9 @@ function RevealDialog({
   // The moment the value is hidden again, counted from when it arrived.
   const [deadline, setDeadline] = useState<number | undefined>(undefined);
   const [now, setNow] = useState(() => Date.now());
+  // The value leaves the mutation cache once the dialog lets it go (`reset` below), not minutes later.
   const mutation = useMutation({
+    ...NOT_RETAINED,
     mutationFn: (id: string) => step.run(() => revealSecret(id)),
     onSuccess: () => {
       setNow(Date.now());
@@ -602,7 +605,7 @@ function SecretForm({
   const [type, setType] = useState<SecretType>(secret?.type ?? 'generic');
   const [value, setValue] = useState('');
   const [description, setDescription] = useState(secret?.description ?? '');
-  const [expires, setExpires] = useState(secret?.expiresAt?.slice(0, 10) ?? '');
+  const [expires, setExpires] = useState(expiryDateOf(secret?.expiresAt));
   const expiresAt = expires ? new Date(`${expires}T00:00:00.000Z`).toISOString() : undefined;
 
   const mutation = useMutation({
@@ -612,7 +615,8 @@ function SecretForm({
           ? updateSecret(secret.id, {
               name: name.trim(),
               description: description.trim() || null,
-              expiresAt: expiresAt ?? null,
+              // An untouched date keeps the exact expiry the secret has.
+              ...expiryChange(secret.expiresAt, expires),
               ...(value.length > 0 ? { value } : {}),
             })
           : createSecret({

@@ -4,6 +4,7 @@ export const common = {
   account: 'Учётная запись',
   changePassword: 'Сменить пароль',
   signOut: 'Выйти',
+  signOutFailed: 'Выход не выполнен',
   searchAndCommands: 'Поиск и команды',
   alerts: 'Оповещения',
   mainNavigation: 'Основное',

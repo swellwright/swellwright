@@ -113,6 +113,45 @@ describe('the texts of the console', () => {
     }
   });
 
+  it('declines a word that follows a count: such a text has plural forms', () => {
+    // "{{count}} servers" reads "1 servers" without plural forms, and Russian needs three. A label before the number
+    // ("Servers: {{count}}") and these words, which do not change with the number, need none.
+    const invariable: Record<Language, readonly string[]> = {
+      en: ['d', 'h', 'min', 's', 'more', 'not', 'of'],
+      ru: ['д', 'ч', 'мин', 'с', 'из'],
+    };
+    for (const language of LANGUAGES) {
+      for (const entry of entriesOf(language)) {
+        if (entry.category !== undefined) {
+          continue;
+        }
+        for (const match of entry.text.matchAll(/\{\{\s*count\s*\}\}\s+(\p{L}+)/gu)) {
+          assert.ok(
+            invariable[language].includes(match[1] ?? ''),
+            `${language}: ${entry.base} puts "${match[1] ?? ''}" after {{count}} but has no plural forms`,
+          );
+        }
+      }
+    }
+  });
+
+  it('says the number in a "one" form that is not only for one', () => {
+    // Russian picks "one" for 21, 31, 101...: a "one" form without the number would say "one" for all of them.
+    for (const language of LANGUAGES) {
+      if (new Intl.PluralRules(language).select(21) !== 'one') {
+        continue;
+      }
+      for (const entry of entriesOf(language)) {
+        if (entry.category === 'one') {
+          assert.ok(
+            placeholders(entry.text).includes('count'),
+            `${language}: ${entry.base}_one does not say {{count}}, yet it is used for 21 too`,
+          );
+        }
+      }
+    }
+  });
+
   it('has no empty text', () => {
     for (const language of LANGUAGES) {
       for (const entry of entriesOf(language)) {

@@ -219,6 +219,22 @@ import { reportApiReachable, reportApiUnreachable } from './shell/connection-sta
 
 const BASE = '/api/v1';
 
+let unauthorizedListener: (() => void) | undefined;
+
+/**
+ * Hears every 401 of a call other than `/auth/me` (which asks the question itself) and `/auth/logout` (whose caller
+ * handles it). The signed-in console uses it to notice that its session ended on the server. Returns the function that
+ * stops listening.
+ */
+export function onUnauthorized(listener: () => void): () => void {
+  unauthorizedListener = listener;
+  return () => {
+    if (unauthorizedListener === listener) {
+      unauthorizedListener = undefined;
+    }
+  };
+}
+
 export class ApiUnreachableError extends Error {
   constructor() {
     super('The API did not answer.');
@@ -304,6 +320,9 @@ export async function send<T>(
     throw new ApiUnreachableError();
   }
   reportApiReachable();
+  if (response.status === 401 && path !== '/auth/me' && path !== '/auth/logout') {
+    unauthorizedListener?.();
+  }
   if (!response.ok) {
     const parsed = ApiErrorSchema.safeParse(json);
     if (!parsed.success) {

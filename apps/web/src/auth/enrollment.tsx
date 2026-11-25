@@ -17,11 +17,18 @@ import { confirmTotpEnrollment, startTotpEnrollment } from '../api.js';
 import { notifyError } from '../shell/feedback.js';
 import { CODE_LENGTH, CodeInput } from './code-input.js';
 import { describeError } from './messages.js';
+import { useAuthTickets } from './auth-tickets.js';
+import { type AuthTicket, startedWith, SupersededError } from './session-transitions.js';
 import { QrCode } from './qr.js';
 
 /** Shows the authenticator secret as a QR code and as text, then asks for a code to prove it works. */
-export function EnrollmentStep({ onConfirmed }: { onConfirmed: (result: TotpConfirmed) => void }) {
+export function EnrollmentStep({
+  onConfirmed,
+}: {
+  onConfirmed: (result: TotpConfirmed, ticket: AuthTicket) => void;
+}) {
   const { t } = useTranslation(['auth', 'common']);
+  const tickets = useAuthTickets();
   const enrollment = useQuery({
     queryKey: ['auth', 'enrollment'],
     queryFn: startTotpEnrollment,
@@ -32,9 +39,16 @@ export function EnrollmentStep({ onConfirmed }: { onConfirmed: (result: TotpConf
   });
   const [code, setCode] = useState('');
   const confirm = useMutation({
-    mutationFn: (value: string) => confirmTotpEnrollment(value),
-    onSuccess: onConfirmed,
+    mutationFn: (sent: { ticket: AuthTicket; code: string }) =>
+      startedWith(tickets, sent.ticket, () => confirmTotpEnrollment(sent.code)),
+    onSuccess: ({ value, ticket }) => {
+      onConfirmed(value, ticket);
+    },
     onError: (error) => {
+      // A step superseded before it was sent (another account was read meanwhile) is not an error to show.
+      if (error instanceof SupersededError) {
+        return;
+      }
       setCode('');
       notifyError(t('enrollment.title'), describeError(t, error, t('totp.codeWrong')));
     },
@@ -43,9 +57,9 @@ export function EnrollmentStep({ onConfirmed }: { onConfirmed: (result: TotpConf
   const { mutate, isPending } = confirm;
   useEffect(() => {
     if (code.length === CODE_LENGTH && !isPending) {
-      mutate(code);
+      mutate({ ticket: tickets.ticket(), code });
     }
-  }, [code, isPending, mutate]);
+  }, [code, isPending, mutate, tickets]);
 
   if (enrollment.isPending) {
     return <LoadingScreen height="40vh" />;
@@ -97,7 +111,7 @@ export function EnrollmentStep({ onConfirmed }: { onConfirmed: (result: TotpConf
         loading={confirm.isPending}
         mt="sm"
         onClick={() => {
-          confirm.mutate(code);
+          confirm.mutate({ ticket: tickets.ticket(), code });
         }}
         variant="default"
       >

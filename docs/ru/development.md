@@ -31,6 +31,10 @@ pnpm run artifacts:check
 
 ## Что подтверждают проверки
 
+У веб-консоли (`apps/web`) есть модульные тесты логики без браузера: `test/*.test.ts`
+собираются `test/tsconfig.json` в `test-dist/` и запускаются `node --test`. Отрисовку,
+вёрстку и доступность они не проверяют.
+
 `check` включает тесты, но тесты БД без `SW_TEST_DATABASE_URL` и `SW_TEST_VALKEY_URL`
 пропускаются; часть shell/SSH-тестов требует Linux. Указывайте эти пропуски в отчёте.
 Для миграций нужен также `db:schema:check`; для установщика — artifact suite и shellcheck

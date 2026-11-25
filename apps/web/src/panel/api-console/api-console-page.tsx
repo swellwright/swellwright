@@ -8,14 +8,13 @@ import { Button, Grid, Modal, Stack, Text, TextInput } from '@mantine/core';
 import { useClipboard, useMediaQuery } from '@mantine/hooks';
 import { IconApi, IconBookmarkPlus } from '@tabler/icons-react';
 import { useMutation, useQuery } from '@tanstack/react-query';
-import { type SyntheticEvent, useMemo, useRef, useState } from 'react';
+import { type SyntheticEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import {
   type Permission,
   PanelConsoleIssuesSchema,
   type PanelConsoleOperation,
-  type PanelConsoleRequest,
   type PanelConsoleResult,
 } from '@swellwright/contracts';
 import { LoadingScreen, ModalFooter, OverlayHeader, PageHeader } from '@swellwright/ui';
@@ -30,25 +29,30 @@ import {
 import { describeError } from '../../auth/messages.js';
 import { useStepUp } from '../../auth/step-up.js';
 import { QueryErrorCard } from '../../security/query-error.js';
+import { useConsole } from '../../shell/console-context.js';
 import { notifyError, notifySuccess } from '../../shell/feedback.js';
 import { panelKey } from '../panel-data.js';
 import {
   addHistory,
   addSample,
   buildRequest,
+  canKeepSample,
   clearHistory,
   curlOf,
   type FormValues,
   fileNameOf,
+  forgetLegacyStorage,
   type HistoryEntry,
+  historyEntryOf,
   missingRequired,
   newId,
   readHistory,
   readLastOperation,
   readSamples,
   removeSample,
-  SAMPLE_BODY_MAX,
   type Sample,
+  type Submission,
+  submissionOf,
   valuesOf,
   writeLastOperation,
 } from './console-model.js';
@@ -161,6 +165,10 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
   const narrow = useMediaQuery('(max-width: 63.99em)');
   const requestRef = useRef<HTMLDivElement>(null);
   const canSend = permissions.includes('panel:console');
+  // An operation about people needs `vault:reveal` as well (ADR 0046); the server checks it again.
+  const canSendUserData = canSend && permissions.includes('vault:reveal');
+  const { session } = useConsole();
+  const userId = session.user.id;
 
   const catalogue = useQuery({
     queryKey: panelKey('console', 'catalogue'),
@@ -185,11 +193,21 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
 
   const [values, setValues] = useState<FormValues>({});
   const [issues, setIssues] = useState<Readonly<Record<string, string>>>({});
-  const [result, setResult] = useState<PanelConsoleResult | undefined>(undefined);
+  // The answer on screen, with the request it answers (not the form as it is now).
+  const [shown, setShown] = useState<
+    { readonly result: PanelConsoleResult; readonly submission: Submission } | undefined
+  >(undefined);
   const [errorText, setErrorText] = useState<string | undefined>(undefined);
-  const [history, setHistory] = useState<HistoryEntry[]>(readHistory);
-  const [samples, setSamples] = useState<Sample[]>(readSamples);
+  const [history, setHistory] = useState<HistoryEntry[]>(() => readHistory(userId));
+  const [samples, setSamples] = useState<Sample[]>(() => readSamples(userId));
   const [naming, setNaming] = useState(false);
+  // Every choice of an operation (or of a sample, or a replay) is a new view. An answer is shown only in the view that
+  // sent the request; in another it is only recorded in the history.
+  const viewRef = useRef(0);
+  const [view, setView] = useState(0);
+  useEffect(() => {
+    forgetLegacyStorage();
+  }, []);
 
   const detail = useQuery({
     queryKey: panelKey('console', 'operation', operation?.operationId ?? ''),
@@ -200,11 +218,13 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
   });
 
   const choose = (operationId: string, next: FormValues = {}) => {
+    viewRef.current += 1;
+    setView(viewRef.current);
     setChosen(operationId);
     writeLastOperation(operationId);
     setValues(next);
     setIssues({});
-    setResult(undefined);
+    setShown(undefined);
     setErrorText(undefined);
     // On a narrow screen the request is below the list: bring it into view.
     if (narrow) {
@@ -213,46 +233,35 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
   };
 
   const send = useMutation({
-    mutationFn: (request: PanelConsoleRequest) => step.run(() => sendPanelConsoleRequest(request)),
-    onSuccess: (answer, request) => {
-      if (operation === undefined) {
+    mutationFn: (submission: Submission) =>
+      step.run(() => sendPanelConsoleRequest(submission.request)),
+    onSuccess: (answer, submission) => {
+      setHistory(addHistory(userId, historyEntryOf(submission, { answer }, newId())));
+      if (submission.view !== viewRef.current) {
         return;
       }
-      setResult(answer);
+      setShown({ result: answer, submission });
       setErrorText(undefined);
       setIssues({});
-      setHistory(
-        addHistory({
-          id: newId(),
-          at: answer.sentAt,
-          operationId: operation.operationId,
-          path: operation.path,
-          status: answer.status,
-          durationMs: answer.durationMs,
-          bytes: answer.bodyBytes,
-          errorCode: null,
-          // The values of a request about people (a short UUID, a name) are not kept in the browser.
-          request: operation.availability === 'user_data' ? null : request,
-        }),
-      );
     },
-    onError: (error, request) => {
-      setResult(undefined);
-      if (operation !== undefined) {
-        setHistory(
-          addHistory({
-            id: newId(),
-            at: new Date().toISOString(),
-            operationId: operation.operationId,
-            path: operation.path,
-            status: null,
-            durationMs: null,
-            bytes: null,
-            errorCode: error instanceof ApiRequestError ? error.code : null,
-            request: operation.availability === 'user_data' ? null : request,
-          }),
-        );
+    onError: (error, submission) => {
+      setHistory(
+        addHistory(
+          userId,
+          historyEntryOf(
+            submission,
+            {
+              at: new Date().toISOString(),
+              errorCode: error instanceof ApiRequestError ? error.code : null,
+            },
+            newId(),
+          ),
+        ),
+      );
+      if (submission.view !== viewRef.current) {
+        return;
       }
+      setShown(undefined);
       // A request that does not fit the operation: the server names the fields, and the fields show it.
       if (error instanceof ApiRequestError && error.code === 'validation_failed') {
         const parsed = PanelConsoleIssuesSchema.safeParse(error.details);
@@ -273,6 +282,8 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
       setErrorText(describeError(t, error, t('panel:signInAgain'), t('apiConsole:errors.noRole')));
     },
   });
+  // The spinner belongs to the view that sent the request.
+  const sending = send.isPending && send.variables.view === view;
 
   const request = useMemo(
     () => (operation === undefined ? undefined : buildRequest(operation, values)),
@@ -299,16 +310,17 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
   }, [operation, detail.data, detail.isError, t]);
 
   const download = () => {
-    if (result === undefined || operation === undefined) {
+    if (shown === undefined) {
       return;
     }
-    const json = result.bodyFormat === 'json';
+    const { result: answer, submission } = shown;
+    const json = answer.bodyFormat === 'json';
     const url = URL.createObjectURL(
-      new Blob([result.body], { type: json ? 'application/json' : 'text/plain' }),
+      new Blob([answer.body], { type: json ? 'application/json' : 'text/plain' }),
     );
     const link = document.createElement('a');
     link.href = url;
-    link.download = fileNameOf(operation.operationId, json ? 'json' : 'txt');
+    link.download = fileNameOf(submission.operationId, json ? 'json' : 'txt');
     document.body.append(link);
     link.click();
     link.remove();
@@ -316,24 +328,27 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
   };
 
   const saveSample = (name: string) => {
-    if (result === undefined || operation === undefined || request === undefined) {
+    // The sample is the request that was sent and its answer, never the form as it is now.
+    if (shown === undefined || !canKeepSample(shown.submission, shown.result)) {
+      setNaming(false);
       return;
     }
-    const saved = addSample({
+    const { result: answer, submission } = shown;
+    const saved = addSample(userId, {
       id: newId(),
       name,
       savedAt: new Date().toISOString(),
-      operationId: operation.operationId,
-      path: operation.path,
-      request,
+      operationId: submission.operationId,
+      path: submission.path,
+      request: submission.request,
       result: {
-        status: result.status,
-        bodyFormat: result.bodyFormat,
-        body: result.body,
-        bodyBytes: result.bodyBytes,
-        truncated: result.truncated,
-        maskedCount: result.maskedCount,
-        durationMs: result.durationMs,
+        status: answer.status,
+        bodyFormat: answer.bodyFormat,
+        body: answer.body,
+        bodyBytes: answer.bodyBytes,
+        truncated: answer.truncated,
+        maskedCount: answer.maskedCount,
+        durationMs: answer.durationMs,
       },
     });
     setSamples(saved.samples);
@@ -410,6 +425,7 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
                 <>
                   <RequestCard
                     canSend={canSend}
+                    canSendUserData={canSendUserData}
                     connected={connected}
                     issues={issues}
                     missing={missing}
@@ -436,19 +452,17 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
                     }}
                     onSend={() => {
                       if (request !== undefined) {
-                        send.mutate(request);
+                        send.mutate(submissionOf(operation, request, viewRef.current));
                       }
                     }}
                     operation={operation}
-                    sending={send.isPending}
+                    sending={sending}
                     userDataEnabled={catalogue.data.settings.userDataEnabled}
                     values={values}
                   />
                   <ResponseCard
                     canSaveSample={
-                      result !== undefined &&
-                      result.body.length <= SAMPLE_BODY_MAX &&
-                      result.maskProfile === 'standard'
+                      shown !== undefined && canKeepSample(shown.submission, shown.result)
                     }
                     errorText={errorText}
                     onDownload={download}
@@ -456,9 +470,9 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
                       setNaming(true);
                     }}
                     operation={operation}
-                    result={result}
+                    result={shown?.result}
                     schemaText={schemaText}
-                    sending={send.isPending}
+                    sending={sending}
                   />
                 </>
               )}
@@ -468,7 +482,7 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
         <HistoryCard
           history={history}
           onClear={() => {
-            clearHistory();
+            clearHistory(userId);
             setHistory([]);
           }}
           onOpenSample={(sample) => {
@@ -477,10 +491,13 @@ export function ApiConsolePage({ permissions }: { permissions: readonly Permissi
               return;
             }
             choose(target.operationId, valuesOf(target, sample.request));
-            setResult(resultOf(sample));
+            setShown({
+              result: resultOf(sample),
+              submission: submissionOf(target, sample.request, viewRef.current),
+            });
           }}
           onRemoveSample={(sample) => {
-            setSamples(removeSample(sample.id));
+            setSamples(removeSample(userId, sample.id));
           }}
           onReplay={(entry) => {
             const target = operations.find((o) => o.operationId === entry.operationId);

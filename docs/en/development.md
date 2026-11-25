@@ -63,6 +63,10 @@ Live panel credentials are not required for normal development.
 | Container | Docker/Compose | Image, migrations, health, smoke and container restrictions |
 | UI | Running local API/web and browser | Interaction, layout, responsive widths and accessibility |
 
+The web console (`apps/web`) has unit tests of its logic without a browser: `test/*.test.ts`
+compiled by `test/tsconfig.json` into `test-dist/` and run with `node --test`. Rendering,
+layout and accessibility still need the UI level below.
+
 `pnpm run check` includes tests, but database and POSIX suites deliberately skip if
 their prerequisites are absent. Report the skip counts; do not call that a full acceptance.
 For database work also run `pnpm run db:schema:check`. For installer changes run

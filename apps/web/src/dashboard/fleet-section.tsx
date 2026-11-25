@@ -82,7 +82,7 @@ const isFilled = (value: unknown): boolean => typeof value === 'string' && value
 
 /** The strip of cards above the table and the card of the table. Nothing here connects to a server. */
 export function FleetSection() {
-  const { t } = useTranslation(['dashboard', 'overview', 'baseline', 'common']);
+  const { t } = useTranslation(['dashboard', 'overview', 'baseline', 'common', 'servers']);
   const formatNumber = useNumber();
   const formatDate = useDateTime();
   const relative = useRelativeTime();
@@ -159,7 +159,7 @@ export function FleetSection() {
             </Text>
             {row.original.server.state === 'draft' || row.original.server.state === 'retired' ? (
               <Badge color="gray" size="sm" tt="none" variant="soft">
-                {row.original.server.state}
+                {t(`servers:states.${row.original.server.state}`)}
               </Badge>
             ) : null}
           </Group>

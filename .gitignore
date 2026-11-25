@@ -2,6 +2,7 @@
 node_modules/
 .pnpm-store/
 dist/
+test-dist/
 build/
 # Prisma client generated from packages/db/prisma/schema.prisma
 **/src/generated/

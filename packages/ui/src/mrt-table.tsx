@@ -21,7 +21,14 @@ import {
   type MRT_VisibilityState,
 } from '@kastov/mantine-react-table-open';
 import { useLocalStorage } from '@mantine/hooks';
-import { type CSSProperties, useCallback } from 'react';
+import { type CSSProperties, useCallback, useState } from 'react';
+
+import {
+  type PersistedTableState,
+  persistedLayout,
+  readLayout,
+  TABLE_STORAGE_PREFIX,
+} from './table-state.js';
 
 export {
   MantineReactTable,
@@ -142,48 +149,51 @@ export interface MrtTableBinding {
 }
 
 /**
- * The state of a table (filters, sorting, columns, page) kept in this browser under `key`, as the panel's table stores
- * do. A value in storage that does not parse, or a storage that is not there, gives the defaults. Bump the number in
- * the key when the columns change so that an old order or width is not applied to new columns.
+ * The state of a table (sorting, columns, page) kept in this browser under `key`, as the panel's table stores do. A
+ * value in storage that does not parse, or a storage that is not there, gives the defaults. Bump the number in the key
+ * when the columns change so that an old order or width is not applied to new columns. Unlike the panel, the column
+ * filters are not kept: they are what a person typed, and the next account in this browser must not get them.
  */
 export function useMrtTableState(
   key: string,
   defaults: Partial<MrtTableState> = {},
 ): MrtTableBinding {
   const initial: MrtTableState = { ...BASE_STATE, ...defaults };
-  const [state, setState] = useLocalStorage<MrtTableState>({
-    key: `sw-table:${key}`,
-    defaultValue: initial,
+  const [state, setState] = useLocalStorage<Partial<PersistedTableState>>({
+    key: `${TABLE_STORAGE_PREFIX}${key}`,
+    defaultValue: persistedLayout(initial),
     getInitialValueInEffect: false,
+    serialize: (value) => JSON.stringify(persistedLayout(value)),
+    deserialize: readLayout,
   });
+  // The filters live as long as the page (and the session's console) does.
+  const [columnFilters, setColumnFilters] = useState<MRT_ColumnFiltersState>(initial.columnFilters);
 
   // A value saved by another version may lack a field: fill it from the defaults.
-  const complete: MrtTableState = { ...initial, ...state };
+  const complete: MrtTableState = { ...initial, ...persistedLayout(state), columnFilters };
 
   const patch = useCallback(
-    <K extends keyof MrtTableState>(field: K) =>
-      (updater: Updater<MrtTableState[K]>) => {
+    <K extends keyof PersistedTableState>(field: K) =>
+      (updater: Updater<PersistedTableState[K]>) => {
         setState((previous) => {
-          const base = { ...initial, ...previous };
-          const next = apply(updater, base[field]);
-          const value =
-            field === 'columnFilters'
-              ? ((next as MRT_ColumnFiltersState).filter(
-                  (filter) => !isEmptyFilterValue(filter.value),
-                ) as MrtTableState[K])
-              : next;
-          return { ...base, [field]: value };
+          const base = { ...persistedLayout(initial), ...previous } as PersistedTableState;
+          return { ...base, [field]: apply(updater, base[field]) };
         });
       },
     // `initial` is rebuilt on every render from the same arguments.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [setState],
   );
+  const onColumnFiltersChange = useCallback((updater: Updater<MRT_ColumnFiltersState>) => {
+    setColumnFilters((previous) =>
+      apply(updater, previous).filter((filter) => !isEmptyFilterValue(filter.value)),
+    );
+  }, []);
 
   return {
     state: complete,
     handlers: {
-      onColumnFiltersChange: patch('columnFilters'),
+      onColumnFiltersChange,
       onColumnOrderChange: patch('columnOrder'),
       onColumnPinningChange: patch('columnPinning'),
       onColumnSizingChange: patch('columnSizing'),
@@ -193,7 +203,8 @@ export function useMrtTableState(
       onSortingChange: patch('sorting'),
     },
     reset: () => {
-      setState(initial);
+      setState(persistedLayout(initial));
+      setColumnFilters(initial.columnFilters);
     },
   };
 }
