@@ -7,6 +7,7 @@ export * from './data-table-card.js';
 export * from './datatable.js';
 export * from './date-picker.js';
 export * from './mrt-table.js';
+export * from './table-state.js';
 export * from './drawer-footer.js';
 export * from './empty-page-layout.js';
 export * from './entity-card.js';

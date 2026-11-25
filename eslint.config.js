@@ -7,6 +7,7 @@ export default defineConfig(
   {
     ignores: [
       '**/dist/**',
+      '**/test-dist/**',
       '**/node_modules/**',
       '**/.turbo/**',
       '**/src/generated/**',

@@ -227,7 +227,7 @@ function NodeBody({
         <SectionCard.Section>
           <DataList orientation="vertical" withDivider>
             <Row label={t('panel:nodes.drawer.tracking')}>
-              <BooleanCell value={tracked} />
+              <BooleanCell labels={{ yes: t('common:yes'), no: t('common:no') }} value={tracked} />
             </Row>
             <Row label={t('panel:nodes.columns.trafficUsed')}>
               <Value>

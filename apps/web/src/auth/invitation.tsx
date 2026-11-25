@@ -9,6 +9,8 @@ import { PASSWORD_MIN_LENGTH, PasswordSchema } from '@swellwright/contracts';
 import { acceptInvitation } from '../api.js';
 import { notifyError } from '../shell/feedback.js';
 import { describeError } from './messages.js';
+import { useAuthTickets } from './auth-tickets.js';
+import { type AuthTicket, startedWith, SupersededError } from './session-transitions.js';
 
 const HASH_PREFIX = '#invite=';
 
@@ -47,10 +49,11 @@ export function AcceptInvitationForm({
   onBack,
 }: {
   initialToken: string | undefined;
-  onAccepted: () => void;
+  onAccepted: (ticket: AuthTicket) => void;
   onBack: () => void;
 }) {
   const { t } = useTranslation('auth');
+  const tickets = useAuthTickets();
   const [token, setToken] = useState(initialToken ?? '');
   const [password, setPassword] = useState('');
   const [repeat, setRepeat] = useState('');
@@ -61,13 +64,20 @@ export function AcceptInvitationForm({
   const valid = token.length > 0 && passwordCheck.success && repeat === password;
 
   const mutation = useMutation({
-    mutationFn: () => acceptInvitation({ token, password }),
-    onSuccess: () => {
+    mutationFn: (sent: { ticket: AuthTicket; token: string; password: string }) =>
+      startedWith(tickets, sent.ticket, () =>
+        acceptInvitation({ token: sent.token, password: sent.password }),
+      ),
+    onSuccess: ({ ticket }) => {
       setPassword('');
       setRepeat('');
-      onAccepted();
+      onAccepted(ticket);
     },
     onError: (error) => {
+      // A step superseded before it was sent (another account was read meanwhile) is not an error to show.
+      if (error instanceof SupersededError) {
+        return;
+      }
       notifyError(t('invitation.title'), describeError(t, error, t('invitation.invalid')));
     },
   });
@@ -75,7 +85,7 @@ export function AcceptInvitationForm({
     event.preventDefault();
     setTouched(true);
     if (valid) {
-      mutation.mutate();
+      mutation.mutate({ ticket: tickets.ticket(), token, password });
     }
   };
 

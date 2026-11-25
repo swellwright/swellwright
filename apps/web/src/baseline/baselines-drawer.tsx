@@ -3,6 +3,7 @@
 // validation under it. Changes: the document is YAML, checked by the server, and its problems are underlined by line.
 import {
   Accordion,
+  Anchor,
   Badge,
   Button,
   Code,
@@ -50,6 +51,7 @@ import { useDateTime } from '../format.js';
 import { notifyFailure } from '../security/notify-failure.js';
 import { QueryErrorCard } from '../security/query-error.js';
 import { confirmAction, notifySuccess } from '../shell/feedback.js';
+import { type Draft, expectedVersionOf, nextDraft } from './draft.js';
 
 const STARTER = `schema: 1
 description: What a healthy server looks like.
@@ -80,7 +82,16 @@ function useValidation(source: string, enabled: boolean) {
     retry: false,
     staleTime: 60_000,
   });
-  return { settled: debounced === source, result: query.data, pending: query.isFetching };
+  return {
+    settled: debounced === source,
+    result: query.data,
+    pending: query.isFetching,
+    // A check that could not be made is not "still checking": it says so and can be asked again.
+    failed: query.isError,
+    retry: () => {
+      void query.refetch();
+    },
+  };
 }
 
 function ValidationLine({
@@ -88,15 +99,31 @@ function ValidationLine({
   settled,
   pending,
   result,
+  failed,
+  onRetry,
 }: {
   source: string;
   settled: boolean;
   pending: boolean;
   result: ReturnType<typeof useValidation>['result'];
+  failed: boolean;
+  onRetry: () => void;
 }) {
-  const { t } = useTranslation(['baseline']);
+  const { t } = useTranslation(['baseline', 'common']);
   if (source.trim() === '') {
     return null;
+  }
+  if (settled && !pending && failed) {
+    return (
+      <Group gap="xs">
+        <Text c="red" fz="sm">
+          {t('baseline:baselines.validateFailed')}
+        </Text>
+        <Anchor component="button" fz="sm" onClick={onRetry} type="button">
+          {t('common:retry')}
+        </Anchor>
+      </Group>
+    );
   }
   if (!settled || pending || result === undefined) {
     return (
@@ -387,13 +414,16 @@ function Editor({
     queryFn: () => getBaseline(id, version),
     retry: false,
   });
-  // A text typed for one version is not carried to another: it is kept with the version it was typed for.
-  const [typed, setTyped] = useState<
-    { readonly version: number | undefined; readonly text: string } | undefined
-  >(undefined);
-  const source = typed !== undefined && typed.version === version ? typed.text : undefined;
+  // A text typed for one version is not carried to another: it is kept with the version it was typed for, and with
+  // the revision it started from, which a save expects (a refetch does not move it).
+  const [typed, setTyped] = useState<Draft | undefined>(undefined);
+  const draft = typed !== undefined && typed.version === version ? typed : undefined;
+  const source = draft?.text;
   const setSource = (text: string | undefined): void => {
-    setTyped(text === undefined ? undefined : { version, text });
+    const currentVersion = view.data?.currentVersion;
+    setTyped((previous) =>
+      currentVersion === undefined ? undefined : nextDraft(previous, version, text, currentVersion),
+    );
   };
   const [comment, setComment] = useState('');
   const [serverIds, setServerIds] = useState<string[] | undefined>(undefined);
@@ -422,7 +452,7 @@ function Editor({
         updateBaseline(id, {
           source: text,
           ...(comment.trim() === '' ? {} : { comment: comment.trim() }),
-          ...(data ? { expectedVersion: data.currentVersion } : {}),
+          ...(data ? { expectedVersion: expectedVersionOf(draft, data.currentVersion) } : {}),
         }),
       ),
     onSuccess: async () => {
@@ -563,11 +593,18 @@ function Editor({
               />
               {editable ? (
                 <ValidationLine
+                  failed={validation.failed}
+                  onRetry={validation.retry}
                   pending={validation.pending}
                   result={validation.result}
                   settled={validation.settled}
                   source={text}
                 />
+              ) : null}
+              {editable && draft !== undefined && draft.base !== data.currentVersion ? (
+                <Text c="orange" fz="sm">
+                  {t('baseline:baselines.changedMeanwhile', { version: data.currentVersion })}
+                </Text>
               ) : null}
               {editable ? (
                 <TextInput
@@ -771,6 +808,8 @@ function NewBaseline({
           value={source}
         />
         <ValidationLine
+          failed={validation.failed}
+          onRetry={validation.retry}
           pending={validation.pending}
           result={validation.result}
           settled={validation.settled}

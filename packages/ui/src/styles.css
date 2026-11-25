@@ -18,6 +18,14 @@ body {
   min-height: 100vh;
 }
 
+/* Our addition: the panel's theme sets `focusRing: 'never'`, so Mantine's controls (buttons, inputs, menus) show no
+   focus at all. A keyboard user still gets a ring, and only a keyboard user (`:focus-visible`), as Mantine's own
+   `auto` mode draws it. Same specificity as Mantine's `.mantine-focus-never:focus` and loaded after it. */
+.mantine-focus-never:focus-visible {
+  outline: 2px solid var(--mantine-primary-color-filled);
+  outline-offset: 2px;
+}
+
 /* Scrollbars (global.css of the panel): thin, with a teal-to-cyan thumb. */
 ::-webkit-scrollbar {
   width: 8px;

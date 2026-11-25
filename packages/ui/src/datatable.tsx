@@ -141,15 +141,25 @@ export function CopyableCell({ value, copyLabel }: { value: string; copyLabel?: 
   );
 }
 
-/** A check or a cross in a soft theme icon (the panel's `BooleanCell`). */
-export function BooleanCell({ value }: { value: boolean }) {
+/**
+ * A check or a cross in a soft theme icon (the panel's `BooleanCell`). The icon is drawn for the eye; a screen reader
+ * reads the value from `labels` (already translated), which the panel's cell does not have.
+ */
+export function BooleanCell({
+  value,
+  labels,
+}: {
+  value: boolean;
+  labels: { readonly yes: string; readonly no: string };
+}) {
+  const label = value ? labels.yes : labels.no;
   return value ? (
-    <ThemeIcon color="teal" size="md" variant="light">
-      <PiCheckCircleDuotone size={18} />
+    <ThemeIcon aria-label={label} color="teal" role="img" size="md" title={label} variant="light">
+      <PiCheckCircleDuotone aria-hidden size={18} />
     </ThemeIcon>
   ) : (
-    <ThemeIcon color="gray" size="md" variant="light">
-      <PiXCircleDuotone size={18} />
+    <ThemeIcon aria-label={label} color="gray" role="img" size="md" title={label} variant="light">
+      <PiXCircleDuotone aria-hidden size={18} />
     </ThemeIcon>
   );
 }
