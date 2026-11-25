@@ -60,10 +60,16 @@ export function missingRequired(operation: PanelConsoleOperation, values: FormVa
     .map((p) => p.name);
 }
 
+/** A POSIX shell word that stands for `value` exactly: single quotes, each quote inside written as `'\''`. */
+export function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
 /**
  * The curl command that does the same thing, with the token left out: the person puts their own in `$PANEL_TOKEN`.
- * The address is the connected panel's when it is known. Values are percent-encoded, so nothing in them can end the
- * quoted URL or start a command.
+ * The address is the connected panel's when it is known. The whole URL is one single-quoted shell word, so nothing in
+ * the panel's address or in a value can end it, expand a variable or start a command. Only the header with the token
+ * is double-quoted, so that `$PANEL_TOKEN` expands.
  */
 export function curlOf(
   operation: PanelConsoleOperation,
@@ -86,7 +92,8 @@ export function curlOf(
   while (base.endsWith('/')) {
     base = base.slice(0, -1);
   }
-  return `curl -sS -H "Authorization: Bearer $PANEL_TOKEN" -H "Accept: application/json" "${base}${path}${query === '' ? '' : `?${query}`}"`;
+  const url = `${base}${path}${query === '' ? '' : `?${query}`}`;
+  return `curl -sS -H "Authorization: Bearer $PANEL_TOKEN" -H 'Accept: application/json' ${shellQuote(url)}`;
 }
 
 /** The colour of a status, as the panel's chips: green for success, blue for a redirect, orange for 4xx, red for 5xx. */
@@ -103,12 +110,83 @@ export function statusKind(status: number): StatusKind {
   return 'ok';
 }
 
+// ---- what was sent --------------------------------------------------------------------------------------------------
+
+/**
+ * A request as it was sent: the operation, its class and the values are taken when Send is pressed, so that an answer
+ * that comes back after the person chose another operation is still recorded (and kept or not) as what was asked.
+ */
+export interface Submission {
+  /** Which view sent it: an answer is shown only while that view is still on screen. */
+  readonly view: number;
+  readonly operationId: string;
+  readonly path: string;
+  readonly availability: PanelConsoleOperation['availability'];
+  readonly request: PanelConsoleRequest;
+}
+
+export function submissionOf(
+  operation: PanelConsoleOperation,
+  request: PanelConsoleRequest,
+  view: number,
+): Submission {
+  return {
+    view,
+    operationId: operation.operationId,
+    path: operation.path,
+    availability: operation.availability,
+    request,
+  };
+}
+
+/** The history entry of a sent request. The values of a request about people are never kept (ADR 0046). */
+export function historyEntryOf(
+  submission: Submission,
+  outcome:
+    | { readonly answer: PanelConsoleResult }
+    | { readonly errorCode: string | null; readonly at: string },
+  id: string,
+): HistoryEntry {
+  const common = {
+    id,
+    operationId: submission.operationId,
+    path: submission.path,
+    request: submission.availability === 'user_data' ? null : submission.request,
+  };
+  return 'answer' in outcome
+    ? {
+        ...common,
+        at: outcome.answer.sentAt,
+        status: outcome.answer.status,
+        durationMs: outcome.answer.durationMs,
+        bytes: outcome.answer.bodyBytes,
+        errorCode: null,
+      }
+    : {
+        ...common,
+        at: outcome.at,
+        status: null,
+        durationMs: null,
+        bytes: null,
+        errorCode: outcome.errorCode,
+      };
+}
+
+/** Whether an answer may be kept as a sample: only a standard answer to a request that is not about people. */
+export const canKeepSample = (submission: Submission, result: PanelConsoleResult): boolean =>
+  submission.availability !== 'user_data' &&
+  result.maskProfile === 'standard' &&
+  result.body.length <= SAMPLE_BODY_MAX;
+
 // ---- what the browser keeps -----------------------------------------------------------------------------------------
 // Only localStorage of this browser: nothing is stored on the server (ADR 0046). Every read and write is guarded, since
-// the storage can be missing, full or blocked, and the page has to work without it.
+// the storage can be missing, full or blocked, and the page has to work without it. The history and the samples are
+// kept under the account's id, so a person who signs in after another in the same browser does not see theirs.
 
-export const HISTORY_KEY = 'sw-api-console:history:v1';
-export const SAMPLES_KEY = 'sw-api-console:samples:v1';
+/** The keys before they were kept per account. What is under them cannot be told apart by account: it is removed. */
+export const LEGACY_KEYS = ['sw-api-console:history:v1', 'sw-api-console:samples:v1'] as const;
+export const historyKey = (userId: string): string => `sw-api-console:history:v2:${userId}`;
+export const samplesKey = (userId: string): string => `sw-api-console:samples:v2:${userId}`;
 export const LAST_OPERATION_KEY = 'sw-api-console:last-operation:v1';
 export const HISTORY_MAX = 20;
 export const SAMPLES_MAX = 20;
@@ -184,32 +262,44 @@ function writeList(key: string, items: readonly unknown[]): boolean {
   }
 }
 
-export const readHistory = (): HistoryEntry[] => readList(HISTORY_KEY, isHistoryEntry);
-export const readSamples = (): Sample[] => readList(SAMPLES_KEY, isSample);
+/** Removes what was kept before the history and the samples were per account. */
+export function forgetLegacyStorage(): void {
+  for (const key of LEGACY_KEYS) {
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // The page works without the storage.
+    }
+  }
+}
 
-/** Puts an entry first and keeps the newest `HISTORY_MAX`. Returns the list as it is now. */
-export function addHistory(entry: HistoryEntry): HistoryEntry[] {
-  const next = [entry, ...readHistory()].slice(0, HISTORY_MAX);
-  writeList(HISTORY_KEY, next);
+export const readHistory = (userId: string): HistoryEntry[] =>
+  readList(historyKey(userId), isHistoryEntry);
+export const readSamples = (userId: string): Sample[] => readList(samplesKey(userId), isSample);
+
+/** Puts an entry (made by `historyEntryOf`) first and keeps the newest `HISTORY_MAX`. Returns the list as it is now. */
+export function addHistory(userId: string, entry: HistoryEntry): HistoryEntry[] {
+  const next = [entry, ...readHistory(userId)].slice(0, HISTORY_MAX);
+  writeList(historyKey(userId), next);
   return next;
 }
 
-export function clearHistory(): void {
-  writeList(HISTORY_KEY, []);
+export function clearHistory(userId: string): void {
+  writeList(historyKey(userId), []);
 }
 
 /** Keeps a sample. False when it is too large or the storage refuses it. The oldest sample goes at the limit. */
-export function addSample(sample: Sample): { ok: boolean; samples: Sample[] } {
+export function addSample(userId: string, sample: Sample): { ok: boolean; samples: Sample[] } {
   if (sample.result.body.length > SAMPLE_BODY_MAX) {
-    return { ok: false, samples: readSamples() };
+    return { ok: false, samples: readSamples(userId) };
   }
-  const next = [sample, ...readSamples()].slice(0, SAMPLES_MAX);
-  return { ok: writeList(SAMPLES_KEY, next), samples: next };
+  const next = [sample, ...readSamples(userId)].slice(0, SAMPLES_MAX);
+  return { ok: writeList(samplesKey(userId), next), samples: next };
 }
 
-export function removeSample(id: string): Sample[] {
-  const next = readSamples().filter((sample) => sample.id !== id);
-  writeList(SAMPLES_KEY, next);
+export function removeSample(userId: string, id: string): Sample[] {
+  const next = readSamples(userId).filter((sample) => sample.id !== id);
+  writeList(samplesKey(userId), next);
   return next;
 }
 

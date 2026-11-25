@@ -19,6 +19,8 @@ import {
 import { createOwner, login, verifyTotp } from '../api.js';
 import { notifyError, notifySuccess } from '../shell/feedback.js';
 import { CODE_LENGTH, CodeInput } from './code-input.js';
+import { useAuthTickets } from './auth-tickets.js';
+import { type AuthTicket, startedWith, SupersededError } from './session-transitions.js';
 import { describeError } from './messages.js';
 
 /**
@@ -26,23 +28,37 @@ import { describeError } from './messages.js';
  * repeated as the placeholder, and a full-width default button with a leading icon, 32 px under the last field. A
  * failed sign-in is a red toast, as in the panel.
  */
-export function LoginForm({ onNext }: { onNext: (next: PendingSession['next']) => void }) {
+export function LoginForm({
+  onNext,
+}: {
+  onNext: (next: PendingSession['next'], ticket: AuthTicket) => void;
+}) {
   const { t } = useTranslation(['auth', 'common']);
+  const tickets = useAuthTickets();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const mutation = useMutation({
-    mutationFn: () => login({ username, password }),
-    onSuccess: (result) => {
+    // The ticket and the values are taken when the form is sent, not when the request leaves: a request that waited
+    // for the network is not sent once the session changed.
+    mutationFn: (sent: { ticket: AuthTicket; username: string; password: string }) =>
+      startedWith(tickets, sent.ticket, () =>
+        login({ username: sent.username, password: sent.password }),
+      ),
+    onSuccess: ({ value, ticket }) => {
       setPassword('');
-      onNext(result.next);
+      onNext(value.next, ticket);
     },
     onError: (error) => {
+      // A step superseded before it was sent (another account was read meanwhile) is not an error to show.
+      if (error instanceof SupersededError) {
+        return;
+      }
       notifyError(t('login.title'), describeError(t, error, t('login.wrongCredentials')));
     },
   });
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
-    mutation.mutate();
+    mutation.mutate({ ticket: tickets.ticket(), username, password });
   };
   return (
     <form onSubmit={submit}>
@@ -89,16 +105,26 @@ export function TotpForm({
   onSignedIn,
   onBack,
 }: {
-  onSignedIn: (session: SessionInfo) => void;
+  onSignedIn: (session: SessionInfo, ticket: AuthTicket) => void;
   onBack: () => void;
 }) {
   const { t } = useTranslation(['auth', 'common']);
+  const tickets = useAuthTickets();
   const [code, setCode] = useState('');
   const [recovery, setRecovery] = useState(false);
   const mutation = useMutation({
-    mutationFn: (value: string) => verifyTotp(value),
-    onSuccess: onSignedIn,
+    // The ticket is taken when the code is sent: a request that waited for the network is not sent, and an answer
+    // that comes after the session changed is not committed.
+    mutationFn: (sent: { ticket: AuthTicket; code: string }) =>
+      startedWith(tickets, sent.ticket, () => verifyTotp(sent.code)),
+    onSuccess: ({ value, ticket }) => {
+      onSignedIn(value, ticket);
+    },
     onError: (error) => {
+      // A step superseded before it was sent (another account was read meanwhile) is not an error to show.
+      if (error instanceof SupersededError) {
+        return;
+      }
       setCode('');
       notifyError(
         t('totp.title'),
@@ -110,13 +136,13 @@ export function TotpForm({
   const { mutate, isPending } = mutation;
   useEffect(() => {
     if (!recovery && code.length === CODE_LENGTH && !isPending) {
-      mutate(code);
+      mutate({ ticket: tickets.ticket(), code });
     }
-  }, [code, recovery, isPending, mutate]);
+  }, [code, recovery, isPending, mutate, tickets]);
   const submit = (event: SyntheticEvent) => {
     event.preventDefault();
     if (code.trim().length > 0) {
-      mutation.mutate(code);
+      mutation.mutate({ ticket: tickets.ticket(), code });
     }
   };
   return (
@@ -198,8 +224,9 @@ export function generatePassword(): string {
  * The first-run screen. It is the panel's registration form (src/features/auth/register-form): larger fields, a
  * "Generate and copy" button between the passwords and the submit button, and a toast after the copy.
  */
-export function SetupForm({ onCreated }: { onCreated: () => void }) {
+export function SetupForm({ onCreated }: { onCreated: (ticket: AuthTicket) => void }) {
   const { t } = useTranslation(['auth', 'common']);
+  const tickets = useAuthTickets();
   const [setupToken, setSetupToken] = useState('');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -213,13 +240,29 @@ export function SetupForm({ onCreated }: { onCreated: () => void }) {
     setupToken.length > 0 && usernameCheck.success && passwordCheck.success && repeat === password;
 
   const mutation = useMutation({
-    mutationFn: () => createOwner({ setupToken, username, password }),
-    onSuccess: () => {
+    mutationFn: (sent: {
+      ticket: AuthTicket;
+      setupToken: string;
+      username: string;
+      password: string;
+    }) =>
+      startedWith(tickets, sent.ticket, () =>
+        createOwner({
+          setupToken: sent.setupToken,
+          username: sent.username,
+          password: sent.password,
+        }),
+      ),
+    onSuccess: ({ ticket }) => {
       setPassword('');
       setRepeat('');
-      onCreated();
+      onCreated(ticket);
     },
     onError: (error) => {
+      // A step superseded before it was sent (another account was read meanwhile) is not an error to show.
+      if (error instanceof SupersededError) {
+        return;
+      }
       notifyError(
         t('setup.title'),
         describeError(t, error, t('shared.signInAgain'), t('setup.tokenWrong')),
@@ -230,7 +273,7 @@ export function SetupForm({ onCreated }: { onCreated: () => void }) {
     event.preventDefault();
     setTouched(true);
     if (valid) {
-      mutation.mutate();
+      mutation.mutate({ ticket: tickets.ticket(), setupToken, username, password });
     }
   };
   const generate = () => {

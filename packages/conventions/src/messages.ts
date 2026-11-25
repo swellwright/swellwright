@@ -205,7 +205,7 @@ export const FINDING_TEXTS = {
     'vless-route-id': {
       reserved: 'The route id {{id}} is in the reserved range {{from}}-{{to}}.',
       out_of_range: 'The route id {{id}} is outside the range 0-{{max}}.',
-      ambiguous: 'The route id {{id}} is used by hosts of {{count}} different inbounds.',
+      ambiguous: 'The route id {{id}} is used by hosts of different inbounds ({{count}}).',
     },
   },
   node: {
@@ -240,7 +240,8 @@ export const FINDING_TEXTS = {
   },
   profile: {
     'inbound-tag-unique': {
-      duplicate_in_profile: 'The tag "{{tag}}" is used by {{count}} inbounds of this profile.',
+      duplicate_in_profile:
+        'The tag "{{tag}}" is used by several inbounds of this profile ({{count}}).',
       duplicate_across_profiles:
         'The tag "{{tag}}" is also used in the profile "{{other}}"; tags must be unique across the panel.',
     },
@@ -458,7 +459,8 @@ export const IMPACT_TEXTS = {
       'Nodes that restart: {{count}}, at or above the limit of {{limit}} of this pack.',
     restart_share_high:
       '{{share}}% of the running nodes restart, at or above the limit of {{limit}}% of this pack.',
-    shared_profile: 'The profile is shared by {{count}} nodes: they all restart together.',
+    shared_profile:
+      'The profile is shared by several nodes ({{count}}): they all restart together.',
     users_online: 'Users connected now to the nodes that restart: {{count}}.',
     dangling_refs: 'References that would point at an inbound that no longer exists: {{count}}.',
     hosts_unserved: 'Hosts that would be left with no node serving their inbound: {{count}}.',

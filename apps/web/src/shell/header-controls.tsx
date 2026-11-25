@@ -16,8 +16,10 @@ import {
 
 import { updatePreferences } from '../api.js';
 import { ChangePasswordDialog } from '../auth/change-password.js';
+import { describeError } from '../auth/messages.js';
 import { setLanguage } from '../i18n.js';
 import { openBuildInfo } from './build-info-modal.js';
+import { notifyError } from './feedback.js';
 import { useConsole } from './console-context.js';
 import { isNewerVersion, useUpdateInfo, useVersionInfo } from './system-info.js';
 
@@ -88,7 +90,7 @@ function VersionButton() {
  * has one administrator and ends with Sign out; here people have accounts, so a control for the account sits between.
  */
 export function HeaderControls({ mobile = false }: { mobile?: boolean }) {
-  const { t, i18n } = useTranslation(['common', 'roles']);
+  const { t, i18n } = useTranslation(['common', 'roles', 'errors']);
   const { session, signOut } = useConsole();
   const [changing, setChanging] = useState(false);
 
@@ -144,7 +146,13 @@ export function HeaderControls({ mobile = false }: { mobile?: boolean }) {
         <LogoutControl
           label={t('common:signOut')}
           onClick={() => {
-            void signOut();
+            // Until the server confirms, the person stays signed in and is told so; the control can be pressed again.
+            signOut().catch((error: unknown) => {
+              notifyError(
+                t('common:signOutFailed'),
+                describeError(t, error, t('common:signOutFailed')),
+              );
+            });
           }}
         />
       </Group>
