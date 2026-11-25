@@ -430,7 +430,7 @@ describe('the command line', { skip: !databaseUrl }, () => {
       null,
       0,
     )
-      .replace('{', '{ ')
+      .replace(/^\{/u, '{ ')
       .replace(/,"/gu, ' , "');
     const rewritten = `${[...lines.slice(0, 3), reordered, ...lines.slice(4)].join('\n')}\n`;
     assert.equal(verifyExportText(rewritten).ok, true);
