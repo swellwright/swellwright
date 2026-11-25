@@ -64,7 +64,13 @@ export const CreateTokenRequestSchema = z
         message: 'A token cannot carry a permission that needs a fresh second factor.',
       }),
     expiresInDays: z.number().int().min(1).max(TOKEN_MAX_DAYS).default(TOKEN_DEFAULT_DAYS),
-    ipAllowlist: z.array(CidrSchema).max(16).default([]),
+    ipAllowlist: z
+      .array(CidrSchema)
+      .max(16)
+      .default([])
+      .describe(
+        'Addresses or ranges the token may be used from; empty: anywhere. An address is compared only with ranges of its own family: `::/0` admits every IPv6 address and no IPv4 one, so allowing both takes `0.0.0.0/0` and `::/0`. An IPv4 address that arrives mapped into IPv6 (`::ffff:a.b.c.d`) counts as IPv4.',
+      ),
   })
   .meta({ id: 'CreateTokenRequest' });
 /** What a client sends: expiry and the address list may be left out. */

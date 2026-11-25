@@ -218,6 +218,16 @@ export class CommandRunsService {
     let secretParameters: Readonly<Record<string, readonly string[]>> = {};
     if (request.mode === 'script') {
       const script = await this.scripts.find(request.scriptId);
+      // The person confirmed what they saw. A script changed since then is not what they confirmed: what runs below
+      // is this row, read once, so the check and the run see the same revision.
+      if (
+        request.expectedScriptRevision !== undefined &&
+        new Date(request.expectedScriptRevision).getTime() !== script.updatedAt.getTime()
+      ) {
+        throw new ConflictException(
+          'The script was changed since you opened it. Review it again, then start the run.',
+        );
+      }
       const definitions = ScriptParametersSchema.safeParse(script.parameters);
       if (!definitions.success) {
         throw new ConflictException(

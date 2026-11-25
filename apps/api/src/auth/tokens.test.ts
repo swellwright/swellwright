@@ -1,17 +1,25 @@
 import 'reflect-metadata';
 
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { after, before, describe, it } from 'node:test';
 
+import { ForbiddenException, UnauthorizedException } from '@nestjs/common';
 import {
   CreatedTokenSchema,
+  CreateTokenRequestSchema,
   SessionInfoSchema,
   TOKEN_PATTERN,
   TokenListSchema,
+  UserInvitationSchema,
 } from '@swellwright/contracts';
 
+import { AuditService } from '../audit/audit.service.js';
+import { StepUpRequiredException } from '../http.js';
 import {
+  acceptInvitation,
   auditEvents,
+  CHEAP,
   type Client,
   codeFor,
   createOwner,
@@ -21,10 +29,14 @@ import {
   forgetLastStep,
   found,
   type Instance,
+  NEW_PASSWORD_FOR_TESTS,
+  PASSWORD,
   signInAs,
   start,
   stop,
 } from '../test-support.js';
+import { PasswordHasher } from './password.js';
+import { TokenService } from './token.service.js';
 
 /** Lets the elevation of every session lapse, as if the step-up window had run out. */
 async function lapse(instance: Instance): Promise<void> {
@@ -447,5 +459,298 @@ describe('API tokens', { skip: !databaseUrl }, () => {
       }),
       0,
     );
+  });
+});
+
+describe('API tokens and what happens to their owner', { skip: !databaseUrl }, () => {
+  let instance: Instance;
+  let owner: Client;
+  let ownerSecret: string;
+  let personId: string;
+  let personSecret: string;
+
+  before(async () => {
+    instance = await start();
+    ({ secret: ownerSecret } = await createOwner(instance));
+    ({ id: personId, secret: personSecret } = await createUser(instance, 'person', 'operator'));
+    owner = await signInAs(instance, 'owner', ownerSecret);
+  });
+  after(async () => {
+    await stop(instance);
+  });
+
+  const db = () => instance.isolated.database.client;
+  const me = (token: string) =>
+    instance.client().call('GET', '/auth/me', undefined, { authorization: `Bearer ${token}` });
+
+  /** A live token of the person, made by them, and an expired and an already revoked row that must stay as they are. */
+  async function tokensOfPerson(): Promise<{
+    token: string;
+    expiredId: string;
+    revokedId: string;
+    revokedAt: Date;
+  }> {
+    const person = await signInAs(instance, 'person', personSecret);
+    await elevate(instance);
+    const reply = await person.post('/tokens', { name: 'ci', permissions: ['servers:read'] });
+    assert.equal(reply.status, 201, JSON.stringify(reply.body));
+    const token = CreatedTokenSchema.parse(reply.body).token;
+    assert.equal((await me(token)).status, 200);
+    const revokedAt = new Date(Date.now() - 3_600_000);
+    const expired = await db().apiToken.create({
+      data: {
+        userId: personId,
+        name: 'old',
+        tokenHash: randomBytes(32).toString('hex'),
+        prefix: 'swt_old0',
+        permissions: ['servers:read'],
+        ipAllowlist: [],
+        expiresAt: new Date(Date.now() - 1000),
+      },
+    });
+    const revoked = await db().apiToken.create({
+      data: {
+        userId: personId,
+        name: 'gone',
+        tokenHash: randomBytes(32).toString('hex'),
+        prefix: 'swt_gon0',
+        permissions: ['servers:read'],
+        ipAllowlist: [],
+        expiresAt: new Date(Date.now() + 86_400_000),
+        revokedAt,
+      },
+    });
+    return { token, expiredId: expired.id, revokedId: revoked.id, revokedAt };
+  }
+
+  async function assertUntouched(expiredId: string, revokedId: string, revokedAt: Date) {
+    const expired = await db().apiToken.findUniqueOrThrow({ where: { id: expiredId } });
+    assert.equal(expired.revokedAt, null, 'an expired token keeps its row as it was');
+    const revoked = await db().apiToken.findUniqueOrThrow({ where: { id: revokedId } });
+    assert.equal(revoked.revokedAt?.getTime(), revokedAt.getTime(), 'the first revocation stays');
+  }
+
+  it('stops working at once when the account is disabled, and stays revoked when it is enabled again', async () => {
+    const { token, expiredId, revokedId, revokedAt } = await tokensOfPerson();
+    await elevate(instance);
+    const off = await owner.call('PATCH', `/users/${personId}`, { status: 'disabled' });
+    assert.equal(off.status, 200);
+    assert.equal((await me(token)).status, 401);
+    const on = await owner.call('PATCH', `/users/${personId}`, { status: 'active' });
+    assert.equal(on.status, 200);
+    assert.equal((await me(token)).status, 401, 'enabling the account does not revive the token');
+    const event = found(
+      (await auditEvents(instance))
+        .filter((e) => e.action === 'user.updated' && e.details['status_to'] === 'disabled')
+        .at(-1),
+      'the disable record',
+    );
+    assert.equal(event.details['tokens_revoked'], 1);
+    await assertUntouched(expiredId, revokedId, revokedAt);
+    await db().apiToken.deleteMany({ where: { userId: personId } });
+  });
+
+  it('revokes nothing when the record of the change cannot be written', async () => {
+    const { token } = await tokensOfPerson();
+    const audit = instance.app.get(AuditService);
+    const original = audit.record.bind(audit);
+    audit.record = (input, tx) =>
+      input.action === 'user.updated'
+        ? Promise.reject(new Error('the audit chain is unavailable'))
+        : original(input, tx);
+    try {
+      await elevate(instance);
+      const off = await owner.call('PATCH', `/users/${personId}`, { status: 'disabled' });
+      assert.equal(off.status, 500);
+    } finally {
+      audit.record = original;
+    }
+    assert.equal((await me(token)).status, 200, 'the token still works');
+    const row = await db().user.findUniqueOrThrow({ where: { id: personId } });
+    assert.equal(row.status, 'active');
+    await db().apiToken.deleteMany({ where: { userId: personId } });
+  });
+
+  it('stops working at once when the credentials are reset', async () => {
+    const { token, expiredId, revokedId, revokedAt } = await tokensOfPerson();
+    await elevate(instance);
+    const reset = await owner.post(`/users/${personId}/reset-credentials`);
+    assert.equal(reset.status, 200);
+    assert.equal((await me(token)).status, 401);
+    const event = found(
+      (await auditEvents(instance)).findLast((e) => e.action === 'user.credentials.reset'),
+      'the reset record',
+    );
+    assert.deepEqual(event.details, { via: 'console', tokens_revoked: 1 });
+    await assertUntouched(expiredId, revokedId, revokedAt);
+    // Back to a person who can sign in, for the tests that follow.
+    const { invitation } = UserInvitationSchema.parse(reset.body);
+    ({ secret: personSecret } = await acceptInvitation(instance, invitation.token, PASSWORD));
+    await db().apiToken.deleteMany({ where: { userId: personId } });
+  });
+
+  it('stops working at once when the owner of the token changes their password', async () => {
+    const { token, expiredId, revokedId, revokedAt } = await tokensOfPerson();
+    const person = await signInAs(instance, 'person', personSecret);
+    const changed = await person.post('/auth/password', {
+      currentPassword: PASSWORD,
+      newPassword: NEW_PASSWORD_FOR_TESTS,
+    });
+    assert.equal(changed.status, 204);
+    assert.equal((await me(token)).status, 401);
+    const event = found(
+      (await auditEvents(instance)).findLast(
+        (e) => e.action === 'auth.password.changed' && e.outcome === 'success',
+      ),
+      'the password record',
+    );
+    assert.deepEqual(event.details, { tokens_revoked: 1 });
+    await assertUntouched(expiredId, revokedId, revokedAt);
+    await db().credential.update({
+      where: { userId: personId },
+      data: { passwordHash: await new PasswordHasher(CHEAP).hash(PASSWORD) },
+    });
+    await db().apiToken.deleteMany({ where: { userId: personId } });
+  });
+
+  it('is not issued to a session that ended, lost the permission or its elevation before the database saw it', async () => {
+    const tokens = instance.app.get(TokenService);
+    const meta = { ip: undefined, userAgent: undefined, requestId: undefined };
+    const input = CreateTokenRequestSchema.parse({ name: 'late', permissions: ['servers:read'] });
+    const contextOf = async () => {
+      const session = await db().session.findFirstOrThrow({
+        where: { userId: personId },
+        include: { user: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      return {
+        sessionId: session.id,
+        stage: 'active' as const,
+        user: session.user,
+        expiresAt: session.expiresAt,
+        elevatedUntil: session.elevatedUntil,
+        via: 'session' as const,
+        tokenId: null,
+        grants: null,
+      };
+    };
+
+    // What the guard of a request saw is a live, elevated session. A disable commits before the service runs.
+    const person = await signInAs(instance, 'person', personSecret);
+    await elevate(instance);
+    const seen = await contextOf();
+    assert.equal(
+      (await owner.call('PATCH', `/users/${personId}`, { status: 'disabled' })).status,
+      200,
+    );
+    await assert.rejects(tokens.create(seen, input, meta), UnauthorizedException);
+    assert.equal((await person.get('/auth/me')).status, 401);
+    await elevate(instance);
+    assert.equal(
+      (await owner.call('PATCH', `/users/${personId}`, { status: 'active' })).status,
+      200,
+    );
+
+    const again = await signInAs(instance, 'person', personSecret);
+    const live = await contextOf();
+    await db().user.update({ where: { id: personId }, data: { role: 'observer' } });
+    await assert.rejects(tokens.create(live, input, meta), ForbiddenException);
+    await db().user.update({ where: { id: personId }, data: { role: 'operator' } });
+    await db().session.update({
+      where: { id: live.sessionId },
+      data: { elevatedUntil: new Date(Date.now() - 1000) },
+    });
+    await assert.rejects(tokens.create(live, input, meta), StepUpRequiredException);
+    assert.equal(await db().apiToken.count({ where: { userId: personId, name: 'late' } }), 0);
+    assert.equal((await again.get('/auth/me')).status, 200);
+
+    // A sign-in that was still under way when the credentials were reset can write a session after the reset. It
+    // gives no token: the account has no credential any more.
+    await elevate(instance);
+    assert.equal((await owner.post(`/users/${personId}/reset-credentials`)).status, 200);
+    const escaped = await db().session.create({
+      data: {
+        userId: personId,
+        tokenHash: randomBytes(32).toString('hex'),
+        stage: 'active',
+        expiresAt: new Date(Date.now() + 600_000),
+        absoluteExpiresAt: new Date(Date.now() + 3_600_000),
+        elevatedUntil: new Date(Date.now() + 600_000),
+      },
+      include: { user: true },
+    });
+    await assert.rejects(
+      tokens.create(
+        {
+          ...live,
+          sessionId: escaped.id,
+          user: escaped.user,
+          elevatedUntil: escaped.elevatedUntil,
+        },
+        input,
+        meta,
+      ),
+      UnauthorizedException,
+    );
+    assert.equal(await db().apiToken.count({ where: { userId: personId, name: 'late' } }), 0);
+  });
+
+  it('lets only one of two simultaneous requests take the last free place', async () => {
+    const ownerRow = await db().user.findFirstOrThrow({ where: { username: 'owner' } });
+    await db().apiToken.deleteMany({ where: { userId: ownerRow.id } });
+    for (let i = 0; i < 19; i += 1) {
+      await db().apiToken.create({
+        data: {
+          userId: ownerRow.id,
+          name: `filler ${String(i)}`,
+          tokenHash: randomBytes(32).toString('hex'),
+          prefix: 'swt_fill',
+          permissions: ['users:read'],
+          ipAllowlist: [],
+          expiresAt: new Date(Date.now() + 86_400_000),
+        },
+      });
+    }
+    await elevate(instance);
+    const created = async () =>
+      (await auditEvents(instance)).filter((e) => e.action === 'token.created').length;
+    const before = await created();
+    const replies = await Promise.all([
+      owner.post('/tokens', { name: 'one', permissions: ['users:read'] }),
+      owner.post('/tokens', { name: 'two', permissions: ['users:read'] }),
+    ]);
+    assert.deepEqual(replies.map((r) => r.status).sort(), [201, 409]);
+    assert.equal(
+      await db().apiToken.count({
+        where: { userId: ownerRow.id, revokedAt: null, expiresAt: { gt: new Date() } },
+      }),
+      20,
+    );
+    assert.equal((await created()) - before, 1);
+    await db().apiToken.deleteMany({ where: { userId: ownerRow.id } });
+  });
+
+  it('leaves a route that takes a session or a token to the cookie when a proxy sends Basic', async () => {
+    const signedIn = await signInAs(instance, 'owner', ownerSecret);
+    const basic = { authorization: `Basic ${Buffer.from('gate:keeper').toString('base64')}` };
+    assert.equal((await signedIn.call('GET', '/auth/me', undefined, basic)).status, 200);
+    const mixedCase = { authorization: 'bAsIc Z2F0ZTprZWVwZXI=' };
+    assert.equal((await signedIn.call('GET', '/auth/me', undefined, mixedCase)).status, 200);
+    assert.equal((await instance.client().call('GET', '/auth/me', undefined, basic)).status, 401);
+
+    await elevate(instance);
+    const minted = await owner.post('/tokens', { name: 'mixed', permissions: ['users:read'] });
+    const token = CreatedTokenSchema.parse(minted.body).token;
+    for (const scheme of ['Bearer', 'bearer', 'BEARER']) {
+      const reply = await instance
+        .client()
+        .call('GET', '/users', undefined, { authorization: `${scheme} ${token}` });
+      assert.equal(reply.status, 200, scheme);
+    }
+    // A Bearer header that is empty or malformed is a failed token, never replaced by the cookie.
+    for (const header of ['Bearer', 'Bearer ', 'Bearer a b', `Bearer ${token}x`]) {
+      const reply = await signedIn.call('GET', '/auth/me', undefined, { authorization: header });
+      assert.equal(reply.status, 401, JSON.stringify(header));
+    }
   });
 });

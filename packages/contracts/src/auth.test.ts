@@ -3,6 +3,8 @@ import { describe, it } from 'node:test';
 
 import { buildOpenApi } from './openapi.js';
 import {
+  AcceptInvitationRequestSchema,
+  ChangePasswordRequestSchema,
   LoginRequestSchema,
   PasswordSchema,
   SetupOwnerRequestSchema,
@@ -33,6 +35,40 @@ describe('sign-in schemas', () => {
       !SetupOwnerRequestSchema.safeParse({ setupToken: 't', username: 'owner', password: 'short' })
         .success,
     );
+  });
+
+  it('counts the length of a chosen password after NFKC normalization, as the hash sees it', () => {
+    const fullwidthDigits = '１２３４５６７８９０１２'; // fullwidth digits fold to ASCII, one each
+    assert.ok(PasswordSchema.safeParse(fullwidthDigits).success);
+    // `ﬃ` is one code unit typed and three characters hashed: four of them and two letters make 14.
+    const contracts = 'ﬃﬃﬃﬃab';
+    assert.equal(contracts.length, 6);
+    assert.ok(PasswordSchema.safeParse(contracts).success, 'long enough after normalization');
+    // 43 ligatures are 43 code units and 129 characters once normalized: too long.
+    assert.ok(!PasswordSchema.safeParse('ﬃ'.repeat(43)).success);
+    assert.ok(PasswordSchema.safeParse(`${'ﬃ'.repeat(42)}ab`).success, '128 is the bound');
+    // A decomposed é (two code units) is one character after NFKC: 21 code units typed, eleven hashed.
+    const decomposed = `${'é'.repeat(10)}x`;
+    assert.equal(decomposed.length, 21);
+    assert.ok(!PasswordSchema.safeParse(decomposed).success, 'eleven characters, not 21');
+    assert.ok(PasswordSchema.safeParse(`${'é'.repeat(11)}x`).success, 'twelve is enough');
+    // The exact bounds, and the raw cap on what is sent at all.
+    assert.ok(!PasswordSchema.safeParse('x'.repeat(11)).success);
+    assert.ok(PasswordSchema.safeParse('x'.repeat(12)).success);
+    assert.ok(PasswordSchema.safeParse('x'.repeat(128)).success);
+    assert.ok(!PasswordSchema.safeParse('x'.repeat(129)).success);
+    // Every request that chooses a password applies the rule; the value itself is kept as typed.
+    for (const schema of [
+      SetupOwnerRequestSchema.shape.password,
+      AcceptInvitationRequestSchema.shape.password,
+      ChangePasswordRequestSchema.shape.newPassword,
+    ]) {
+      assert.ok(!schema.safeParse(decomposed).success);
+      assert.equal(schema.parse(contracts), contracts);
+    }
+    // A password chosen before still passes the login and current-password checks.
+    assert.ok(LoginRequestSchema.safeParse({ username: 'owner', password: decomposed }).success);
+    assert.ok(ChangePasswordRequestSchema.shape.currentPassword.safeParse(fullwidthDigits).success);
   });
 
   it('takes a six-digit code or a longer recovery code', () => {

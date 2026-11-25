@@ -313,7 +313,8 @@ describe('changing users', { skip: !databaseUrl }, () => {
     await assert.rejects(
       users.update({ id: second.id, name: 'second-owner' }, ownerId, { status: 'disabled' }, meta),
       (error: unknown) =>
-        error instanceof ConflictException && error.message.includes('at least one active owner'),
+        error instanceof ConflictException &&
+        error.message.includes('at least one enrolled active owner'),
     );
     await assert.rejects(
       users.update({ id: second.id, name: 'second-owner' }, ownerId, { role: 'operator' }, meta),
@@ -321,6 +322,61 @@ describe('changing users', { skip: !databaseUrl }, () => {
     );
     assert.equal((await db.user.findUniqueOrThrow({ where: { id: ownerId } })).role, 'owner');
     await db.user.delete({ where: { id: second.id } });
+  });
+
+  it('counts only owners who can sign in: invited, half-enrolled and disabled owners do not keep one', async () => {
+    const db = instance.isolated.database.client;
+    const users = instance.app.get(UsersService);
+    const meta = { ip: undefined, userAgent: undefined, requestId: undefined };
+    // An owner invited and never signed in, one who began the authenticator and never confirmed it, and an enrolled
+    // owner who is disabled. None of them can act, so the first owner is still the last one.
+    const pending = await db.user.create({ data: { username: 'pending-owner', role: 'owner' } });
+    const half = await db.user.create({ data: { username: 'half-owner', role: 'owner' } });
+    await db.credential.create({
+      data: { userId: half.id, passwordHash: 'x', totpSecret: new Uint8Array([1, 2, 3]) },
+    });
+    const off = await createUser(instance, 'off-owner', 'owner');
+    await db.user.update({ where: { id: off.id }, data: { status: 'disabled' } });
+    const actor = { id: pending.id, name: 'pending-owner' };
+    const before = (await auditEvents(instance)).length;
+
+    for (const body of [{ role: 'operator' as const }, { status: 'disabled' as const }]) {
+      await assert.rejects(users.update(actor, ownerId, body, meta), (error: unknown) => {
+        assert.ok(error instanceof ConflictException);
+        assert.match(error.message, /enrolled active owner/u);
+        return true;
+      });
+    }
+    await assert.rejects(
+      users.resetCredentials(actor, ownerId, meta, 'console'),
+      (error: unknown) =>
+        error instanceof ConflictException && error.message.includes('enrolled active owner'),
+    );
+    const row = await db.user.findUniqueOrThrow({
+      where: { id: ownerId },
+      include: { credential: true },
+    });
+    assert.equal(row.role, 'owner');
+    assert.equal(row.status, 'active');
+    assert.ok(row.credential?.totpConfirmedAt, 'the reset was not applied');
+    assert.equal((await auditEvents(instance)).length, before, 'nothing was recorded');
+
+    // An owner who is not enrolled is no last owner: the rule does not stand in the way of changing them.
+    assert.equal((await patch(owner, pending.id, { role: 'operator' })).status, 200);
+    assert.equal((await patch(owner, half.id, { status: 'disabled' })).status, 200);
+
+    // With a second enrolled owner, either may be demoted, disabled or reset from the console.
+    const spare = await createUser(instance, 'spare-owner', 'owner');
+    const spareActor = { id: spare.id, name: 'spare-owner' };
+    await users.update(spareActor, ownerId, { role: 'operator' }, meta);
+    await users.update(spareActor, ownerId, { role: 'owner' }, meta);
+    assert.equal((await patch(owner, spare.id, { status: 'disabled' })).status, 200);
+    assert.equal((await patch(owner, spare.id, { status: 'active' })).status, 200);
+    assert.equal((await owner.post(`/users/${spare.id}/reset-credentials`)).status, 200);
+    for (const id of [pending.id, half.id, off.id, spare.id]) {
+      await db.user.update({ where: { id }, data: { status: 'disabled' } });
+      await db.user.delete({ where: { id } });
+    }
   });
 
   it('ends the sessions of a disabled user at once, and lets them back in when enabled', async () => {
@@ -338,6 +394,7 @@ describe('changing users', { skip: !databaseUrl }, () => {
       changed: 'status',
       status_from: 'active',
       status_to: 'disabled',
+      tokens_revoked: 0,
     });
     const on = UserViewSchema.parse((await patch(owner, targetId, { status: 'active' })).body);
     assert.equal(on.state, 'active');
@@ -408,7 +465,7 @@ describe('resetting credentials', { skip: !databaseUrl }, () => {
       'the reset event',
     );
     assert.equal(event.actor?.name, 'owner');
-    assert.deepEqual(event.details, { via: 'console' });
+    assert.deepEqual(event.details, { via: 'console', tokens_revoked: 0 });
     assert.deepEqual(event.object, { type: 'user', id: userId });
 
     const taken = await acceptInvitation(instance, invitation.token, NEW_PASSWORD);

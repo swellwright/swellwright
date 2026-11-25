@@ -42,19 +42,34 @@ import { findEventHash, verifyExportText } from './export-file.js';
 const INSTANCE_KEY = Buffer.from(AUTH_KEY, 'base64');
 
 /** The file an export makes: the header line and one event per line, from every page. */
-async function download(client: Client, pageSize: number): Promise<string> {
+async function download(
+  client: Client,
+  pageSize: number,
+): Promise<{ text: string; pages: number; head: number | null }> {
   const lines = [JSON.stringify({ format: AUDIT_EXPORT_FORMAT, version: 1 })];
   let from = 1;
-  for (;;) {
-    const reply = await client.get(`/audit/export?from=${String(from)}&limit=${String(pageSize)}`);
+  let through: number | undefined;
+  for (let pages = 1; ; pages += 1) {
+    const bound = through === undefined ? '' : `&through=${String(through)}`;
+    const reply = await client.get(
+      `/audit/export?from=${String(from)}&limit=${String(pageSize)}${bound}`,
+    );
     assert.equal(reply.status, 200, JSON.stringify(reply.body));
     const page = AuditExportSchema.parse(reply.body);
+    // Every continuation is bounded by the head the first page saw.
+    through ??= page.head?.seq;
     lines.push(...page.events.map((e) => JSON.stringify(e)));
     if (page.nextFrom === null) {
-      return `${lines.join('\n')}\n`;
+      return { text: `${lines.join('\n')}\n`, pages, head: through ?? null };
     }
+    assert.ok(page.nextFrom > from, 'the export advances');
     from = page.nextFrom;
   }
+}
+
+/** The file of an export, as `download` makes it. */
+async function downloadText(client: Client, pageSize: number): Promise<string> {
+  return (await download(client, pageSize)).text;
 }
 
 describe('checkpoints', () => {
@@ -160,7 +175,7 @@ describe('exporting and checking the audit log', { skip: !databaseUrl }, () => {
     assert.equal(first.nextFrom, 4);
     assert.ok(first.head);
 
-    const lines = (await download(owner, 4)).trim().split('\n');
+    const lines = (await downloadText(owner, 4)).trim().split('\n');
     const exported = lines.slice(1).map((l) => (JSON.parse(l) as { seq: number }).seq);
     assert.deepEqual(
       exported,
@@ -185,8 +200,50 @@ describe('exporting and checking the audit log', { skip: !databaseUrl }, () => {
     assert.equal(record.actor?.name, 'owner');
   });
 
+  it('ends at the head of its first page, even one event per page while events keep coming', async () => {
+    const exported = () =>
+      auditEvents(instance).then((all) => all.filter((e) => e.action === 'audit.exported').length);
+    const before = await exported();
+    const { text, pages, head } = await download(owner, 1);
+    const seqs = text
+      .trim()
+      .split('\n')
+      .slice(1)
+      .map((l) => (JSON.parse(l) as { seq: number }).seq);
+    assert.ok(head !== null);
+    assert.deepEqual(
+      seqs,
+      Array.from({ length: head }, (_, i) => i + 1),
+      'exactly the events up to the first head, none of those written while it ran',
+    );
+    assert.equal(pages, head);
+    assert.equal((await exported()) - before, pages, 'one record per page');
+    assert.equal(verifyExportText(text).ok, true);
+
+    // A continuation past its own head is empty, and a head that is not in the log is refused.
+    const past = AuditExportSchema.parse(
+      (await owner.get(`/audit/export?from=${String(head + 1)}&through=${String(head)}`)).body,
+    );
+    assert.deepEqual(past.events, []);
+    assert.equal(past.nextFrom, null);
+    assert.equal(past.head?.seq, head);
+    const bounded = AuditExportSchema.parse(
+      (await owner.get(`/audit/export?from=2&limit=2&through=3`)).body,
+    );
+    assert.deepEqual(
+      bounded.events.map((e) => e.seq),
+      [2, 3],
+    );
+    assert.equal(bounded.nextFrom, null);
+    assert.equal(bounded.head?.seq, 3);
+    for (const bad of ['through=0', 'through=-1', 'through=x', 'through=99999999']) {
+      const reply = await owner.get(`/audit/export?${bad}`);
+      assert.equal(reply.status, 400, bad);
+    }
+  });
+
   it('can be checked offline, and a file that was changed is found', async () => {
-    const text = await download(owner, 50);
+    const text = await downloadText(owner, 50);
     const result = verifyExportText(text);
     assert.equal(result.ok, true, JSON.stringify(result));
     assert.equal(result.error, null);
@@ -362,9 +419,47 @@ describe('the command line', { skip: !databaseUrl }, () => {
     return { code, out: out.join('\n'), err: err.join('\n') };
   };
 
+  it('finds the checkpoint event whatever the order of its fields and the spaces between them', async () => {
+    const text = await downloadText(owner, 100);
+    const lines = text.trim().split('\n');
+    const third = JSON.parse(found(lines[3], 'line 3')) as Record<string, unknown>;
+    // `seq` last, members in another order, legal whitespace: the same event to a JSON reader.
+    const { seq, ...rest } = third;
+    const reordered = JSON.stringify(
+      { ...Object.fromEntries(Object.entries(rest).reverse()), seq },
+      null,
+      0,
+    )
+      .replace(/^\{/u, '{ ')
+      .replace(/,"/gu, ' , "');
+    const rewritten = `${[...lines.slice(0, 3), reordered, ...lines.slice(4)].join('\n')}\n`;
+    assert.equal(verifyExportText(rewritten).ok, true);
+    assert.equal(findEventHash(rewritten, 3), third['hash']);
+
+    const file = join(dir, 'reordered.jsonl');
+    await writeFile(file, rewritten);
+    const checkpoint = makeCheckpoint(
+      checkpointKey(INSTANCE_KEY),
+      { seq: 3, hash: String(third['hash']) },
+      new Date(),
+    );
+    const agreed = await run([file, '--checkpoint', checkpoint]);
+    assert.equal(agreed.code, 0, agreed.out + agreed.err);
+    assert.match(agreed.out, /agrees with the checkpoint/u);
+
+    // A changed event is still found, also when its fields were reordered.
+    const changed = reordered.replace(
+      `"outcome":"${String(third['outcome'])}"`,
+      '"outcome":"denied"',
+    );
+    assert.notEqual(changed, reordered);
+    const tampered = `${[...lines.slice(0, 3), changed, ...lines.slice(4)].join('\n')}\n`;
+    assert.equal(verifyExportText(tampered).ok, false);
+  });
+
   it('verifies an exported file and a checkpoint without the database', async () => {
     const file = join(dir, 'export.jsonl');
-    await writeFile(file, await download(owner, 100));
+    await writeFile(file, await downloadText(owner, 100));
     const plain = await run([file]);
     assert.equal(plain.code, 0, plain.out + plain.err);
     assert.match(plain.out, /The file is intact: \d+ event\(s\), numbers 1 to \d+/u);
@@ -378,7 +473,7 @@ describe('the command line', { skip: !databaseUrl }, () => {
     assert.match(short.out, /ends at \d+, before the checkpoint/u);
 
     const longer = join(dir, 'later.jsonl');
-    await writeFile(longer, await download(owner, 100));
+    await writeFile(longer, await downloadText(owner, 100));
     const agreed = await run([longer, '--checkpoint', text]);
     assert.equal(agreed.code, 0, agreed.out + agreed.err);
     assert.match(agreed.out, /signature is valid/u);
@@ -390,7 +485,7 @@ describe('the command line', { skip: !databaseUrl }, () => {
   });
 
   it('says so when a file was changed, or a checkpoint is not what the file holds', async () => {
-    const text = await download(owner, 100);
+    const text = await downloadText(owner, 100);
     const lines = text.trim().split('\n');
     const event = JSON.parse(found(lines[2], 'line')) as Record<string, unknown>;
     event['outcome'] = 'failure';

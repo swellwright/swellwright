@@ -3,9 +3,11 @@ import { randomBytes } from 'node:crypto';
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import {
   type CreatedToken,
@@ -22,11 +24,12 @@ import {
   type TokenState,
   type TokenView,
 } from '@swellwright/contracts';
-import { type Database, type User } from '@swellwright/db';
+import { type Database, SessionStage, type User } from '@swellwright/db';
 
 import { AuditService } from '../audit/audit.service.js';
-import { RateLimitedException } from '../http.js';
+import { RateLimitedException, StepUpRequiredException } from '../http.js';
 import { DATABASE } from '../tokens.js';
+import { lockAccount } from './account-lock.js';
 import { ipInRanges } from './cidr.js';
 import { type AuthContext, type RequestMeta, requireDatabase } from './context.js';
 import { WindowLimiter } from './rate-limit.js';
@@ -97,6 +100,23 @@ export function grantsOf(row: { permissions: string[] }, user: Pick<User, 'role'
 }
 
 /**
+ * Revokes every live API token of a user (not yet revoked, not yet expired) and returns how many. For a credential
+ * reset, a password change and disabling the account: the transaction must hold `lockAccount` for the user. Rows stay
+ * for the listing; a revoked token never becomes usable again, also not when the account is enabled again.
+ */
+export async function revokeLiveApiTokens(
+  tx: Pick<Database['client'], 'apiToken'>,
+  userId: string,
+  now: Date,
+): Promise<number> {
+  const { count } = await tx.apiToken.updateMany({
+    where: { userId, revokedAt: null, expiresAt: { gt: now } },
+    data: { revokedAt: now },
+  });
+  return count;
+}
+
+/**
  * API tokens (ADR 0023): bearer credentials for the CLI and integrations, issued in the name of a user. Only the
  * hash is stored. A token carries a subset of its owner's permissions, never one that needs a second factor,
  * and what it may do is checked against the owner's role on every request, so a demoted or disabled owner
@@ -116,21 +136,28 @@ export class TokenService {
     return requireDatabase(this.database).client;
   }
 
+  /**
+   * Issues a token. Everything the decision depends on is read again under the lock of the account, so a token
+   * cannot be issued from a session that a reset, a password change or disabling the account has just ended (they
+   * take the same lock and revoke the live tokens), and two requests cannot both pass the quota.
+   */
   async create(
     auth: AuthContext,
     input: CreateTokenRequest,
     meta: RequestMeta,
   ): Promise<CreatedToken> {
-    const missing = input.permissions.filter((p) => !hasPermission(auth.user.role, p));
-    if (missing.length > 0) {
-      throw new BadRequestException(
-        `Your role does not have: ${missing.join(', ')}. A token cannot carry more than you can do.`,
-      );
-    }
-    const now = new Date();
     const token = `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
-    const expiresAt = new Date(now.getTime() + input.expiresInDays * 86_400_000);
-    const row = await this.db.$transaction(async (tx) => {
+    const { row, now } = await this.db.$transaction(async (tx) => {
+      await lockAccount(tx, auth.user.id);
+      const now = new Date();
+      const user = await this.requireLiveCreator(tx, auth, now);
+      const missing = input.permissions.filter((p) => !hasPermission(user.role, p));
+      if (missing.length > 0) {
+        throw new BadRequestException(
+          `Your role does not have: ${missing.join(', ')}. A token cannot carry more than you can do.`,
+        );
+      }
+      const expiresAt = new Date(now.getTime() + input.expiresInDays * 86_400_000);
       const active = await tx.apiToken.count({
         where: { userId: auth.user.id, revokedAt: null, expiresAt: { gt: now } },
       });
@@ -175,9 +202,49 @@ export class TokenService {
         },
         tx,
       );
-      return created;
+      return { row: created, now };
     });
     return { token, view: toView(row, now.getTime()) };
+  }
+
+  /**
+   * The creator as they are now, read under the lock: the same user, still active, from a session that is still
+   * signed in, not expired and freshly verified, whose role still allows `tokens:create`.
+   */
+  private async requireLiveCreator(
+    tx: Pick<Database['client'], 'session' | 'user'>,
+    auth: AuthContext,
+    now: Date,
+  ): Promise<User> {
+    if (auth.via !== 'session') {
+      throw new UnauthorizedException('Authentication required.');
+    }
+    const session = await tx.session.findUnique({
+      where: { id: auth.sessionId },
+      include: { user: { include: { credential: { select: { totpConfirmedAt: true } } } } },
+    });
+    if (!session) {
+      throw new UnauthorizedException('Authentication required.');
+    }
+    // A credential reset deletes the credential; a session that a sign-in still in flight wrote after the reset
+    // (browser sessions are fenced by the reset only from the next change on) must not turn into a token.
+    if (
+      session.userId !== auth.user.id ||
+      session.stage !== SessionStage.active ||
+      session.expiresAt.getTime() <= now.getTime() ||
+      session.absoluteExpiresAt.getTime() <= now.getTime() ||
+      session.user.status !== 'active' ||
+      !session.user.credential?.totpConfirmedAt
+    ) {
+      throw new UnauthorizedException('Authentication required.');
+    }
+    if (!hasPermission(session.user.role, 'tokens:create')) {
+      throw new ForbiddenException('Your role does not allow this.');
+    }
+    if (!session.elevatedUntil || session.elevatedUntil.getTime() <= now.getTime()) {
+      throw new StepUpRequiredException();
+    }
+    return session.user;
   }
 
   async listOwn(auth: AuthContext): Promise<TokenList> {
@@ -209,7 +276,14 @@ export class TokenService {
     scope: 'own' | 'any',
     meta: RequestMeta,
   ): Promise<void> {
+    const owner = await this.db.apiToken.findUnique({ where: { id }, select: { userId: true } });
+    if (!owner || (scope === 'own' && owner.userId !== auth.user.id)) {
+      throw new NotFoundException('There is no such token.');
+    }
     await this.db.$transaction(async (tx) => {
+      // The same lock as a reset or disabling the account, which revoke every live token of the owner: whichever
+      // comes second sees the token revoked and neither moves the time or writes a second record.
+      await lockAccount(tx, owner.userId);
       const row = await tx.apiToken.findUnique({
         where: { id },
         include: { user: { select: { username: true } } },

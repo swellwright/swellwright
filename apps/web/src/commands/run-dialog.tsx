@@ -253,7 +253,14 @@ export function RunDialog({
           }),
     };
     return mode === 'script' && script
-      ? { mode: 'script', ...common, scriptId: script.id, parameters: valuesToSend(input) }
+      ? {
+          mode: 'script',
+          ...common,
+          scriptId: script.id,
+          parameters: valuesToSend(input),
+          // The revision shown in this dialog: a script changed meanwhile is refused, not run unseen.
+          expectedScriptRevision: script.updatedAt,
+        }
       : {
           mode: 'inline',
           ...common,
@@ -264,7 +271,8 @@ export function RunDialog({
   };
 
   const start = useMutation({
-    mutationFn: () => step.run(() => createCommandRun(body())),
+    // The request is fixed when the person confirms: a refresh of the scripts meanwhile must not change what runs.
+    mutationFn: (request: CreateCommandRunRequest) => step.run(() => createCommandRun(request)),
     onSuccess: (run) => {
       void queryClient.invalidateQueries({ queryKey: ['command-runs'] });
       notifySuccess(
@@ -289,8 +297,11 @@ export function RunDialog({
     if (problems.length > 0) {
       return;
     }
+    // What the person sees in the confirmation is what is sent: the request, with the revision of the script on show,
+    // is made now and not again when they confirm.
+    const request = body();
     if (level === 'read') {
-      start.mutate();
+      start.mutate(request);
       return;
     }
     // The approvals of the engine come later; until then a run that changes something is confirmed in so many words.
@@ -319,7 +330,7 @@ export function RunDialog({
       confirmLabel: t(`commands:run.confirm.button.${confirming}`),
       cancelLabel: t('common:cancel'),
       onConfirm: () => {
-        start.mutate();
+        start.mutate(request);
       },
     });
   };

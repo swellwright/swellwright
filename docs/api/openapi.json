@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.31.0",
+    "version": "0.32.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -691,7 +691,7 @@
             }
           }
         },
-        "description": "Needs the current password and an elevated session. Ends your other sessions and keeps this one. A wrong current password counts towards the lockout.",
+        "description": "Needs the current password and an elevated session. Ends your other sessions, keeps this one, and revokes every live API token of yours. A wrong current password counts towards the lockout. The new password is 12 to 128 characters after Unicode NFKC normalization. A session that ended, or a password that changed, while the new one was being hashed answers 401.",
         "requestBody": {
           "required": true,
           "content": {
@@ -852,7 +852,7 @@
             }
           }
         },
-        "description": "Role, status, display name and e-mail address. Refused with 409 when it would leave the instance without an active owner, or when you change your own role or status. Disabling a user ends their sessions.",
+        "description": "Role, status, display name and e-mail address. Refused with 409 when it would leave the instance without an enrolled active owner (active, with a confirmed authenticator), or when you change your own role or status. Disabling a user ends their sessions and revokes their live API tokens for good (`tokens_revoked` in the audit record); enabling them again does not bring the tokens back.",
         "parameters": [
           {
             "name": "id",
@@ -1004,7 +1004,7 @@
             }
           }
         },
-        "description": "Deletes the password, the authenticator and the recovery codes, ends every session of the user at once, and returns a new invitation. The user cannot sign in until it is accepted. Refused with 409 when you reset your own account (change your password instead).",
+        "description": "Deletes the password, the authenticator and the recovery codes, ends every session of the user at once, revokes their live API tokens, and returns a new invitation. The user cannot sign in until it is accepted. Refused with 409 when you reset your own account (change your password instead), or when it would leave the instance without an enrolled active owner (the host command `reset-credentials` is the way back in then).",
         "parameters": [
           {
             "name": "id",
@@ -1862,7 +1862,7 @@
             }
           }
         },
-        "description": "Pages of events, oldest first, with every field their hashes cover, so that a copy can be verified without this server (`node dist/admin.js audit-verify <file>`). Each page is recorded. Needs a fresh second factor: a copy of the whole log is a lot to hand over.",
+        "description": "Pages of events, oldest first, with every field their hashes cover, so that a copy can be verified without this server (`node dist/admin.js audit-verify <file>`). Each page is recorded, so the log grows while it is exported: continue with `from=<nextFrom>&through=<head.seq of the first page>` and the export ends exactly at the head the first page saw (without `through` a page reads up to the current head). A `through` that is not in the log answers 400. Needs a fresh second factor: a copy of the whole log is a lot to hand over.",
         "parameters": [
           {
             "name": "from",
@@ -1871,6 +1871,18 @@
             "schema": {
               "$schema": "https://json-schema.org/draft/2020-12/schema",
               "description": "The first sequence number to return, 1 by default. Continue with `nextFrom` of the last page.",
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "through",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "$schema": "https://json-schema.org/draft/2020-12/schema",
+              "description": "The last sequence number of the export: send `head.seq` of the first page with every following page, so that an export ends at the head it started from even while new events are written (the export itself writes one per page). Left out, the export reads up to the current head. A number that is not in the log answers 400.",
               "type": "integer",
               "exclusiveMinimum": 0,
               "maximum": 9007199254740991
@@ -2368,7 +2380,7 @@
             }
           }
         },
-        "description": "The token carries a subset of your permissions (never one that needs a fresh second factor), expires after at most a year, and may be limited to addresses. The value is in the answer and nowhere else: it is not stored and cannot be shown again.",
+        "description": "The token carries a subset of your permissions (never one that needs a fresh second factor), expires after at most a year, and may be limited to addresses. The value is in the answer and nowhere else: it is not stored and cannot be shown again. The session, its elevation and your role are checked again when the token is written: a session that ended meanwhile answers 401, an elevation that ran out 403 `step_up_required`, a role without `tokens:create` 403. More than 20 live tokens answer 409 `conflict`, also when two requests race for the last place. A credential reset, a password change and disabling the account revoke every live token of the user.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2919,7 +2931,11 @@
             }
           }
         },
-        "security": []
+        "security": [
+          {
+            "sidecar": []
+          }
+        ]
       }
     },
     "/servers": {
@@ -6921,7 +6937,7 @@
               }
             },
             "content": {
-              "application/octet-stream": {
+              "application/json": {
                 "schema": {
                   "type": "string",
                   "format": "binary"
@@ -8472,16 +8488,15 @@
           },
           "password": {
             "type": "string",
-            "minLength": 12,
-            "maxLength": 128
+            "maxLength": 256,
+            "description": "12 to 128 characters after Unicode NFKC normalization (the form the hash is made of); at most 256 UTF-16 code units as sent."
           }
         },
         "required": [
           "setupToken",
           "username",
           "password"
-        ],
-        "additionalProperties": false
+        ]
       },
       "LoginRequest": {
         "type": "object",
@@ -8500,8 +8515,7 @@
         "required": [
           "username",
           "password"
-        ],
-        "additionalProperties": false
+        ]
       },
       "AuthNextStep": {
         "type": "string",
@@ -8536,8 +8550,7 @@
         },
         "required": [
           "code"
-        ],
-        "additionalProperties": false
+        ]
       },
       "TotpEnrollment": {
         "type": "object",
@@ -8602,8 +8615,7 @@
         },
         "required": [
           "language"
-        ],
-        "additionalProperties": false
+        ]
       },
       "TotpConfirmed": {
         "type": "object",
@@ -9192,8 +9204,7 @@
         },
         "required": [
           "checkpoint"
-        ],
-        "additionalProperties": false
+        ]
       },
       "AuditCheckpointVerification": {
         "type": "object",
@@ -9271,15 +9282,14 @@
           },
           "password": {
             "type": "string",
-            "minLength": 12,
-            "maxLength": 128
+            "maxLength": 256,
+            "description": "12 to 128 characters after Unicode NFKC normalization (the form the hash is made of); at most 256 UTF-16 code units as sent."
           }
         },
         "required": [
           "token",
           "password"
-        ],
-        "additionalProperties": false
+        ]
       },
       "ChangePasswordRequest": {
         "type": "object",
@@ -9291,15 +9301,14 @@
           },
           "newPassword": {
             "type": "string",
-            "minLength": 12,
-            "maxLength": 128
+            "maxLength": 256,
+            "description": "12 to 128 characters after Unicode NFKC normalization (the form the hash is made of); at most 256 UTF-16 code units as sent."
           }
         },
         "required": [
           "currentPassword",
           "newPassword"
-        ],
-        "additionalProperties": false
+        ]
       },
       "Elevation": {
         "type": "object",
@@ -9503,8 +9512,7 @@
         "required": [
           "username",
           "role"
-        ],
-        "additionalProperties": false
+        ]
       },
       "UpdateUserRequest": {
         "type": "object",
@@ -9541,7 +9549,6 @@
             ]
           }
         },
-        "additionalProperties": false,
         "description": "Fields that are absent stay as they are; `null` clears the display name or the e-mail address."
       },
       "SecretType": {
@@ -9671,8 +9678,7 @@
         },
         "required": [
           "passphrase"
-        ],
-        "additionalProperties": false
+        ]
       },
       "VaultInitialized": {
         "type": "object",
@@ -9704,8 +9710,7 @@
             "minLength": 1,
             "maxLength": 128
           }
-        },
-        "additionalProperties": false
+        }
       },
       "ChangeVaultPassphraseRequest": {
         "type": "object",
@@ -9724,8 +9729,7 @@
         "required": [
           "currentPassphrase",
           "newPassphrase"
-        ],
-        "additionalProperties": false
+        ]
       },
       "ConfirmPassphraseRequest": {
         "type": "object",
@@ -9738,8 +9742,7 @@
         },
         "required": [
           "passphrase"
-        ],
-        "additionalProperties": false
+        ]
       },
       "VaultRotated": {
         "type": "object",
@@ -10094,6 +10097,7 @@
           },
           "ipAllowlist": {
             "default": [],
+            "description": "Addresses or ranges the token may be used from; empty: anywhere. An address is compared only with ranges of its own family: `::/0` admits every IPv6 address and no IPv4 one, so allowing both takes `0.0.0.0/0` and `::/0`. An IPv4 address that arrives mapped into IPv6 (`::ffff:a.b.c.d`) counts as IPv4.",
             "maxItems": 16,
             "type": "array",
             "items": {
@@ -10124,11 +10128,8 @@
         },
         "required": [
           "name",
-          "permissions",
-          "expiresInDays",
-          "ipAllowlist"
-        ],
-        "additionalProperties": false
+          "permissions"
+        ]
       },
       "CreatedToken": {
         "type": "object",
@@ -10667,8 +10668,7 @@
         },
         "required": [
           "digest"
-        ],
-        "additionalProperties": false
+        ]
       },
       "PluginConfigField": {
         "type": "object",
@@ -10901,8 +10901,7 @@
         },
         "required": [
           "values"
-        ],
-        "additionalProperties": false
+        ]
       },
       "PluginSidecarFragment": {
         "type": "object",
@@ -10962,15 +10961,13 @@
                     "type": "string",
                     "maxLength": 2000000
                   }
-                },
-                "additionalProperties": false
+                }
               }
             },
             "required": [
               "op",
               "url"
-            ],
-            "additionalProperties": false
+            ]
           },
           {
             "type": "object",
@@ -10987,8 +10984,7 @@
             "required": [
               "op",
               "field"
-            ],
-            "additionalProperties": false
+            ]
           },
           {
             "type": "object",
@@ -11015,8 +11011,7 @@
             "required": [
               "op",
               "action"
-            ],
-            "additionalProperties": false
+            ]
           }
         ]
       },
@@ -11084,8 +11079,7 @@
           "name",
           "type",
           "value"
-        ],
-        "additionalProperties": false
+        ]
       },
       "UpdateSecretRequest": {
         "type": "object",
@@ -11126,7 +11120,6 @@
             "maxLength": 32768
           }
         },
-        "additionalProperties": false,
         "description": "Fields that are absent stay as they are; `null` clears the description or the expiry."
       },
       "RevealedSecret": {
@@ -12466,8 +12459,7 @@
         "required": [
           "name",
           "address"
-        ],
-        "additionalProperties": false
+        ]
       },
       "UpdateServerRequest": {
         "type": "object",
@@ -12531,7 +12523,6 @@
             ]
           }
         },
-        "additionalProperties": false,
         "description": "Fields that are absent stay as they are; `null` clears the country, the provider or the notes; `tags` replaces the list."
       },
       "PinHostKeyRequest": {
@@ -12549,8 +12540,7 @@
         "required": [
           "algorithm",
           "fingerprintSha256"
-        ],
-        "additionalProperties": false
+        ]
       },
       "AddAccessRequest": {
         "type": "object",
@@ -12585,8 +12575,7 @@
           "method",
           "username",
           "secretId"
-        ],
-        "additionalProperties": false
+        ]
       },
       "UpdateAccessRequest": {
         "type": "object",
@@ -12621,7 +12610,6 @@
             "maximum": 1000
           }
         },
-        "additionalProperties": false,
         "description": "Fields that are absent stay as they are; `null` removes the sudo secret. The result must still be consistent: the secret kind has to fit the method."
       },
       "HostKeyScan": {
@@ -12684,8 +12672,7 @@
         },
         "required": [
           "fingerprintSha256"
-        ],
-        "additionalProperties": false
+        ]
       },
       "HostKeyAccepted": {
         "type": "object",
@@ -13082,8 +13069,7 @@
         "required": [
           "name",
           "secretId"
-        ],
-        "additionalProperties": false
+        ]
       },
       "RunSecretView": {
         "type": "object",
@@ -13310,8 +13296,7 @@
           "sudo",
           "parameters",
           "body"
-        ],
-        "additionalProperties": false
+        ]
       },
       "UpdateScriptRequest": {
         "type": "object",
@@ -13344,7 +13329,6 @@
             "description": "POSIX sh, run as `sh script.sh`. Line endings are made LF when it is saved."
           }
         },
-        "additionalProperties": false,
         "description": "Fields that are absent stay as they are. Changing the text raises the version; runs that happened before keep the text they ran."
       },
       "CommandRunState": {
@@ -13928,14 +13912,19 @@
               },
               "parameters": {
                 "$ref": "#/components/schemas/ParameterValues"
+              },
+              "expectedScriptRevision": {
+                "description": "The `updatedAt` of the script as the person saw it when they confirmed the run. Recommended: when the script was changed since (its text, parameters, level or sudo), the run is refused with 409 `conflict` instead of running something nobody reviewed. Left out, the current script runs.",
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
               }
             },
             "required": [
               "mode",
               "serverIds",
               "scriptId"
-            ],
-            "additionalProperties": false
+            ]
           },
           {
             "type": "object",
@@ -13991,8 +13980,7 @@
               "mode",
               "serverIds",
               "command"
-            ],
-            "additionalProperties": false
+            ]
           }
         ],
         "description": "Run a stored script (`mode: script`, with its parameters) or a command typed in (`mode: inline`) on one to fifty servers at once."
@@ -14518,8 +14506,7 @@
         },
         "required": [
           "name"
-        ],
-        "additionalProperties": false
+        ]
       },
       "ArtifactPushResult": {
         "type": "object",
@@ -14956,7 +14943,6 @@
           "baseUrl",
           "tokenSecretId"
         ],
-        "additionalProperties": false,
         "description": "Connects to the panel with a token that is in the vault already. The panel is asked first; nothing is stored when it refuses."
       },
       "ConnectPanelWithTokenRequest": {
@@ -14999,7 +14985,6 @@
           "token",
           "secretName"
         ],
-        "additionalProperties": false,
         "description": "The wizard path for a token that is not in the vault yet: the panel is asked with it first, and only when it answers is the token stored (kind `panel_token`) and the connection saved, in one transaction."
       },
       "PanelTestResult": {
@@ -18002,8 +17987,7 @@
               }
             ]
           }
-        },
-        "additionalProperties": false
+        }
       },
       "ValidateConventionPackRequest": {
         "type": "object",
@@ -18021,8 +18005,7 @@
             },
             "additionalProperties": {}
           }
-        },
-        "additionalProperties": false
+        }
       },
       "PackIssue": {
         "type": "object",
@@ -19150,8 +19133,7 @@
               "op",
               "path",
               "value"
-            ],
-            "additionalProperties": false
+            ]
           },
           {
             "type": "object",
@@ -19170,8 +19152,7 @@
               "op",
               "path",
               "value"
-            ],
-            "additionalProperties": false
+            ]
           },
           {
             "type": "object",
@@ -19190,8 +19171,7 @@
               "op",
               "path",
               "value"
-            ],
-            "additionalProperties": false
+            ]
           },
           {
             "type": "object",
@@ -19208,8 +19188,7 @@
             "required": [
               "op",
               "path"
-            ],
-            "additionalProperties": false
+            ]
           },
           {
             "type": "object",
@@ -19231,8 +19210,7 @@
               "op",
               "from",
               "path"
-            ],
-            "additionalProperties": false
+            ]
           },
           {
             "type": "object",
@@ -19254,8 +19232,7 @@
               "op",
               "from",
               "path"
-            ],
-            "additionalProperties": false
+            ]
           }
         ],
         "description": "One operation of RFC 6902."
@@ -19297,8 +19274,7 @@
           "kind",
           "uuid",
           "change"
-        ],
-        "additionalProperties": false
+        ]
       },
       "ImpactTarget": {
         "type": "object",
@@ -20239,8 +20215,7 @@
             "minLength": 1,
             "maxLength": 100
           }
-        },
-        "additionalProperties": false
+        }
       },
       "PanelDiffObjectStatus": {
         "type": "string",
@@ -21961,8 +21936,7 @@
         "required": [
           "name",
           "source"
-        ],
-        "additionalProperties": false
+        ]
       },
       "UpdateBaselineRequest": {
         "type": "object",
@@ -21996,7 +21970,6 @@
             "maximum": 9007199254740991
           }
         },
-        "additionalProperties": false,
         "description": "A changed document becomes a new version; the old one stays. A built-in baseline cannot be changed (409)."
       },
       "ValidateBaselineRequest": {
@@ -22010,8 +21983,7 @@
         },
         "required": [
           "source"
-        ],
-        "additionalProperties": false
+        ]
       },
       "BaselineIssue": {
         "type": "object",
@@ -22137,7 +22109,6 @@
           "serverIds",
           "tags"
         ],
-        "additionalProperties": false,
         "description": "The servers and tags this baseline applies to, replacing what it had. A server or tag that another baseline had is moved here. A server named here uses this baseline whatever its tags say; otherwise the baseline of a tag it carries applies (the first by name when it has several)."
       },
       "ObservationCatalogue": {
@@ -22331,8 +22302,7 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "StartBaselineRunsRequest": {
         "type": "object",
@@ -22358,8 +22328,7 @@
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
           }
-        },
-        "additionalProperties": false
+        }
       },
       "StartBaselineRunsResult": {
         "type": "object",
@@ -23093,7 +23062,6 @@
         "required": [
           "operationId"
         ],
-        "additionalProperties": false,
         "description": "What to ask the panel. Never a URL or a header: the target is the connected panel, the path is the catalogue path with the checked values filled in."
       },
       "AttentionSeverity": {
@@ -23988,6 +23956,11 @@
         "type": "http",
         "scheme": "bearer",
         "description": "An API token (`swt_...`) created in the console. It carries a subset of the permissions of its owner, expires, and is refused on every route that needs a fresh second factor."
+      },
+      "sidecar": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The token of a plugin's sidecar container, from its compose fragment (`GET /plugins/{id}/sidecar`). Accepted only by that plugin's gateway, never by any other route; it is not an API token."
       }
     }
   }
