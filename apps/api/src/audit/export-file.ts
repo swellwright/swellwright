@@ -53,8 +53,9 @@ export function toStoredEvent(event: AuditEvent): StoredEvent {
 
 /** The hash of the event with this number in an export file, or null when the file has no such event. */
 export function findEventHash(text: string, seq: number): string | null {
+  // Every line is parsed: JSON does not fix the order of the members, so no text search can find `seq` reliably.
   for (const line of text.split(/\r?\n/u)) {
-    if (!line.includes(`"seq":${String(seq)},`) && !line.includes(`"seq": ${String(seq)},`)) {
+    if (line.trim().length === 0) {
       continue;
     }
     try {

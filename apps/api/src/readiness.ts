@@ -92,26 +92,58 @@ export class DatabaseCheck implements ReadinessCheck {
   }
 }
 
-/** Opens a short-lived connection per probe, so a failed probe leaves no half-open client behind. */
+/**
+ * Opens a short-lived connection per probe, so a failed probe leaves no half-open client behind. The probe owns its
+ * deadline: connecting and the `PING` together get `timeoutMs`, and the client is closed when it passes, so a peer
+ * that accepts the socket and never answers cannot keep a connection open after readiness has said `timeout`.
+ * Overlapping readiness calls share the probe in flight instead of opening a connection each.
+ */
 export class ValkeyCheck implements ReadinessCheck {
   readonly name = 'valkey';
+  private inFlight: Promise<void> | undefined;
+  private active: Redis | undefined;
 
-  constructor(private readonly url: string) {}
+  constructor(
+    private readonly url: string,
+    private readonly timeoutMs: number = CHECK_TIMEOUT_MS,
+  ) {}
 
-  async run(): Promise<void> {
+  run(): Promise<void> {
+    this.inFlight ??= this.probe().finally(() => {
+      this.inFlight = undefined;
+    });
+    return this.inFlight;
+  }
+
+  private async probe(): Promise<void> {
     const client = new Redis(this.url, {
       lazyConnect: true,
       maxRetriesPerRequest: 1,
-      connectTimeout: CHECK_TIMEOUT_MS,
+      connectTimeout: this.timeoutMs,
       enableOfflineQueue: false,
       retryStrategy: () => null,
     });
     client.on('error', () => undefined);
+    this.active = client;
     try {
-      await client.connect();
-      await client.ping();
+      await withTimeout(
+        (async () => {
+          await client.connect();
+          await client.ping();
+        })(),
+        this.timeoutMs,
+      );
     } finally {
       client.disconnect();
+      if (this.active === client) {
+        this.active = undefined;
+      }
     }
+  }
+
+  close(): Promise<void> {
+    this.active?.disconnect();
+    this.active = undefined;
+    return Promise.resolve();
   }
 }

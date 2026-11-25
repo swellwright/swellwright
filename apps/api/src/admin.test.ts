@@ -3,6 +3,8 @@ import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
+import { CreatedTokenSchema } from '@swellwright/contracts';
+
 import { runAdmin } from './admin.js';
 import {
   acceptInvitation,
@@ -57,6 +59,11 @@ describe('the server command', { skip: !databaseUrl }, () => {
 
   it('gets an owner who lost everything back in, and leaves a record without an actor', async () => {
     const session = await signInAs(instance, 'owner', ownerSecret);
+    // The sole enrolled owner: the console would refuse this reset, the server command is the way back in.
+    const minted = await session.post('/tokens', { name: 'ci', permissions: ['users:read'] });
+    assert.equal(minted.status, 201);
+    const bearer = { authorization: `Bearer ${CreatedTokenSchema.parse(minted.body).token}` };
+    assert.equal((await instance.client().call('GET', '/users', undefined, bearer)).status, 200);
     const run = await admin(instance, 'reset-credentials', ' OWNER ');
     assert.equal(run.code, 0);
     assert.deepEqual(run.err, []);
@@ -70,6 +77,11 @@ describe('the server command', { skip: !databaseUrl }, () => {
       .client()
       .post('/auth/login', { username: 'owner', password: PASSWORD });
     assert.equal(old.status, 401, 'the old password is gone');
+    assert.equal(
+      (await instance.client().call('GET', '/users', undefined, bearer)).status,
+      401,
+      'the API token of the owner was revoked with the credentials',
+    );
 
     const { client } = await acceptInvitation(instance, token, 'the owner chose this one');
     const me = await client.get('/auth/me');
@@ -82,7 +94,7 @@ describe('the server command', { skip: !databaseUrl }, () => {
       'the reset event',
     );
     assert.equal(reset.actor, null);
-    assert.deepEqual(reset.details, { via: 'cli' });
+    assert.deepEqual(reset.details, { via: 'cli', tokens_revoked: 1 });
     assert.equal(reset.object?.type, 'user');
     assert.ok(!JSON.stringify(events).includes(token));
   });

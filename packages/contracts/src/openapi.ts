@@ -1,4 +1,4 @@
-import { z } from 'zod';
+﻿import { z } from 'zod';
 
 import {
   ArtifactCatalogueStateSchema,
@@ -330,7 +330,7 @@ import {
 } from './system.js';
 
 /** Version of the API description. Bump it with every contract change (oasdiff checks the rules). */
-export const OPENAPI_INFO_VERSION = '0.31.0';
+export const OPENAPI_INFO_VERSION = '0.32.0';
 
 /** Named schemas that appear under `components.schemas`. Every response schema must be listed here. */
 const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
@@ -650,16 +650,136 @@ function componentRegistry(): z.core.$ZodRegistry<{ id: string }> {
   return registry;
 }
 
-function schemaRef(schema: z.ZodType): Json {
+/**
+ * A schema as a request reads it (`input`: a field with a default may be left out) or as a response writes it
+ * (`output`: the default is filled in, so the field is always there).
+ */
+type Io = 'input' | 'output';
+
+function schemaRef(schema: z.ZodType, io: Io = 'output'): Json {
   const id = idOf(schema);
   if (id && COMPONENT_SCHEMAS.includes(schema)) {
     return { $ref: `#/components/schemas/${id}` };
   }
   return z.toJSONSchema(schema, {
     target: 'draft-2020-12',
-    io: 'output',
+    io,
     unrepresentable: 'any',
   });
+}
+
+function renderComponents(io: Io): Record<string, Json> {
+  const { schemas } = z.toJSONSchema(componentRegistry(), {
+    target: 'draft-2020-12',
+    io,
+    unrepresentable: 'any',
+    uri: (id) => `#/components/schemas/${id}`,
+  }) as { schemas: Record<string, Json> };
+  for (const schema of Object.values(schemas)) {
+    // Zod adds a per-schema $schema and an $id with a fragment; the document already declares the dialect.
+    delete schema['$schema'];
+    delete schema['$id'];
+  }
+  return schemas;
+}
+
+function refsIn(node: unknown, out: Set<string>): Set<string> {
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      refsIn(item, out);
+    }
+  } else if (node && typeof node === 'object') {
+    for (const [key, value] of Object.entries(node as Json)) {
+      if (key === '$ref' && typeof value === 'string') {
+        out.add(value.slice('#/components/schemas/'.length));
+      } else {
+        refsIn(value, out);
+      }
+    }
+  }
+  return out;
+}
+
+/** Every component a set of roots reaches, the roots included, following `$ref` through `schemas`. */
+function reach(roots: Iterable<string>, schemas: Record<string, Json>): Set<string> {
+  const seen = new Set<string>();
+  const queue = [...roots];
+  for (let name = queue.pop(); name !== undefined; name = queue.pop()) {
+    if (seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    queue.push(...refsIn(schemas[name], new Set()));
+  }
+  return seen;
+}
+
+/** Every `required` list in a schema, by its place in the tree. */
+function requiredLists(
+  node: unknown,
+  path = '',
+  out = new Map<string, string>(),
+): Map<string, string> {
+  if (Array.isArray(node)) {
+    node.forEach((item, index) => requiredLists(item, `${path}/${String(index)}`, out));
+  } else if (node && typeof node === 'object') {
+    for (const [key, value] of Object.entries(node as Json)) {
+      if (key === 'required' && Array.isArray(value)) {
+        out.set(path, JSON.stringify([...(value as string[])].sort()));
+      } else {
+        requiredLists(value, `${path}/${key}`, out);
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The component schemas. A component that only requests use is described as a request reads it, so a field with a
+ * default is optional there; one that responses use is described as it is written. A component both use must require
+ * the same fields either way (no defaults), or the document could not say both: the build fails and names it.
+ */
+function components(): Record<string, Json> {
+  const output = renderComponents('output');
+  const input = renderComponents('input');
+  const requestRoots = new Set<string>();
+  const responseRoots = new Set<string>(['ApiError']);
+  for (const route of routes as readonly RouteDef[]) {
+    const body = route.request?.body;
+    if (body) {
+      refsIn(schemaRef(body, 'input'), requestRoots);
+    }
+    for (const shape of [route.request?.params, route.request?.query]) {
+      for (const field of Object.values(shape?.shape ?? {})) {
+        refsIn(schemaRef(field), responseRoots);
+      }
+    }
+    for (const def of Object.values(route.responses)) {
+      if (!def.binary && !def.empty) {
+        refsIn(schemaRef(def.schema), responseRoots);
+      }
+    }
+  }
+  const forRequests = reach(requestRoots, input);
+  const forResponses = reach(responseRoots, output);
+  const schemas: Record<string, Json> = {};
+  for (const [name, written] of Object.entries(output)) {
+    const read = input[name];
+    if (forRequests.has(name) && !forResponses.has(name)) {
+      schemas[name] = read ?? written;
+      continue;
+    }
+    if (
+      forRequests.has(name) &&
+      JSON.stringify([...requiredLists(read)]) !== JSON.stringify([...requiredLists(written)])
+    ) {
+      throw new Error(
+        `The component ${name} is used by requests and responses but requires different fields in each.`,
+      );
+    }
+    schemas[name] = written;
+  }
+  return schemas;
 }
 
 function parameters(route: RouteDef): Json[] {
@@ -695,7 +815,11 @@ function operation(route: RouteDef): Json {
             { description, schema: { type: 'string' } },
           ]),
         ),
-        content: { 'application/octet-stream': { schema: { type: 'string', format: 'binary' } } },
+        content: {
+          [def.binary.contentType ?? 'application/octet-stream']: {
+            schema: { type: 'string', format: 'binary' },
+          },
+        },
       };
       continue;
     }
@@ -726,17 +850,19 @@ function operation(route: RouteDef): Json {
   if (route.request?.body) {
     op['requestBody'] = {
       required: true,
-      content: { 'application/json': { schema: schemaRef(route.request.body) } },
+      content: { 'application/json': { schema: schemaRef(route.request.body, 'input') } },
     };
   }
   op['security'] =
-    route.auth === 'none'
-      ? []
-      : route.auth === 'token'
-        ? [{ bearer: [] }]
-        : route.auth === 'any'
-          ? [{ session: [] }, { bearer: [] }]
-          : [{ session: [] }];
+    route.handlerAuth === 'sidecar'
+      ? [{ sidecar: [] }]
+      : route.auth === 'none'
+        ? []
+        : route.auth === 'token'
+          ? [{ bearer: [] }]
+          : route.auth === 'any'
+            ? [{ session: [] }, { bearer: [] }]
+            : [{ session: [] }];
   if (route.permission) {
     // Not part of OpenAPI: tells a reader and a generated client which role may call the operation.
     op['x-sw-permission'] = route.permission;
@@ -755,17 +881,7 @@ export function buildOpenApi(): Json {
   for (const route of routes) {
     paths[route.path] = { ...(paths[route.path] ?? {}), [route.method]: operation(route) };
   }
-  const { schemas } = z.toJSONSchema(componentRegistry(), {
-    target: 'draft-2020-12',
-    io: 'output',
-    unrepresentable: 'any',
-    uri: (id) => `#/components/schemas/${id}`,
-  }) as { schemas: Record<string, Json> };
-  for (const schema of Object.values(schemas)) {
-    // Zod adds a per-schema $schema and an $id with a fragment; the document already declares the dialect.
-    delete schema['$schema'];
-    delete schema['$id'];
-  }
+  const schemas = components();
   return {
     openapi: '3.1.0',
     info: {
@@ -836,6 +952,12 @@ export function buildOpenApi(): Json {
           scheme: 'bearer',
           description:
             'An API token (`swt_...`) created in the console. It carries a subset of the permissions of its owner, expires, and is refused on every route that needs a fresh second factor.',
+        },
+        sidecar: {
+          type: 'http',
+          scheme: 'bearer',
+          description:
+            "The token of a plugin's sidecar container, from its compose fragment (`GET /plugins/{id}/sidecar`). Accepted only by that plugin's gateway, never by any other route; it is not an API token.",
         },
       },
     },

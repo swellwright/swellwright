@@ -4,9 +4,10 @@ import {
   ForbiddenException,
   Inject,
   Injectable,
+  InternalServerErrorException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { hasPermission, type Permission, type RouteDef } from '@swellwright/contracts';
+import { hasPermission, type Permission, type RouteDef, routes } from '@swellwright/contracts';
 
 import { AuditService } from '../audit/audit.service.js';
 import { type AppConfig } from '../config.js';
@@ -25,8 +26,20 @@ const DENIED_WINDOW_MS = 10 * 60_000;
 
 const UNSAFE_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-function routeOf(context: ExecutionContext): RouteDef | undefined {
-  return Reflect.getMetadata(ROUTE_METADATA, context.getHandler()) as RouteDef | undefined;
+const REGISTERED_ROUTES: ReadonlySet<RouteDef> = new Set<RouteDef>(routes);
+
+/**
+ * The contract of the handler a request reached. Every Nest handler is bound to a route of the registry, which says
+ * who may call it (`auth: 'none'` is the explicit public declaration); a handler without one, or with a definition
+ * that is not in the registry, is a programming mistake and is refused with 500 before it runs, never treated as
+ * public.
+ */
+function routeOf(context: ExecutionContext): RouteDef {
+  const route = Reflect.getMetadata(ROUTE_METADATA, context.getHandler()) as unknown;
+  if (!REGISTERED_ROUTES.has(route as RouteDef)) {
+    throw new InternalServerErrorException();
+  }
+  return route as RouteDef;
 }
 
 /**
@@ -69,10 +82,27 @@ function hostOf(origin: string): string | undefined {
   }
 }
 
-/** The token in `Authorization: Bearer <token>`, or an unusable string so that the attempt is counted. */
-function bearerOf(header: string | undefined): string | undefined {
-  const match = header === undefined ? null : /^Bearer\s+(\S{1,200})$/iu.exec(header);
-  return match?.[1];
+/**
+ * What an `Authorization` header is: absent, a Bearer attempt (with its value, or `''` when the value is missing or
+ * malformed, so the attempt is still counted and refused), or another scheme. The scheme is matched without regard to
+ * case. Another scheme, such as `Basic` from a reverse proxy with `auth_basic` in front of the console, is not
+ * Swellwright's to judge.
+ */
+export function classifyAuthorization(
+  header: string | undefined,
+):
+  | { readonly kind: 'none' }
+  | { readonly kind: 'bearer'; readonly value: string }
+  | { readonly kind: 'other' } {
+  if (header === undefined) {
+    return { kind: 'none' };
+  }
+  const scheme = /^\s*([^\s]+)/u.exec(header)?.[1];
+  if (scheme?.toLowerCase() !== 'bearer') {
+    return scheme === undefined ? { kind: 'bearer', value: '' } : { kind: 'other' };
+  }
+  const match = /^\s*bearer[ \t]+(\S{1,200})\s*$/iu.exec(header);
+  return { kind: 'bearer', value: match?.[1] ?? '' };
 }
 
 /** Whether the caller may do it: a session by the role, a token by what it carries and the role still allows. */
@@ -92,16 +122,20 @@ export class AuthGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const route = routeOf(context);
-    if (!route || route.auth === 'none') {
+    if (route.auth === 'none') {
       return true;
     }
     const req = context.switchToHttp().getRequest<AuthedRequest>();
     if (route.auth === 'token' || route.auth === 'any') {
-      const header = req.header('authorization');
-      // A bearer header means a token and only a token: a bad one is refused, never replaced by the cookie.
-      if (header !== undefined || route.auth === 'token') {
-        const raw = bearerOf(header);
-        const auth = raw ? await this.tokens.authenticate(raw, requestMeta(req)) : null;
+      const authorization = classifyAuthorization(req.header('authorization'));
+      // A Bearer header means a token and only a token: a bad one is refused, never replaced by the cookie. Another
+      // scheme (Basic from a proxy) leaves an `any` route to the cookie; a `token` route needs Bearer.
+      if (authorization.kind === 'bearer' || route.auth === 'token') {
+        // An empty or malformed value is still an attempt: it is counted towards the limit and refused.
+        const auth =
+          authorization.kind === 'bearer'
+            ? await this.tokens.authenticate(authorization.value, requestMeta(req))
+            : null;
         if (!auth) {
           throw new UnauthorizedException('Authentication required.');
         }
@@ -129,7 +163,7 @@ export class AuthGuard implements CanActivate {
 export class StepUpGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const route = routeOf(context);
-    if (!route?.stepUp) {
+    if (!route.stepUp) {
       return true;
     }
     const auth = context.switchToHttp().getRequest<AuthedRequest>().auth;
@@ -156,7 +190,7 @@ export class PermissionGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const route = routeOf(context);
-    if (!route?.permission) {
+    if (!route.permission) {
       return true;
     }
     const req = context.switchToHttp().getRequest<AuthedRequest>();

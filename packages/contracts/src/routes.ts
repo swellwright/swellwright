@@ -233,7 +233,11 @@ export interface ResponseDef {
    * The body is a file, streamed as it is: not JSON, not checked against `schema`. The headers say what else the
    * answer carries (name and description).
    */
-  readonly binary?: { readonly headers: Readonly<Record<string, string>> };
+  readonly binary?: {
+    readonly headers: Readonly<Record<string, string>>;
+    /** The media type of the file; `application/octet-stream` when it is left out. */
+    readonly contentType?: string;
+  };
 }
 
 export interface RouteDef {
@@ -245,6 +249,12 @@ export interface RouteDef {
   readonly summary: string;
   readonly description?: string;
   readonly auth: RouteAuth;
+  /**
+   * A credential the handler itself checks, for a route that is `auth: 'none'` to the guards because no user signs in
+   * to it: `sidecar` is the token of a plugin's compose fragment (`Authorization: Bearer`). The OpenAPI document
+   * declares it as the route's security, so a reader does not take the route for an open one.
+   */
+  readonly handlerAuth?: 'sidecar';
   /**
    * What the caller's role must allow (ADR 0015). Required for a signed-in route, except the few that every
    * signed-in user may call (`ROUTES_OPEN_TO_ANY_SESSION`).
@@ -466,7 +476,7 @@ export const changePasswordRoute = defineRoute({
   tags: ['auth'],
   summary: 'Change your own password',
   description:
-    'Needs the current password and an elevated session. Ends your other sessions and keeps this one. A wrong current password counts towards the lockout.',
+    'Needs the current password and an elevated session. Ends your other sessions, keeps this one, and revokes every live API token of yours. A wrong current password counts towards the lockout. The new password is 12 to 128 characters after Unicode NFKC normalization. A session that ended, or a password that changed, while the new one was being hashed answers 401.',
   auth: 'session',
   stepUp: true,
   request: { body: ChangePasswordRequestSchema },
@@ -509,7 +519,7 @@ export const updateUserRoute = defineRoute({
   tags: ['users'],
   summary: 'Change a user',
   description:
-    'Role, status, display name and e-mail address. Refused with 409 when it would leave the instance without an active owner, or when you change your own role or status. Disabling a user ends their sessions.',
+    'Role, status, display name and e-mail address. Refused with 409 when it would leave the instance without an enrolled active owner (active, with a confirmed authenticator), or when you change your own role or status. Disabling a user ends their sessions and revokes their live API tokens for good (`tokens_revoked` in the audit record); enabling them again does not bring the tokens back.',
   auth: 'session',
   permission: 'users:write',
   stepUp: true,
@@ -552,7 +562,7 @@ export const resetCredentialsRoute = defineRoute({
   tags: ['users'],
   summary: 'Reset the password and the authenticator of a user',
   description:
-    'Deletes the password, the authenticator and the recovery codes, ends every session of the user at once, and returns a new invitation. The user cannot sign in until it is accepted. Refused with 409 when you reset your own account (change your password instead).',
+    'Deletes the password, the authenticator and the recovery codes, ends every session of the user at once, revokes their live API tokens, and returns a new invitation. The user cannot sign in until it is accepted. Refused with 409 when you reset your own account (change your password instead), or when it would leave the instance without an enrolled active owner (the host command `reset-credentials` is the way back in then).',
   auth: 'session',
   permission: 'users:write',
   stepUp: true,
@@ -881,7 +891,7 @@ export const exportAuditRoute = defineRoute({
   tags: ['audit'],
   summary: 'Export the audit log for checking outside the database',
   description:
-    'Pages of events, oldest first, with every field their hashes cover, so that a copy can be verified without this server (`node dist/admin.js audit-verify <file>`). Each page is recorded. Needs a fresh second factor: a copy of the whole log is a lot to hand over.',
+    'Pages of events, oldest first, with every field their hashes cover, so that a copy can be verified without this server (`node dist/admin.js audit-verify <file>`). Each page is recorded, so the log grows while it is exported: continue with `from=<nextFrom>&through=<head.seq of the first page>` and the export ends exactly at the head the first page saw (without `through` a page reads up to the current head). A `through` that is not in the log answers 400. Needs a fresh second factor: a copy of the whole log is a lot to hand over.',
   auth: 'session',
   permission: 'audit:export',
   stepUp: true,
@@ -950,7 +960,7 @@ export const createTokenRoute = defineRoute({
   tags: ['tokens'],
   summary: 'Create an API token in your own name',
   description:
-    'The token carries a subset of your permissions (never one that needs a fresh second factor), expires after at most a year, and may be limited to addresses. The value is in the answer and nowhere else: it is not stored and cannot be shown again.',
+    'The token carries a subset of your permissions (never one that needs a fresh second factor), expires after at most a year, and may be limited to addresses. The value is in the answer and nowhere else: it is not stored and cannot be shown again. The session, its elevation and your role are checked again when the token is written: a session that ended meanwhile answers 401, an elevation that ran out 403 `step_up_required`, a role without `tokens:create` 403. More than 20 live tokens answer 409 `conflict`, also when two requests race for the last place. A credential reset, a password change and disabling the account revoke every live token of the user.',
   auth: 'session',
   permission: 'tokens:create',
   stepUp: true,
@@ -1096,6 +1106,7 @@ export const pluginGatewayRoute = defineRoute({
   description:
     "Called by a plugin's container, not by people: it proves itself with `Authorization: Bearer <token>`, the token of the compose fragment. The core does what the plugin was approved for and nothing else: requests to the approved hosts, the secret bound to a setting, the plugin's own storage. The answer is always 200 with `ok`; a refusal says why. A wrong token, a plugin that is not enabled or whose files changed answer 401.",
   auth: 'none',
+  handlerAuth: 'sidecar',
   request: { params: PluginIdParamsSchema, body: PluginGatewayRequestSchema },
   responses: {
     200: { description: 'The result or the refusal.', schema: PluginGatewayReplySchema },
@@ -2104,6 +2115,7 @@ export const exportPanelSnapshotRoute = defineRoute({
       description: 'The file.',
       schema: z.unknown(),
       binary: {
+        contentType: 'application/json',
         headers: {
           'Content-Disposition': 'An attachment named after the date and the id of the snapshot.',
         },

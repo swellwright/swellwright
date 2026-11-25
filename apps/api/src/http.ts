@@ -37,6 +37,66 @@ export function requestContext(req: Request, res: Response, next: NextFunction):
   next();
 }
 
+/** What a body-parser failure answers: fixed texts, nothing of the parser's own message, body or stack. */
+const BODY_ERRORS: Readonly<Record<string, { readonly status: number; readonly message: string }>> =
+  {
+    'entity.parse.failed': { status: 400, message: 'The request body is not valid JSON.' },
+    'entity.verify.failed': { status: 400, message: 'The request body is not valid JSON.' },
+    'entity.too.large': { status: 413, message: 'The request body is too large.' },
+    'request.size.invalid': { status: 400, message: 'The request body is incomplete.' },
+    'encoding.unsupported': { status: 415, message: 'The content encoding is not supported.' },
+    'charset.unsupported': { status: 415, message: 'The character set is not supported.' },
+  };
+
+/**
+ * The error handler right behind the JSON parser. A body that cannot be read is answered here, in the documented
+ * envelope with the request id, and nothing the parser says (its message can quote the body) is sent or logged.
+ * Installed before the static files and the routes, so no other handler sees the parser's error.
+ */
+export function bodyParserErrors(
+  error: unknown,
+  req: Request,
+  res: Response,
+  // Express recognizes an error handler by its four parameters; this one never passes the error on.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  _next: NextFunction,
+): void {
+  const type = (error as { type?: unknown } | null)?.type;
+  // The client went away (the connection, not the request stream: a compressed body has ended its stream before it
+  // is parsed) or an answer already started: there is nobody to tell, and the original error stays here.
+  if (
+    type === 'request.aborted' ||
+    res.headersSent ||
+    res.writableEnded ||
+    res.destroyed ||
+    req.socket.destroyed
+  ) {
+    if (!res.writableEnded && !res.destroyed) {
+      res.end();
+    }
+    return;
+  }
+  const known = typeof type === 'string' ? BODY_ERRORS[type] : undefined;
+  // A parser error without a known type that still says it is the client's (a compressed body that does not
+  // decompress answers 400 with only a zlib code) keeps its 4xx status, with a fixed message.
+  const reported = (error as { status?: unknown; statusCode?: unknown } | null) ?? {};
+  const clientStatus = [reported.status, reported.statusCode].find(
+    (value): value is number =>
+      Number.isInteger(value) && Number(value) >= 400 && Number(value) < 500,
+  );
+  const status = known?.status ?? clientStatus ?? 500;
+  const body = ApiErrorSchema.parse({
+    error: {
+      code: status >= 500 ? 'internal_error' : 'bad_request',
+      message:
+        known?.message ??
+        (status >= 500 ? 'Internal error.' : 'The request body could not be read.'),
+      requestId: requestId(res),
+    },
+  });
+  res.status(status).json(body);
+}
+
 const CODE_BY_STATUS: Readonly<Record<number, ErrorCode>> = {
   400: 'bad_request',
   401: 'unauthorized',
@@ -208,6 +268,11 @@ export class ContractResponseInterceptor implements NestInterceptor {
           // A file is streamed as it is; there is no JSON to check.
           if (!(body instanceof StreamableFile)) {
             this.logger.error(`${route.operationId} is a download but did not answer with a file`);
+            throw new Error('contract violation');
+          }
+          const promised = def.binary.contentType ?? 'application/octet-stream';
+          if (body.getHeaders().type !== promised) {
+            this.logger.error(`${route.operationId} sent a file that is not ${promised}`);
             throw new Error('contract violation');
           }
           return;

@@ -227,6 +227,15 @@ export const AuditExportQuerySchema = z.object({
     .describe(
       'The first sequence number to return, 1 by default. Continue with `nextFrom` of the last page.',
     ),
+  through: z.coerce
+    .number()
+    .int()
+    .positive()
+    .max(Number.MAX_SAFE_INTEGER)
+    .optional()
+    .describe(
+      'The last sequence number of the export: send `head.seq` of the first page with every following page, so that an export ends at the head it started from even while new events are written (the export itself writes one per page). Left out, the export reads up to the current head. A number that is not in the log answers 400.',
+    ),
   limit: z.coerce
     .number()
     .int()
