@@ -27,11 +27,22 @@ const compareText = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 
 /**
  * JSON with the keys of every object sorted by code unit and no white space: one value, one text. It is stricter than
  * `JSON.stringify`, because the text is hashed and approved: what JSON cannot say (`undefined`, a function, a symbol, a
- * bigint, `NaN` or an infinity, a class instance, a cycle) is an error, not a silent `null`. A key whose value is
- * `undefined` is left out, as JSON does, so an optional field that is not set is the same as one that is absent.
+ * bigint, `NaN` or an infinity, a class instance, a cycle, a text with a NUL or a lone surrogate) is an error, not a silent
+ * `null`. A key whose value is `undefined` is left out, as JSON does, so an optional field that is not set is the same as one that is absent.
  */
 export function canonicalJson(value: unknown): string {
   return write(value, '', 0, new Set());
+}
+
+/**
+ * A string as JSON text. A NUL and a lone surrogate are refused: JSON can say them, but a `jsonb` column cannot hold them, and
+ * a run that stores one in memory and not in the database would be repeated for ever by the loop that cannot write its checkpoint.
+ */
+function text(value: string, path: string): string {
+  if (value.includes('\u0000') || !value.isWellFormed()) {
+    throw new CanonicalJsonError('A text cannot hold a NUL or a lone surrogate', path);
+  }
+  return JSON.stringify(value);
 }
 
 function write(value: unknown, path: string, depth: number, seen: Set<object>): string {
@@ -46,6 +57,7 @@ function write(value: unknown, path: string, depth: number, seen: Set<object>): 
   }
   switch (typeof value) {
     case 'string':
+      return text(value, path);
     case 'boolean':
       return JSON.stringify(value);
     case 'number':
@@ -85,9 +97,7 @@ function write(value: unknown, path: string, depth: number, seen: Set<object>): 
       .filter(([, item]) => item !== undefined)
       .sort(([a], [b]) => compareText(a, b));
     return `{${entries
-      .map(
-        ([key, item]) => `${JSON.stringify(key)}:${write(item, `${path}/${key}`, depth + 1, seen)}`,
-      )
+      .map(([key, item]) => `${text(key, path)}:${write(item, `${path}/${key}`, depth + 1, seen)}`)
       .join(',')}}`;
   } finally {
     seen.delete(object);

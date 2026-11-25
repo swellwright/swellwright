@@ -2,6 +2,7 @@ import { type DynamicModule, Module, type OnApplicationShutdown, Inject } from '
 import { APP_GUARD } from '@nestjs/core';
 import type { DnsQuery } from '@swellwright/conventions';
 import { Database } from '@swellwright/db';
+import { type EnginePorts, StepRegistry, WorkflowRegistry } from '@swellwright/engine';
 
 import { ArtifactsController } from './artifacts/artifacts.controller.js';
 import { CatalogueService } from './artifacts/catalogue.service.js';
@@ -32,14 +33,22 @@ import { ScriptsService } from './commands/scripts.service.js';
 import { type AppConfig } from './config.js';
 import { DashboardController } from './dashboard/dashboard.controller.js';
 import { DashboardService } from './dashboard/dashboard.service.js';
+import { enginePorts } from './engine/engine-ports.js';
+import { type EngineTuning, EngineRunner } from './engine/engine-runner.js';
+import { EngineRunsService } from './engine/engine-runs.service.js';
+import { PrismaRunStore } from './engine/prisma-run-store.js';
 import {
   CHECKS_CLOCK,
   CLOCK,
   CONFIG,
   DATABASE,
   DNS_QUERY,
+  ENGINE_CATALOGUE,
+  ENGINE_PORTS,
+  ENGINE_TUNING,
   PASSWORD_HASHER,
   PLUGIN_NETWORK,
+  RUN_STORE,
   SECRET_BOX,
   SNAPSHOT_CLOCK,
   VAULT_KDF,
@@ -88,6 +97,13 @@ import type { KdfParams } from './vault/kdf.js';
 import { VaultController } from './vault/vault.controller.js';
 import { VaultService } from './vault/vault.service.js';
 
+/** The run engine in a test: the steps and workflows it knows, and how its loop starts. Production has no steps yet. */
+export interface EngineOptions {
+  readonly steps?: StepRegistry<EnginePorts>;
+  readonly workflows?: WorkflowRegistry<EnginePorts>;
+  readonly tuning?: EngineTuning;
+}
+
 export interface AppOptions {
   /** Replaces the checks built from the configuration (tests). */
   readonly readinessChecks?: readonly ReadinessCheck[];
@@ -107,6 +123,8 @@ export interface AppOptions {
   readonly snapshotClock?: () => number;
   /** The clock of the baseline checks' schedule (when a run is queued, when a server is due), so that tests need not wait. */
   readonly checksClock?: () => number;
+  /** The steps and workflows of the run engine (empty in production until the workflows are decided) and its tuning. */
+  readonly engine?: EngineOptions;
 }
 
 function checksFrom(config: AppConfig, database: Database | undefined): ReadinessCheck[] {
@@ -210,6 +228,25 @@ export class AppModule implements OnApplicationShutdown {
         CheckRunsService,
         CheckScheduler,
         DashboardService,
+        {
+          provide: RUN_STORE,
+          useValue: database ? new PrismaRunStore(database.client) : undefined,
+        },
+        {
+          provide: ENGINE_CATALOGUE,
+          useValue: {
+            steps: options.engine?.steps ?? new StepRegistry<EnginePorts>(),
+            workflows: options.engine?.workflows ?? new WorkflowRegistry<EnginePorts>(),
+          },
+        },
+        {
+          provide: ENGINE_PORTS,
+          useFactory: (vault: VaultService): EnginePorts => enginePorts(vault),
+          inject: [VaultService],
+        },
+        { provide: ENGINE_TUNING, useValue: options.engine?.tuning ?? {} },
+        EngineRunner,
+        EngineRunsService,
         PluginRuntime,
         PluginBroker,
         PluginsService,

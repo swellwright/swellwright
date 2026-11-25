@@ -13,7 +13,12 @@ import {
 } from '@swellwright/engine/testing';
 
 import { databaseUrl } from '../test-support.js';
-import { PrismaRunStore, resourceLockName } from './prisma-run-store.js';
+import {
+  PrismaRunStore,
+  RESOURCE_LOCK_NAMESPACE,
+  RUN_LOCK_NAMESPACE,
+  resourceLockName,
+} from './prisma-run-store.js';
 
 const skip = databaseUrl === undefined ? 'SW_TEST_DATABASE_URL is not set' : false;
 
@@ -134,7 +139,7 @@ describe(
             started = resolve;
           });
           const holder = isolated.database.client.$transaction(async (tx) => {
-            await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${resourceLockName('node:n-1')}))`;
+            await tx.$executeRaw`SELECT pg_advisory_xact_lock(${RESOURCE_LOCK_NAMESPACE}::int, hashtext(${resourceLockName('node:n-1')}))`;
             started();
             await released;
           });
@@ -165,6 +170,96 @@ describe(
           release();
           await isolated.drop();
         }
+      }
+    });
+
+    it('take their advisory locks in a key space of their own: the one-integer locks of the rest of the API, with the same numbers, are no reason to wait', async () => {
+      const isolated = await createIsolatedDatabase(databaseUrl ?? '');
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let releaseTwo: () => void = () => undefined;
+      const releasedTwo = new Promise<void>((resolve) => {
+        releaseTwo = resolve;
+      });
+      try {
+        const store = new PrismaRunStore(isolated.database.client);
+        const run = await store.createRun({
+          id: runId(1),
+          plan: plan([{ locks: [node('n-1')] }]),
+          risk: 'low',
+          requestedBy: null,
+          now: T0,
+        });
+        await store.applyEvent(run.id, 'queue', { now: T0 });
+
+        let started: () => void = () => undefined;
+        const startedPromise = new Promise<void>((resolve) => {
+          started = resolve;
+        });
+        // Audit, plugins and baselines take \`pg_advisory_xact_lock(bigint)\` of a hash of some text. Whatever text hashes to the
+        // number of the run or of its resource, it is not the lock of the engine, which has two integers.
+        const holder = isolated.database.client.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`run:${run.id}`}))`;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${run.id}))`;
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${resourceLockName('node:n-1')}))`;
+          started();
+          await released;
+        });
+        await startedPromise;
+        const outcome = await Promise.race([
+          store.claimNext({ workerId: 'a', now: T0 + 100, leaseMs: LEASE }).then(
+            (got) => (got === null ? 'nothing' : 'claimed'),
+            () => 'failed',
+          ),
+          new Promise<string>((resolve) => {
+            setTimeout(() => {
+              resolve('waiting');
+            }, 1_000);
+          }),
+        ]);
+        assert.equal(outcome, 'claimed');
+        release();
+        await holder;
+
+        // The lock of the engine itself does keep a run from being taken: the run in hand is skipped, not waited for.
+        const second = await store.createRun({
+          id: runId(2),
+          plan: plan([{}]),
+          risk: 'low',
+          requestedBy: null,
+          now: T0 + 1,
+        });
+        await store.applyEvent(second.id, 'queue', { now: T0 + 1 });
+        let startedTwo: () => void = () => undefined;
+        const startedTwoPromise = new Promise<void>((resolve) => {
+          startedTwo = resolve;
+        });
+        const writer = isolated.database.client.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(${RUN_LOCK_NAMESPACE}::int, hashtext(${second.id}))`;
+          startedTwo();
+          await releasedTwo;
+        });
+        await startedTwoPromise;
+        const skipped = await Promise.race([
+          store.claimNext({ workerId: 'b', now: T0 + 100, leaseMs: LEASE }).then(
+            (got) => (got === null ? 'nothing' : 'claimed'),
+            () => 'failed',
+          ),
+          new Promise<string>((resolve) => {
+            setTimeout(() => {
+              resolve('waiting');
+            }, 1_000);
+          }),
+        ]);
+        assert.equal(skipped, 'nothing');
+        releaseTwo();
+        await writer;
+      } finally {
+        release();
+        releaseTwo();
+        await isolated.drop();
       }
     });
 

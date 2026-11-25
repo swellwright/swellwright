@@ -104,6 +104,9 @@ COPY --from=build /app/apps/api/dist ./apps/api/dist
 COPY --from=build /app/packages/contracts/dist ./packages/contracts/dist
 COPY --from=build /app/packages/conventions/dist ./packages/conventions/dist
 COPY --from=build /app/packages/db/dist ./packages/db/dist
+# The run engine (ADR 0048) is started by the server with the application, so it is part of the image: without it the server
+# does not start. `apps/api/src/deployment.test.ts` holds this list to the workspace packages the API depends on.
+COPY --from=build /app/packages/engine/dist ./packages/engine/dist
 COPY --from=build /app/packages/plugin-api/dist ./packages/plugin-api/dist
 COPY --from=build /app/packages/remnawave/dist ./packages/remnawave/dist
 # The frozen description of the panel's API: the API console builds its catalogue from it when it is first asked (ADR 0046).

@@ -18,3 +18,11 @@ export const SNAPSHOT_CLOCK = Symbol('SNAPSHOT_CLOCK');
 export const CHECKS_CLOCK = Symbol('CHECKS_CLOCK');
 /** The question the reconciliation asks of DNS (ADR 0044); tests replace it so that no real name is looked up. */
 export const DNS_QUERY = Symbol('DNS_QUERY');
+/** The store of the run engine over PostgreSQL, or `undefined` when no database is configured (ADR 0048). */
+export const RUN_STORE = Symbol('RUN_STORE');
+/** The steps and the workflows this build knows; empty until a workflow is decided and written. Tests put their own in. */
+export const ENGINE_CATALOGUE = Symbol('ENGINE_CATALOGUE');
+/** The ports the steps are given (`EnginePorts`), built once for the process from what the API already has. */
+export const ENGINE_PORTS = Symbol('ENGINE_PORTS');
+/** What a test may change about the loop of the engine (`EngineTuning`); the production values come from the configuration. */
+export const ENGINE_TUNING = Symbol('ENGINE_TUNING');

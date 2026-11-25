@@ -161,6 +161,22 @@ const EnvSchema = z.object({
   SW_COMMAND_LOST_AFTER_MINUTES: z.coerce.number().min(0.02).max(1440).default(30),
   /** How many runs one user may start per minute. */
   SW_COMMAND_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(1).max(600).default(10),
+  /** The run engine (ADR 0048): `false` starts no loop in this process (runs can still be made and are left queued). */
+  SW_ENGINE_ENABLED: z.preprocess(unsetIfEmpty, z.stringbool().default(true)),
+  /** How many runs this process works on at the same time. Each one is a loop of its own, one run after another. */
+  SW_ENGINE_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(1),
+  /** How long an idle loop sleeps before it looks for a run again, in milliseconds. */
+  SW_ENGINE_POLL_MS: z.coerce.number().int().min(50).max(60_000).default(1000),
+  /** How often a loop renews the lease of its run, in milliseconds. The lease lasts three times as long (30 s by default). */
+  SW_ENGINE_RENEW_MS: z.coerce.number().int().min(100).max(60_000).default(10_000),
+  /** How long a run that waited (a lock held by another run, a sealed vault) is left alone before it is tried again, in milliseconds. */
+  SW_ENGINE_WAIT_BACKOFF_MS: z.coerce.number().int().min(100).max(600_000).default(15_000),
+  /**
+   * How long closing the process waits for a step that does not give up when asked, in milliseconds; then the lease decides.
+   * Closing can take 5 s more, for the writes already on their way, so the `stop_grace_period` of the container (Compose) must
+   * stay above this plus 15 s.
+   */
+  SW_ENGINE_STOP_TIMEOUT_MS: z.coerce.number().int().min(0).max(120_000).default(8000),
   /**
    * The catalogue of built-in artifacts (ADR 0039): a directory with one sub-directory per artifact. The default is
    * the `artifacts` directory of the repository, which is where the container image puts it too.
@@ -352,6 +368,15 @@ export interface AppConfig {
     readonly pollMs: number;
     readonly lostAfterMs: number;
     readonly rateLimitPerMinute: number;
+  };
+  /** The run engine inside this process (ADR 0048). */
+  readonly engine: {
+    readonly enabled: boolean;
+    readonly concurrency: number;
+    readonly pollMs: number;
+    readonly renewMs: number;
+    readonly waitBackoffMs: number;
+    readonly stopTimeoutMs: number;
   };
   /** The artifact catalogue and how it is distributed (ADR 0039). */
   readonly artifacts: {
@@ -617,6 +642,14 @@ export function loadConfig(
       pollMs: e.SW_COMMAND_POLL_MS,
       lostAfterMs: e.SW_COMMAND_LOST_AFTER_MINUTES * 60_000,
       rateLimitPerMinute: e.SW_COMMAND_RATE_LIMIT_PER_MINUTE,
+    },
+    engine: {
+      enabled: e.SW_ENGINE_ENABLED,
+      concurrency: e.SW_ENGINE_CONCURRENCY,
+      pollMs: e.SW_ENGINE_POLL_MS,
+      renewMs: e.SW_ENGINE_RENEW_MS,
+      waitBackoffMs: e.SW_ENGINE_WAIT_BACKOFF_MS,
+      stopTimeoutMs: e.SW_ENGINE_STOP_TIMEOUT_MS,
     },
     artifacts: {
       // apps/api/{src,dist}/config.js: three levels up is the root of the repository, and of the image (/app).

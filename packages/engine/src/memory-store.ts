@@ -6,6 +6,15 @@
 // either done whole or not at all, as a transaction is.
 
 import { isClaimable } from './lease.js';
+import {
+  MAX_ERROR_CODE,
+  MAX_ERROR_MESSAGE,
+  MAX_WAITING,
+  assertIdentifier,
+  assertStorableCheckpoint,
+  cleanText,
+  storableJson,
+} from './limits.js';
 import { parseLockKey, planAcquisition, waitingReason, type HeldLock } from './locks.js';
 import { planHash, type JsonValue } from './plan.js';
 import { holdsLease, runMachine, transition, type RunState } from './run-state.js';
@@ -33,9 +42,6 @@ import {
 } from './store.js';
 
 const copy = <T>(value: T): T => structuredClone(value);
-
-/** An error message is data in a row: it is cut so that a step cannot fill the table. */
-const MAX_ERROR_MESSAGE = 500;
 
 export class MemoryRunStore implements RunStore {
   private readonly runs = new Map<string, RunRecord>();
@@ -161,7 +167,10 @@ export class MemoryRunStore implements RunStore {
           'A worker holds the run: ask it to cancel or pause (requestCancel, requestPause) instead.',
         );
       }
-      const next = transition(run.state, event);
+      // A cancel that was accepted comes before a pause: a run that is paused is claimed by nobody, so it would never be read.
+      const effective: PersonEvent =
+        event === 'pause' && run.cancelRequestedAt !== null ? 'cancel' : event;
+      const next = transition(run.state, effective);
       const steps = this.stepsOf(runId);
       if (event === 'retry') {
         for (const step of steps) {
@@ -192,13 +201,14 @@ export class MemoryRunStore implements RunStore {
         waiting: null,
         retryAfter: null,
         finishedAt: ends ? input.now : run.finishedAt,
-        pauseRequestedAt: event === 'pause' ? null : run.pauseRequestedAt,
+        pauseRequestedAt: effective === 'pause' || ends ? null : run.pauseRequestedAt,
         cancelRequestedAt: ends ? null : run.cancelRequestedAt,
       });
-      this.emit(runId, input.now, `run.${event}`, {
+      this.emit(runId, input.now, `run.${effective}`, {
         from: run.state,
         to: next,
         actor: input.actor ?? null,
+        ...(effective === event ? {} : { instead: event }),
       });
       return copy(this.runOf(runId));
     });
@@ -237,13 +247,19 @@ export class MemoryRunStore implements RunStore {
     readonly workerId: string;
     readonly now: number;
     readonly leaseMs: number;
+    readonly skipWaiting?: readonly string[];
   }): Promise<Claimed | null> {
     return this.op(() => {
+      const skip = input.skipWaiting ?? [];
       const candidate = [...this.runs.values()]
         .filter(
           (run) =>
             isClaimable(run.state, run.leaseExpiresAt, input.now) &&
-            (run.retryAfter ?? 0) <= input.now,
+            (run.retryAfter ?? 0) <= input.now &&
+            (run.waiting === null ||
+              !skip.includes(run.waiting) ||
+              run.cancelRequestedAt !== null ||
+              run.pauseRequestedAt !== null),
         )
         .sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))[0];
       if (candidate === undefined) {
@@ -280,7 +296,8 @@ export class MemoryRunStore implements RunStore {
     input: { readonly now: number; readonly leaseMs: number },
   ): Promise<RunRecord> {
     return this.op(() => {
-      this.verifyClaim(claim);
+      const run = this.verifyClaim(claim);
+      this.verifyLocks(run, claim);
       const expiresAt = input.now + input.leaseMs;
       this.setRun(claim.runId, { leaseExpiresAt: expiresAt });
       for (const lock of this.locks.values()) {
@@ -360,11 +377,12 @@ export class MemoryRunStore implements RunStore {
     return this.op(() => {
       const run = this.verifyClaim(claim);
       this.verifyLocks(run, claim);
+      assertStorableCheckpoint(input.output, input.undo);
       const step = this.stepOf(claim.runId, index);
       const state = transitionStep(step.state, 'succeed');
       this.setStep(claim.runId, index, {
         state,
-        output: copy(input.output),
+        output: storableJson('The output of a step', input.output),
         errorCode: null,
         errorMessage: null,
         finishedAt: input.now,
@@ -376,7 +394,7 @@ export class MemoryRunStore implements RunStore {
           stepIndex: index,
           seq,
           kind: draft.kind,
-          data: copy(draft.data),
+          data: storableJson('The data of an undo record', draft.data),
           state: 'pending',
         });
       });
@@ -391,16 +409,9 @@ export class MemoryRunStore implements RunStore {
     input: { readonly now: number; readonly code: string; readonly message: string },
   ): Promise<StepRecord> {
     return this.op(() => {
-      this.verifyClaim(claim);
-      const step = this.stepOf(claim.runId, index);
-      const state = transitionStep(step.state, 'fail');
-      this.setStep(claim.runId, index, {
-        state,
-        errorCode: input.code,
-        errorMessage: input.message.slice(0, MAX_ERROR_MESSAGE),
-        finishedAt: input.now,
-      });
-      this.emit(claim.runId, input.now, 'step.fail', { index, code: input.code });
+      const run = this.verifyClaim(claim);
+      this.verifyLocks(run, claim);
+      this.writeFailure(claim, index, input);
       return copy(this.stepOf(claim.runId, index));
     });
   }
@@ -411,10 +422,14 @@ export class MemoryRunStore implements RunStore {
     input: { readonly now: number; readonly reason: string },
   ): Promise<StepRecord> {
     return this.op(() => {
-      this.verifyClaim(claim);
+      const run = this.verifyClaim(claim);
+      this.verifyLocks(run, claim);
       const step = this.stepOf(claim.runId, index);
       this.setStep(claim.runId, index, { state: transitionStep(step.state, 'defer') });
-      this.emit(claim.runId, input.now, 'step.defer', { index, reason: input.reason });
+      this.emit(claim.runId, input.now, 'step.defer', {
+        index,
+        reason: cleanText(input.reason, MAX_WAITING),
+      });
       return copy(this.stepOf(claim.runId, index));
     });
   }
@@ -427,6 +442,11 @@ export class MemoryRunStore implements RunStore {
       readonly waiting?: string | null;
       readonly retryAfter?: number | null;
       readonly data?: JsonValue;
+      readonly failedStep?: {
+        readonly index: number;
+        readonly code: string;
+        readonly message: string;
+      };
     },
   ): Promise<RunRecord> {
     return this.op(() => {
@@ -436,31 +456,51 @@ export class MemoryRunStore implements RunStore {
         );
       }
       const run = this.verifyClaim(claim);
-      if (event === 'succeed') {
+      if (event === 'succeed' || input.failedStep !== undefined) {
         this.verifyLocks(run, claim);
       }
-      const next = transition(run.state, event);
+      // A worker that asks for a person, or pauses, while a cancel is pending carries the cancel out: it was accepted, and
+      // nothing claims a run that waits for a person or is paused, so it would never be read.
+      const finish: FinishEvent =
+        (event === 'await_input' || event === 'pause') && run.cancelRequestedAt !== null
+          ? 'cancel'
+          : event;
+      const next = transition(run.state, finish);
       const ends = next === 'succeeded' || next === 'failed' || next === 'cancelled';
+      const waiting =
+        (finish === 'wait' || finish === 'await_input') && input.waiting != null
+          ? cleanText(input.waiting, MAX_WAITING)
+          : null;
+      if (input.failedStep !== undefined) {
+        // The failure checks its own values before it changes anything, and this runs before the run is changed, so a refused
+        // failure leaves everything as it was.
+        this.writeFailure(claim, input.failedStep.index, { now: input.now, ...input.failedStep });
+      }
       this.setRun(claim.runId, {
         state: next,
         workerId: null,
         leaseExpiresAt: null,
-        waiting: event === 'wait' || event === 'await_input' ? (input.waiting ?? null) : null,
-        retryAfter: event === 'wait' ? (input.retryAfter ?? null) : null,
+        waiting,
+        retryAfter: finish === 'wait' ? (input.retryAfter ?? null) : null,
         finishedAt: ends ? input.now : run.finishedAt,
-        pauseRequestedAt: event === 'pause' ? null : run.pauseRequestedAt,
-        cancelRequestedAt: event === 'cancel' ? null : run.cancelRequestedAt,
+        // A run that ended or stopped for a person has no request of the people left to honour. A pause keeps a cancel that was
+        // asked for, and a wait keeps both, for whoever takes the run next.
+        pauseRequestedAt: finish === 'wait' ? run.pauseRequestedAt : null,
+        cancelRequestedAt: finish === 'wait' || finish === 'pause' ? run.cancelRequestedAt : null,
       });
       for (const lock of [...this.locks.values()]) {
         if (lock.holder === claim.runId) {
           this.locks.delete(lock.key);
         }
       }
-      this.emit(claim.runId, input.now, `run.${event}`, {
+      this.emit(claim.runId, input.now, `run.${finish}`, {
         from: run.state,
         to: next,
-        data: input.data ?? null,
-        waiting: input.waiting ?? null,
+        data:
+          finish === event
+            ? (input.data ?? null)
+            : { instead: event, reason: input.waiting ?? null },
+        waiting,
       });
       return copy(this.runOf(claim.runId));
     });
@@ -476,6 +516,24 @@ export class MemoryRunStore implements RunStore {
       this.verifyClaim(claim);
       return copy(this.emit(claim.runId, now, type, data));
     });
+  }
+
+  /** The failure of a step, with its event: the code is checked, the message is cleaned and cut. */
+  private writeFailure(
+    claim: Claim,
+    index: number,
+    input: { readonly now: number; readonly code: string; readonly message: string },
+  ): void {
+    assertIdentifier('The code of an error', input.code, MAX_ERROR_CODE);
+    const step = this.stepOf(claim.runId, index);
+    const state = transitionStep(step.state, 'fail');
+    this.setStep(claim.runId, index, {
+      state,
+      errorCode: input.code,
+      errorMessage: cleanText(input.message, MAX_ERROR_MESSAGE),
+      finishedAt: input.now,
+    });
+    this.emit(claim.runId, input.now, 'step.fail', { index, code: input.code });
   }
 
   private runOf(id: string): RunRecord {

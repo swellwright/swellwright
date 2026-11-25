@@ -2,7 +2,7 @@
   "name": "@swellwright/engine",
   "version": "0.0.0",
   "private": true,
-  "description": "The run engine core: the state machines of a run and of a step, resource locks, the plan and its hash, the order of an undo and the recovery of an interrupted step. Pure functions, no I/O (ADR 0048)",
+  "description": "The run engine: the state machines of a run and of a step, resource locks, the plan and its hash, the order of an undo, the recovery of an interrupted step, the store port with its store in memory, and the loop. No database, no framework: the stores over PostgreSQL and the process are the API's (ADR 0048)",
   "license": "AGPL-3.0-only",
   "type": "module",
   "exports": {

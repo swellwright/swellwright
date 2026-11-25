@@ -4,7 +4,12 @@
 // the row as it is after the lock, not on a copy. `claimNext` picks the oldest claimable runs and takes the first one whose
 // lock it can get at once (`pg_try_advisory_xact_lock`): several loops can poll the same table without waiting for each
 // other, which is what `FOR UPDATE SKIP LOCKED` gives, and it needs no SQL that names a table. The locks of a run are taken
-// under advisory locks in the fixed order of the keys, so two runs cannot wait for each other.
+// under advisory locks in the fixed order of the lock numbers themselves (not of the names that were hashed into them), so two
+// runs cannot wait for each other even when two names have the same number.
+//
+// The advisory locks of the engine are of the two-integer form, with a namespace of their own for the runs and one for the
+// resources. The rest of the API (audit, setup, plugins, baselines) takes the one-bigint form, a key space that the two-integer
+// form never meets, so a number that happens to be the same cannot make an engine transaction wait for a request of the API.
 //
 // The time is always given by the caller (a clock is a port of the engine), so no column has a default of `now()`.
 
@@ -12,15 +17,22 @@ import {
   FINISH_EVENTS,
   FenceLostError,
   LockLostError,
+  MAX_ERROR_CODE,
+  MAX_ERROR_MESSAGE,
+  MAX_WAITING,
   NotFoundError,
   PERSON_EVENTS,
   StateConflictError,
+  assertIdentifier,
+  assertStorableCheckpoint,
+  cleanText,
   isClaimable,
   parseLockKey,
   planAcquisition,
   planHash,
   remoteId,
   runMachine,
+  storableJson,
   transition,
   transitionStep,
   waitingReason,
@@ -50,14 +62,15 @@ type Tx = Prisma.TransactionClient;
 type RunRow = Prisma.RunGetPayload<object>;
 type StepRow = Prisma.RunStepGetPayload<object>;
 
-const MAX_ERROR_MESSAGE = 500;
+/** The first of the two integers of the advisory lock of a run: whoever writes about the run holds it until the end of the transaction. */
+export const RUN_LOCK_NAMESPACE = 0x53570001;
 /**
- * The name of the advisory lock of a resource. Whoever reads or writes the lock row of a resource (to take it, to renew it,
- * to release it, or to check that it is still the run's) holds it until the end of its transaction.
+ * The first of the two integers of the advisory lock of a resource. Whoever reads or writes the lock row of a resource (to take
+ * it, to renew it, to release it, or to check that it is still the run's) holds it until the end of its transaction.
  */
+export const RESOURCE_LOCK_NAMESPACE = 0x53570002;
+/** What is hashed into the second integer of the lock of a resource. */
 export const resourceLockName = (key: string): string => `resource-lock:${key}`;
-/** The advisory lock of a run: whoever writes about the run holds it until the end of the transaction. */
-const runLockOf = (id: string): string => `run:${id}`;
 /** How many claimable runs `claimNext` looks at before it gives up for this poll. */
 const CLAIM_WINDOW = 20;
 
@@ -120,7 +133,7 @@ export class PrismaRunStore implements RunStore {
 
   /** The row of the run, read after the advisory lock of the run is taken (and held until the end of the transaction). */
   private async lockRun(tx: Tx, id: string): Promise<RunRow> {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${runLockOf(id)}))`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${RUN_LOCK_NAMESPACE}::int, hashtext(${id}))`;
     const row = await tx.run.findUnique({ where: { id } });
     if (row === null) {
       throw new NotFoundError(`There is no run ${id}.`);
@@ -172,8 +185,18 @@ export class PrismaRunStore implements RunStore {
    * through here, so nobody decides on a row that another transaction is changing.
    */
   private async lockResources(tx: Tx, run: RunRow): Promise<void> {
-    for (const key of (run.plan as unknown as RunPlan).locks) {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${resourceLockName(key)}))`;
+    const keys = (run.plan as unknown as RunPlan).locks;
+    if (keys.length === 0) {
+      return;
+    }
+    // In the order of the numbers that are locked, each once. The order of the names is not the order of their hashes, and two
+    // names can have the same hash: transactions that take [A, B] and [B, C] by name could then take the same two numbers in
+    // opposite orders and wait for each other.
+    const names = Prisma.join(keys.map((key) => Prisma.sql`(${resourceLockName(key)}::text)`));
+    const ids = await tx.$queryRaw<{ id: number }[]>`
+      SELECT DISTINCT hashtext(name) AS id FROM (VALUES ${names}) AS names(name) ORDER BY id`;
+    for (const { id } of ids) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${RESOURCE_LOCK_NAMESPACE}::int, ${id}::int)`;
     }
   }
 
@@ -332,7 +355,10 @@ export class PrismaRunStore implements RunStore {
         'A worker holds the run: ask it to cancel or pause (requestCancel, requestPause) instead.',
       );
     }
-    const next = transition(run.state, event);
+    // A cancel that was accepted comes before a pause: a run that is paused is claimed by nobody, so it would never be read.
+    const effective: PersonEvent =
+      event === 'pause' && run.cancelRequestedAt !== null ? 'cancel' : event;
+    const next = transition(run.state, effective);
     const steps = await this.stepsOf(tx, run.id);
     if (event === 'retry') {
       for (const step of steps) {
@@ -371,14 +397,15 @@ export class PrismaRunStore implements RunStore {
         waiting: null,
         retryAfter: null,
         finishedAt: ends ? at(input.now) : run.finishedAt,
-        pauseRequestedAt: event === 'pause' ? null : run.pauseRequestedAt,
+        pauseRequestedAt: effective === 'pause' || ends ? null : run.pauseRequestedAt,
         cancelRequestedAt: ends ? null : run.cancelRequestedAt,
       },
     });
-    await this.emit(tx, run.id, input.now, `run.${event}`, {
+    await this.emit(tx, run.id, input.now, `run.${effective}`, {
       from: run.state,
       to: next,
       actor: input.actor ?? null,
+      ...(effective === event ? {} : { instead: event }),
     });
     return toRun(await tx.run.findUniqueOrThrow({ where: { id: run.id } }));
   }
@@ -416,25 +443,42 @@ export class PrismaRunStore implements RunStore {
     readonly workerId: string;
     readonly now: number;
     readonly leaseMs: number;
+    readonly skipWaiting?: readonly string[];
   }): Promise<Claimed | null> {
     return this.transaction(async (tx) => {
       const now = at(input.now);
+      const skip = input.skipWaiting ?? [];
       // The oldest runs that can be taken, by the same rule as `isClaimable` (and a run that waited is left alone until its
-      // time). The first one whose lock is free is taken; the rule is applied again to the row after the lock, because the
-      // run may have changed between the look and the lock.
+      // time, and one that waits for what this worker cannot give is left to another). A run that asked for a rollback is not
+      // among them: nothing executes undo yet. The first one whose lock is free is taken; the rule is applied again to the row
+      // after the lock, because the run may have changed between the look and the lock.
       const window = await tx.run.findMany({
         where: {
           AND: [
             {
               OR: [
-                { state: { in: ['queued', 'rollback_requested'] } },
+                { state: 'queued' },
                 {
-                  state: { in: ['running', 'rolling_back'] },
+                  state: 'running',
                   OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }],
                 },
               ],
             },
             { OR: [{ retryAfter: null }, { retryAfter: { lte: now } }] },
+            // `notIn` alone would leave out the runs that wait for nothing (NULL is not "not in" in SQL). A run with a request of
+            // the people pending is never left: a cancel needs no vault.
+            ...(skip.length === 0
+              ? []
+              : [
+                  {
+                    OR: [
+                      { waiting: null },
+                      { waiting: { notIn: [...skip] } },
+                      { cancelRequestedAt: { not: null } },
+                      { pauseRequestedAt: { not: null } },
+                    ],
+                  },
+                ]),
           ],
         },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -444,7 +488,7 @@ export class PrismaRunStore implements RunStore {
       let candidate: RunRow | null = null;
       for (const { id: candidateId } of window) {
         const got = await tx.$queryRaw<{ locked: boolean }[]>`
-          SELECT pg_try_advisory_xact_lock(hashtext(${runLockOf(candidateId)})) AS locked`;
+          SELECT pg_try_advisory_xact_lock(${RUN_LOCK_NAMESPACE}::int, hashtext(${candidateId})) AS locked`;
         if (got[0]?.locked !== true) {
           continue;
         }
@@ -452,7 +496,11 @@ export class PrismaRunStore implements RunStore {
         if (
           row !== null &&
           isClaimable(row.state, ms(row.leaseExpiresAt), input.now) &&
-          (row.retryAfter === null || row.retryAfter.getTime() <= input.now)
+          (row.retryAfter === null || row.retryAfter.getTime() <= input.now) &&
+          (row.waiting === null ||
+            !skip.includes(row.waiting) ||
+            row.cancelRequestedAt !== null ||
+            row.pauseRequestedAt !== null)
         ) {
           candidate = row;
           break;
@@ -497,8 +545,9 @@ export class PrismaRunStore implements RunStore {
   ): Promise<RunRecord> {
     return this.transaction(async (tx) => {
       const run = await this.verifyClaim(tx, claim);
-      // The renewal of the locks must not overlap the decision of another run to take over a lock that looks expired.
-      await this.lockResources(tx, run);
+      // The renewal of the locks must not overlap the decision of another run to take over a lock that looks expired, and a run
+      // whose lock was taken over learns it here: it is not renewed.
+      await this.verifyLocks(tx, run, claim);
       const expiresAt = at(input.now + input.leaseMs);
       await tx.run.update({ where: { id: claim.runId }, data: { leaseExpiresAt: expiresAt } });
       await tx.resourceLock.updateMany({
@@ -599,13 +648,15 @@ export class PrismaRunStore implements RunStore {
     return this.transaction(async (tx) => {
       const run = await this.verifyClaim(tx, claim);
       await this.verifyLocks(tx, run, claim);
+      // What the database would refuse is refused here, as the store in memory does, before anything is written.
+      assertStorableCheckpoint(input.output, input.undo);
       const step = await this.stepOf(tx, claim.runId, index);
       const state = transitionStep(step.state, 'succeed');
       const updated = await tx.runStep.update({
         where: { runId_index: { runId: claim.runId, index } },
         data: {
           state,
-          output: toInput(input.output),
+          output: toInput(storableJson('The output of a step', input.output)),
           errorCode: null,
           errorMessage: null,
           finishedAt: at(input.now),
@@ -618,7 +669,7 @@ export class PrismaRunStore implements RunStore {
             stepIndex: index,
             seq,
             kind: draft.kind,
-            data: toInput(draft.data),
+            data: toInput(storableJson('The data of an undo record', draft.data)),
           })),
         });
       }
@@ -636,20 +687,32 @@ export class PrismaRunStore implements RunStore {
     input: { readonly now: number; readonly code: string; readonly message: string },
   ): Promise<StepRecord> {
     return this.transaction(async (tx) => {
-      await this.verifyClaim(tx, claim);
-      const step = await this.stepOf(tx, claim.runId, index);
-      const updated = await tx.runStep.update({
-        where: { runId_index: { runId: claim.runId, index } },
-        data: {
-          state: transitionStep(step.state, 'fail'),
-          errorCode: input.code,
-          errorMessage: input.message.slice(0, MAX_ERROR_MESSAGE),
-          finishedAt: at(input.now),
-        },
-      });
-      await this.emit(tx, claim.runId, input.now, 'step.fail', { index, code: input.code });
-      return toStep(updated);
+      const run = await this.verifyClaim(tx, claim);
+      await this.verifyLocks(tx, run, claim);
+      return toStep(await this.writeFailure(tx, claim, index, input));
     });
+  }
+
+  /** The failure of a step, with its event: the message is cleaned and cut. The caller has checked the claim, the locks and the code. */
+  private async writeFailure(
+    tx: Tx,
+    claim: Claim,
+    index: number,
+    input: { readonly now: number; readonly code: string; readonly message: string },
+  ): Promise<StepRow> {
+    assertIdentifier('The code of an error', input.code, MAX_ERROR_CODE);
+    const step = await this.stepOf(tx, claim.runId, index);
+    const updated = await tx.runStep.update({
+      where: { runId_index: { runId: claim.runId, index } },
+      data: {
+        state: transitionStep(step.state, 'fail'),
+        errorCode: input.code,
+        errorMessage: cleanText(input.message, MAX_ERROR_MESSAGE),
+        finishedAt: at(input.now),
+      },
+    });
+    await this.emit(tx, claim.runId, input.now, 'step.fail', { index, code: input.code });
+    return updated;
   }
 
   deferStep(
@@ -658,13 +721,17 @@ export class PrismaRunStore implements RunStore {
     input: { readonly now: number; readonly reason: string },
   ): Promise<StepRecord> {
     return this.transaction(async (tx) => {
-      await this.verifyClaim(tx, claim);
+      const run = await this.verifyClaim(tx, claim);
+      await this.verifyLocks(tx, run, claim);
       const step = await this.stepOf(tx, claim.runId, index);
       const updated = await tx.runStep.update({
         where: { runId_index: { runId: claim.runId, index } },
         data: { state: transitionStep(step.state, 'defer') },
       });
-      await this.emit(tx, claim.runId, input.now, 'step.defer', { index, reason: input.reason });
+      await this.emit(tx, claim.runId, input.now, 'step.defer', {
+        index,
+        reason: cleanText(input.reason, MAX_WAITING),
+      });
       return toStep(updated);
     });
   }
@@ -677,6 +744,11 @@ export class PrismaRunStore implements RunStore {
       readonly waiting?: string | null;
       readonly retryAfter?: number | null;
       readonly data?: JsonValue;
+      readonly failedStep?: {
+        readonly index: number;
+        readonly code: string;
+        readonly message: string;
+      };
     },
   ): Promise<RunRecord> {
     return this.transaction(async (tx) => {
@@ -686,32 +758,55 @@ export class PrismaRunStore implements RunStore {
         );
       }
       const run = await this.verifyClaim(tx, claim);
-      // Releasing the locks is a change of their rows too.
-      await this.lockResources(tx, run);
-      if (event === 'succeed') {
+      // Releasing the locks is a change of their rows too (and with `succeed` or a failed step they must still be the run's).
+      if (event === 'succeed' || input.failedStep !== undefined) {
         await this.verifyLocks(tx, run, claim);
+      } else {
+        await this.lockResources(tx, run);
       }
-      const next = transition(run.state, event);
+      // A worker that asks for a person, or pauses, while a cancel is pending carries the cancel out: it was accepted, and
+      // nothing claims a run that waits for a person or is paused, so it would never be read.
+      const finish: FinishEvent =
+        (event === 'await_input' || event === 'pause') && run.cancelRequestedAt !== null
+          ? 'cancel'
+          : event;
+      const next = transition(run.state, finish);
       const ends = next === 'succeeded' || next === 'failed' || next === 'cancelled';
+      const waiting =
+        (finish === 'wait' || finish === 'await_input') && input.waiting != null
+          ? cleanText(input.waiting, MAX_WAITING)
+          : null;
+      // The failure of the step is part of this transaction: the run is never left `running` with a `failed` step.
+      if (input.failedStep !== undefined) {
+        await this.writeFailure(tx, claim, input.failedStep.index, {
+          now: input.now,
+          ...input.failedStep,
+        });
+      }
       await tx.run.update({
         where: { id: claim.runId },
         data: {
           state: next,
           workerId: null,
           leaseExpiresAt: null,
-          waiting: event === 'wait' || event === 'await_input' ? (input.waiting ?? null) : null,
-          retryAfter: event === 'wait' && input.retryAfter != null ? at(input.retryAfter) : null,
+          waiting,
+          retryAfter: finish === 'wait' && input.retryAfter != null ? at(input.retryAfter) : null,
           finishedAt: ends ? at(input.now) : run.finishedAt,
-          pauseRequestedAt: event === 'pause' ? null : run.pauseRequestedAt,
-          cancelRequestedAt: event === 'cancel' ? null : run.cancelRequestedAt,
+          // A run that ended or stopped for a person has no request of the people left to honour. A pause keeps a cancel that
+          // was asked for, and a wait keeps both, for whoever takes the run next.
+          pauseRequestedAt: finish === 'wait' ? run.pauseRequestedAt : null,
+          cancelRequestedAt: finish === 'wait' || finish === 'pause' ? run.cancelRequestedAt : null,
         },
       });
       await tx.resourceLock.deleteMany({ where: { runId: claim.runId } });
-      await this.emit(tx, claim.runId, input.now, `run.${event}`, {
+      await this.emit(tx, claim.runId, input.now, `run.${finish}`, {
         from: run.state,
         to: next,
-        data: input.data ?? null,
-        waiting: input.waiting ?? null,
+        data:
+          finish === event
+            ? (input.data ?? null)
+            : { instead: event, reason: input.waiting ?? null },
+        waiting,
       });
       return toRun(await tx.run.findUniqueOrThrow({ where: { id: claim.runId } }));
     });

@@ -119,6 +119,8 @@ export async function start(
     passwordParams: CHEAP,
     vaultKdf: CHEAP_KDF,
     database: isolated.database,
+    // The loop of the run engine polls the database: the tests that are not about it leave it off (those that are turn it on).
+    engine: { tuning: { autostart: false } },
     ...extra,
   });
   await app.listen(0, '127.0.0.1');
@@ -160,6 +162,7 @@ export async function restart(
     passwordParams: CHEAP,
     vaultKdf: CHEAP_KDF,
     database,
+    engine: { tuning: { autostart: false } },
     ...extra,
   });
   await app.listen(0, '127.0.0.1');
