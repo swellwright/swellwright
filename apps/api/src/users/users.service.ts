@@ -12,14 +12,17 @@ import {
 import { type Database, Prisma, type User } from '@swellwright/db';
 
 import { AuditService } from '../audit/audit.service.js';
-import { lockAccount } from '../auth/account-lock.js';
+import { databaseNow, inAccountTransaction, lockAccount } from '../auth/account-lock.js';
 import { type RequestMeta, requireDatabase, toUserSummary } from '../auth/context.js';
+import { CLEARED_PASSWORD_FAILURES, CLEARED_PENDING_FACTOR_FAILURES } from '../auth/throttle.js';
 import { revokeLiveApiTokens } from '../auth/token.service.js';
 import { DATABASE } from '../tokens.js';
-import { issueInvitation } from './invitations.js';
+import { issueInvitation, pruneExpiredInvitations } from './invitations.js';
 
 /** An arbitrary constant: one transaction at a time may change who the users are and what they are. */
 const USERS_LOCK_KEY = 7_761_236;
+const lockUsers = (tx: Prisma.TransactionClient) =>
+  tx.$executeRaw`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`;
 
 /** Who did it. Null for the server command, which has no signed-in user. */
 export type Actor = { readonly id: string; readonly name: string } | null;
@@ -145,6 +148,7 @@ export class UsersService {
         );
         return { id: user.id, invitation: invite };
       });
+      await pruneExpiredInvitations(this.db).catch(() => undefined);
       return { user: await this.view(id), invitation };
     } catch (error) {
       if (isUniqueViolation(error)) {
@@ -161,75 +165,87 @@ export class UsersService {
     meta: RequestMeta,
   ): Promise<UserView> {
     try {
-      await this.db.$transaction(async (tx) => {
-        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`;
-        await lockAccount(tx, id);
-        const target = await tx.user.findUnique({ where: { id }, include: WITH_SETUP });
-        if (!target) {
-          throw new NotFoundException('There is no such user.');
-        }
-        const roleChanges = body.role !== undefined && body.role !== target.role;
-        const statusChanges = body.status !== undefined && body.status !== target.status;
-        if (id === actor.id && (roleChanges || statusChanges)) {
-          throw new ConflictException('You cannot change your own role or status.');
-        }
-        const staysActiveOwner =
-          (body.role ?? target.role) === 'owner' && (body.status ?? target.status) === 'active';
-        if (isEnrolledActiveOwner(target) && !staysActiveOwner) {
-          await assertAnotherEnrolledOwner(tx, id);
-        }
+      await inAccountTransaction(
+        this.db,
+        id,
+        async (tx) => {
+          const now = await databaseNow(tx);
+          const target = await tx.user.findUnique({ where: { id }, include: WITH_SETUP });
+          if (!target) {
+            throw new NotFoundException('There is no such user.');
+          }
+          const roleChanges = body.role !== undefined && body.role !== target.role;
+          const statusChanges = body.status !== undefined && body.status !== target.status;
+          if (id === actor.id && (roleChanges || statusChanges)) {
+            throw new ConflictException('You cannot change your own role or status.');
+          }
+          const staysActiveOwner =
+            (body.role ?? target.role) === 'owner' && (body.status ?? target.status) === 'active';
+          if (isEnrolledActiveOwner(target) && !staysActiveOwner) {
+            await assertAnotherEnrolledOwner(tx, id);
+          }
 
-        const data: Prisma.UserUpdateInput = {};
-        const changed: string[] = [];
-        const details: Record<string, string> = {};
-        if (roleChanges && body.role !== undefined) {
-          data.role = body.role;
-          changed.push('role');
-          details['role_from'] = target.role;
-          details['role_to'] = body.role;
-        }
-        if (statusChanges && body.status !== undefined) {
-          data.status = body.status;
-          changed.push('status');
-          details['status_from'] = target.status;
-          details['status_to'] = body.status;
-        }
-        if (body.displayName !== undefined && body.displayName !== target.displayName) {
-          data.displayName = body.displayName;
-          changed.push('display_name');
-        }
-        const email = body.email === undefined ? undefined : (body.email?.toLowerCase() ?? null);
-        if (email !== undefined && email !== target.email) {
-          data.email = email;
-          changed.push('email');
-        }
-        if (changed.length === 0) {
-          return;
-        }
-        await tx.user.update({ where: { id }, data });
-        let tokensRevoked: number | undefined;
-        if (body.status === 'disabled' && statusChanges) {
-          // A disabled user is refused on the next request anyway; the rows go as well, and the API tokens are
-          // revoked for good, so enabling the account again does not bring them back.
-          await tx.session.deleteMany({ where: { userId: id } });
-          tokensRevoked = await revokeLiveApiTokens(tx, id, new Date());
-        }
-        await this.audit.record(
-          {
-            action: 'user.updated',
-            outcome: 'success',
-            actor,
-            object: { type: 'user', id },
-            details: {
-              changed: changed.join(','),
-              ...details,
-              ...(tokensRevoked === undefined ? {} : { tokens_revoked: tokensRevoked }),
+          const data: Prisma.UserUpdateInput = {};
+          const changed: string[] = [];
+          const details: Record<string, string> = {};
+          if (roleChanges && body.role !== undefined) {
+            data.role = body.role;
+            changed.push('role');
+            details['role_from'] = target.role;
+            details['role_to'] = body.role;
+          }
+          if (statusChanges && body.status !== undefined) {
+            data.status = body.status;
+            changed.push('status');
+            details['status_from'] = target.status;
+            details['status_to'] = body.status;
+          }
+          if (body.displayName !== undefined && body.displayName !== target.displayName) {
+            data.displayName = body.displayName;
+            changed.push('display_name');
+          }
+          const email = body.email === undefined ? undefined : (body.email?.toLowerCase() ?? null);
+          if (email !== undefined && email !== target.email) {
+            data.email = email;
+            changed.push('email');
+          }
+          if (changed.length === 0) {
+            return;
+          }
+          await tx.user.update({ where: { id }, data });
+          let tokensRevoked: number | undefined;
+          if (body.status === 'disabled' && statusChanges) {
+            // A disabled user is refused on the next request anyway; the epoch moves on, so a sign-in still in flight
+            // cannot leave a session behind (ADR 0049), the rows go, the failure counts start over, and the API tokens
+            // are revoked for good, so enabling the account again does not bring them back.
+            await tx.user.update({ where: { id }, data: { credentialEpoch: { increment: 1 } } });
+            await tx.session.deleteMany({ where: { userId: id } });
+            await tx.credential.updateMany({
+              where: { userId: id },
+              data: { ...CLEARED_PASSWORD_FAILURES, ...CLEARED_PENDING_FACTOR_FAILURES },
+            });
+            await tx.passwordSourceFailure.deleteMany({ where: { userId: id } });
+            await tx.mfaSourceFailure.deleteMany({ where: { userId: id } });
+            tokensRevoked = await revokeLiveApiTokens(tx, id, now);
+          }
+          await this.audit.record(
+            {
+              action: 'user.updated',
+              outcome: 'success',
+              actor,
+              object: { type: 'user', id },
+              details: {
+                changed: changed.join(','),
+                ...details,
+                ...(tokensRevoked === undefined ? {} : { tokens_revoked: tokensRevoked }),
+              },
+              meta,
             },
-            meta,
-          },
-          tx,
-        );
-      });
+            tx,
+          );
+        },
+        lockUsers,
+      );
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConflictException('That e-mail address is already taken.');
@@ -251,41 +267,50 @@ export class UsersService {
     meta: RequestMeta,
     via: 'console' | 'cli',
   ): Promise<UserInvitation> {
-    const invitation = await this.db.$transaction(async (tx) => {
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`;
-      await lockAccount(tx, id);
-      const target = await tx.user.findUnique({ where: { id }, include: WITH_SETUP });
-      if (!target) {
-        throw new NotFoundException('There is no such user.');
-      }
-      if (actor?.id === id) {
-        throw new ConflictException(
-          'You cannot reset your own credentials here. Change your password.',
+    const invitation = await inAccountTransaction(
+      this.db,
+      id,
+      async (tx) => {
+        const now = await databaseNow(tx);
+        const target = await tx.user.findUnique({ where: { id }, include: WITH_SETUP });
+        if (!target) {
+          throw new NotFoundException('There is no such user.');
+        }
+        if (actor?.id === id) {
+          throw new ConflictException(
+            'You cannot reset your own credentials here. Change your password.',
+          );
+        }
+        // A reset removes the authenticator, so it can take away the last owner who can sign in. The server command
+        // (no actor) stays the way back in when that owner has lost everything.
+        if (via === 'console' && isEnrolledActiveOwner(target)) {
+          await assertAnotherEnrolledOwner(tx, id);
+        }
+        // The epoch moves on first: whatever proof of the old credentials is still in flight (a sign-in, an invitation
+        // being accepted, a second step) finds it changed under the same lock and issues nothing (ADR 0049).
+        await tx.user.update({ where: { id }, data: { credentialEpoch: { increment: 1 } } });
+        await tx.credential.deleteMany({ where: { userId: id } });
+        await tx.recoveryCode.deleteMany({ where: { userId: id } });
+        await tx.session.deleteMany({ where: { userId: id } });
+        await tx.passwordSourceFailure.deleteMany({ where: { userId: id } });
+        const tokensRevoked = await revokeLiveApiTokens(tx, id, now);
+        const invite = await issueInvitation(tx, id, 'reset', actor?.id ?? null, now);
+        await this.audit.record(
+          {
+            action: 'user.credentials.reset',
+            outcome: 'success',
+            actor,
+            object: { type: 'user', id },
+            details: { via, tokens_revoked: tokensRevoked },
+            meta,
+          },
+          tx,
         );
-      }
-      // A reset removes the authenticator, so it can take away the last owner who can sign in. The server command
-      // (no actor) stays the way back in when that owner has lost everything.
-      if (via === 'console' && isEnrolledActiveOwner(target)) {
-        await assertAnotherEnrolledOwner(tx, id);
-      }
-      await tx.credential.deleteMany({ where: { userId: id } });
-      await tx.recoveryCode.deleteMany({ where: { userId: id } });
-      await tx.session.deleteMany({ where: { userId: id } });
-      const tokensRevoked = await revokeLiveApiTokens(tx, id, new Date());
-      const invite = await issueInvitation(tx, id, 'reset', actor?.id ?? null);
-      await this.audit.record(
-        {
-          action: 'user.credentials.reset',
-          outcome: 'success',
-          actor,
-          object: { type: 'user', id },
-          details: { via, tokens_revoked: tokensRevoked },
-          meta,
-        },
-        tx,
-      );
-      return invite;
-    });
+        return invite;
+      },
+      lockUsers,
+    );
+    await pruneExpiredInvitations(this.db).catch(() => undefined);
     return { user: await this.view(id), invitation };
   }
 
@@ -312,6 +337,8 @@ export class UsersService {
   async remove(actor: Actor, id: string, meta: RequestMeta): Promise<void> {
     await this.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${USERS_LOCK_KEY})`;
+      // After the users lock, like every other path: a sign-in of the account cannot be half-way through its issue.
+      await lockAccount(tx, id);
       const target = await tx.user.findUnique({ where: { id } });
       if (!target) {
         throw new NotFoundException('There is no such user.');

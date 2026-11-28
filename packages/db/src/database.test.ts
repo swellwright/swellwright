@@ -140,7 +140,18 @@ describe('users against a migrated database', { skip: !databaseUrl }, () => {
         data: {
           username: `${prefix}-cascade`,
           role: UserRole.owner,
-          credential: { create: { passwordHash: '$argon2id$placeholder' } },
+          credential: {
+            create: {
+              passwordHash: '$argon2id$placeholder',
+              mfaSourceFailures: {
+                create: {
+                  sourceBucket: '192.0.2.1',
+                  failures: 1,
+                  windowEndsAt: new Date(Date.now() + 60_000),
+                },
+              },
+            },
+          },
           recoveryCodes: { create: [{ codeHash: 'a'.repeat(64) }, { codeHash: 'b'.repeat(64) }] },
           sessions: {
             create: [
@@ -149,6 +160,17 @@ describe('users against a migrated database', { skip: !databaseUrl }, () => {
                 stage: SessionStage.active,
                 expiresAt: new Date(Date.now() + 60_000),
                 absoluteExpiresAt: new Date(Date.now() + 120_000),
+                credentialEpoch: 0n,
+                sourceBucket: 'unknown',
+              },
+            ],
+          },
+          passwordSourceFailures: {
+            create: [
+              {
+                sourceBucket: '192.0.2.1',
+                failures: 1,
+                windowEndsAt: new Date(Date.now() + 60_000),
               },
             ],
           },
@@ -161,6 +183,8 @@ describe('users against a migrated database', { skip: !databaseUrl }, () => {
       assert.equal(await client.credential.count(), 0);
       assert.equal(await client.recoveryCode.count(), 0);
       assert.equal(await client.session.count(), 0);
+      assert.equal(await client.passwordSourceFailure.count(), 0);
+      assert.equal(await client.mfaSourceFailure.count(), 0);
     } finally {
       await isolated.drop();
     }
@@ -183,6 +207,8 @@ describe('users against a migrated database', { skip: !databaseUrl }, () => {
         stage: SessionStage.password_verified,
         expiresAt: new Date(),
         absoluteExpiresAt: new Date(),
+        credentialEpoch: 0n,
+        sourceBucket: 'unknown',
       };
       await client.session.create({ data: session });
       await assert.rejects(client.session.create({ data: session }));

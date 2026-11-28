@@ -20,3 +20,7 @@ A session cookie is enough to read most of the console, and a stolen or hijacked
 - The first sensitive action after a quiet five minutes costs a code. The window is a setting; a shorter one is safer, a longer one more comfortable.
 - The elevation is per session: another browser of the same user is not elevated by this one.
 - Known limits: no WebAuthn yet (the proof is a TOTP or recovery code, the same factors as sign-in), no per-action prompt for a single high-risk operation (the window is shared by every action in it), and no IP or device binding of the elevation.
+
+## Note of 2026-11-26: its own count (ADR 0049)
+
+Changed by ADR 0049. A wrong step-up code counts only towards the active session's own limit. Failed sign-ins and enrollment confirmations do not spend that budget. Neither password failures nor a factor lock end a currently elevated session. The code claim, elevation and audit record commit together under the account lock; step-up elevation never outlives the session's idle and absolute expiry.

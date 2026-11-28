@@ -1,18 +1,75 @@
 import 'reflect-metadata';
 
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { after, before, describe, it } from 'node:test';
+import { after, before, describe, it, mock } from 'node:test';
 
+import { Logger } from '@nestjs/common';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { ApiErrorSchema } from '@swellwright/contracts';
 
 import { CONSOLE_CSP, consoleHeaders, createApp } from './bootstrap.js';
 import { loadConfig } from './config.js';
-import { auditEvents, databaseUrl, found, type Instance, start, stop } from './test-support.js';
+import {
+  auditEvents,
+  createOwner,
+  databaseUrl,
+  found,
+  type Instance,
+  PASSWORD,
+  start,
+  stop,
+} from './test-support.js';
+
+it('requires an explicit proxy trust choice in compose and supplies one in CI', async () => {
+  const compose = await readFile(
+    new URL('../../../deploy/compose/docker-compose.yml', import.meta.url),
+    'utf8',
+  );
+  assert.match(compose, /^\s*SW_TRUSTED_PROXIES:.*\$\{SW_TRUSTED_PROXIES:\?/mu);
+  const ci = await readFile(new URL('../../../.github/workflows/ci.yml', import.meta.url), 'utf8');
+  assert.match(ci, /^\s*SW_TRUSTED_PROXIES: "false"$/mu);
+  assert.equal(loadConfig({ SW_TRUSTED_PROXIES: 'false' }, 'v').trustProxy, false);
+});
+
+it('warns once, without logging forwarded values, when an untrusted private peer sends the header', async () => {
+  const matched: string[] = [];
+  const warning = mock.method(Logger.prototype, 'warn', (message: unknown) => {
+    if (typeof message === 'string' && message.includes('X-Forwarded-For')) {
+      matched.push(message);
+    }
+  });
+  try {
+    for (const trust of ['loopback', 'false']) {
+      const app = await createApp(
+        loadConfig({ NODE_ENV: 'test', SW_TRUSTED_PROXIES: trust }, 'test'),
+        {
+          readinessChecks: [],
+        },
+      );
+      await app.listen(0, '127.0.0.1');
+      const { port } = app.getHttpServer().address() as { port: number };
+      try {
+        for (const addr of ['203.0.113.5', '203.0.113.6']) {
+          const response = await fetch(`http://127.0.0.1:${String(port)}/api/v1/health`, {
+            headers: { 'x-forwarded-for': addr },
+          });
+          assert.equal(response.status, 200);
+          await response.text();
+        }
+      } finally {
+        await app.close();
+      }
+      assert.equal(matched.length, trust === 'false' ? 1 : 0);
+      assert.ok(matched.every((message) => !message.includes('203.0.113.')));
+    }
+  } finally {
+    warning.mock.restore();
+  }
+});
 
 describe('serving the console from the API', () => {
   let dir: string;
@@ -330,7 +387,7 @@ describe('trusted proxies in the configuration', () => {
 
   it('trusts nobody by default', () => {
     assert.equal(loadConfig({}, 'v').trustProxy, false);
-    assert.equal(loadConfig({ SW_TRUSTED_PROXIES: '' }, 'v').trustProxy, false);
+    assert.equal(trust('false'), false);
   });
 
   it('takes a number of hops, or names, addresses and ranges', () => {
@@ -343,10 +400,23 @@ describe('trusted proxies in the configuration', () => {
       'fd00::/8',
     ]);
     assert.deepEqual(trust('loopback,'), ['loopback']);
+    assert.deepEqual(trust('192.0.2.5'), ['192.0.2.5']);
+    assert.deepEqual(trust('192.0.2.0/28'), ['192.0.2.0/28']);
   });
 
   it('refuses what looks like a typo, instead of trusting more than was meant', () => {
-    for (const bad of ['0', '11', 'everyone', 'loopback,everyone', 'true', '300.1.1.1', ',']) {
+    for (const bad of [
+      '',
+      ' ',
+      '0',
+      '11',
+      'everyone',
+      'loopback,everyone',
+      'true',
+      '300.1.1.1',
+      ',',
+      '192.0.2.1/33',
+    ]) {
       assert.throws(() => trust(bad), /SW_TRUSTED_PROXIES/u, bad);
     }
   });
@@ -389,5 +459,30 @@ describe('the address of the client behind a proxy', { skip: !databaseUrl }, () 
     const address = await failedLoginAddress(plain);
     assert.notEqual(address, '203.0.113.9');
     assert.match(address ?? '', /127\.0\.0\.1$/u);
+  });
+
+  it('counts six different forwarded addresses as one source when proxy trust is explicitly off', async () => {
+    const direct = await start({ SW_TRUSTED_PROXIES: 'false' });
+    try {
+      await createOwner(direct);
+      const client = direct.client();
+      const login = (i: number, password: string) =>
+        client.post(
+          '/auth/login',
+          { username: 'owner', password },
+          { 'x-forwarded-for': `192.0.2.${String(i)}` },
+        );
+      for (let i = 1; i <= 6; i += 1) {
+        assert.equal((await login(i, 'wrong-password')).status, i <= 5 ? 401 : 429);
+      }
+      assert.equal((await login(7, PASSWORD)).status, 429);
+      const rows = await direct.isolated.database.client.passwordSourceFailure.findMany();
+      assert.deepEqual(
+        rows.map((row) => [row.sourceBucket, row.failures]),
+        [['127.0.0.1', 5]],
+      );
+    } finally {
+      await stop(direct);
+    }
   });
 });

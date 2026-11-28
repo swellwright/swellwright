@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Swellwright API",
-    "version": "0.32.0",
+    "version": "0.33.0",
     "description": "Deploy and operate Remnawave fleets. Unofficial community project.",
     "license": {
       "name": "AGPL-3.0-only",
@@ -315,6 +315,24 @@
               }
             }
           },
+          "429": {
+            "description": "Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -326,7 +344,7 @@
             }
           }
         },
-        "description": "Works once, with the setup token the server printed to its log at start. Starts a session that still needs the authenticator to be set up (`/auth/totp/enrollment`).",
+        "description": "Works once, with the setup token the server printed to its log at start. Starts a session that still needs the authenticator to be set up (`/auth/totp/enrollment`). Ten attempts per source (an IPv4 address, an IPv6 /64) in fifteen minutes.",
         "requestBody": {
           "required": true,
           "content": {
@@ -358,6 +376,24 @@
               }
             }
           },
+          "429": {
+            "description": "Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -369,7 +405,7 @@
             }
           }
         },
-        "description": "The first of two steps. On success a session cookie is set that is not yet usable for anything except finishing the sign-in. Wrong credentials and unknown users answer the same 401; repeated failures lock the account for a while (429).",
+        "description": "The first of two steps. On success a session cookie is set that is not yet usable for anything except finishing the sign-in. Wrong credentials and unknown or disabled users normally answer the same 401. Wrong passwords delay sign-ins without ending sessions (ADR 0049): after five in fifteen minutes from one source that source waits until the window ends; after twenty from all sources the account waits 1, 2, 4 and at most 8 seconds between checks. A password cooldown or a second-factor lock for this account and source returns 429, regardless of the password, and does not count a failure. The route allows thirty requests per source in five minutes, of which up to twenty can reach account lookup, regardless of the username.",
         "requestBody": {
           "required": true,
           "content": {
@@ -401,6 +437,24 @@
               }
             }
           },
+          "429": {
+            "description": "Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -412,7 +466,7 @@
             }
           }
         },
-        "description": "A recovery code works once. The session cookie is replaced by a new one when the sign-in completes.",
+        "description": "A recovery code works once. The session cookie is replaced when sign-in completes. A password-only session can be used only from its original source (an IPv4 address or an IPv6 /64). Wrong codes here and during enrollment confirmation lock the account/source pair at `SW_LOCKOUT_ATTEMPTS` for `SW_LOCKOUT_MINUTES` and end its pending sessions. At twice that many failures across all sources, password-only verification for the account waits until its fixed fifteen-minute window ends. Active sessions and their step-up are unaffected. This route and confirmation share thirty requests per source in five minutes.",
         "requestBody": {
           "required": true,
           "content": {
@@ -448,6 +502,24 @@
               }
             }
           },
+          "429": {
+            "description": "Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -459,7 +531,7 @@
             }
           }
         },
-        "description": "Only before the authenticator was confirmed. Repeated calls return the same secret until it is confirmed.",
+        "description": "Only before the authenticator was confirmed (409 after). Repeated calls, also ones at the same moment, return the same secret until it is confirmed. A second-factor lock for this account and source also prevents requesting the secret. Thirty requests per source in five minutes.",
         "security": [
           {
             "session": []
@@ -485,6 +557,24 @@
               }
             }
           },
+          "429": {
+            "description": "Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -496,7 +586,7 @@
             }
           }
         },
-        "description": "Returns the recovery codes. They are shown once and only their hashes are kept.",
+        "description": "Takes a code from the authenticator of the secret `/auth/totp/enrollment` returned. Returns the recovery codes. They are shown once and only their hashes are kept. The confirmation, the codes and the new session are made together or not at all. 409 when the enrollment was not started or is already confirmed. A wrong code counts like one at sign-in.",
         "requestBody": {
           "required": true,
           "content": {
@@ -525,6 +615,24 @@
           "204": {
             "description": "The session is gone."
           },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -536,7 +644,7 @@
             }
           }
         },
-        "description": "Ends the current session if there is one. Always answers 204.",
+        "description": "Ends the current session if there is one. Signing out without a live session is not an error.",
         "security": []
       }
     },
@@ -597,6 +705,24 @@
               }
             }
           },
+          "429": {
+            "description": "Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -608,7 +734,7 @@
             }
           }
         },
-        "description": "Takes a code from the authenticator or a recovery code. For a short time afterwards the session may call the routes marked `x-sw-step-up`; they answer 403 `step_up_required` before that. A wrong code counts towards the lockout like a wrong code at sign-in. Signing in elevates the session already.",
+        "description": "Takes a code from the authenticator or a recovery code. For a short time afterwards the session may call `x-sw-step-up` routes. Step-up has a separate request budget per session and source, and counts wrong codes within the active session independently of sign-in or enrollment. At `SW_LOCKOUT_ATTEMPTS` the requesting session ends unless already elevated. An already elevated session keeps its deadline, but cannot renew it until the session lock expires.",
         "requestBody": {
           "required": true,
           "content": {
@@ -644,6 +770,24 @@
               }
             }
           },
+          "429": {
+            "description": "Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -655,7 +799,7 @@
             }
           }
         },
-        "description": "For a new user or one whose credentials were reset. The token is used up. Starts a session that still needs the authenticator to be set up (`/auth/totp/enrollment`). An unknown, used or expired token answers 401.",
+        "description": "For a new user or one whose credentials were reset. The token is used up and every earlier session of the account ends. Starts a session that still needs the authenticator to be set up (`/auth/totp/enrollment`). An unknown, used, replaced or expired token answers 401, also when a reset came in while the password was being hashed. Ten attempts per source in fifteen minutes.",
         "requestBody": {
           "required": true,
           "content": {
@@ -680,6 +824,24 @@
           "204": {
             "description": "The password was changed."
           },
+          "429": {
+            "description": "Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -691,7 +853,7 @@
             }
           }
         },
-        "description": "Needs the current password and an elevated session. Ends your other sessions, keeps this one, and revokes every live API token of yours. A wrong current password counts towards the lockout. The new password is 12 to 128 characters after Unicode NFKC normalization. A session that ended, or a password that changed, while the new one was being hashed answers 401.",
+        "description": "Needs the current password and an elevated session. Ends your other sessions, pending ones included, keeps this one, and revokes every live API token of yours. Allows one password change at a time per session and thirty requests per source in five minutes. Five wrong current passwords in fifteen minutes make this session wait (429); they never count towards the sign-in limits. The new password is 12 to 128 characters after Unicode NFKC normalization. A session that ended, or a password that changed, while the new one was being hashed answers 401.",
         "requestBody": {
           "required": true,
           "content": {
@@ -837,6 +999,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UserView"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -989,6 +1169,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/UserInvitation"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2060,6 +2258,24 @@
           "204": {
             "description": "The session is gone."
           },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -2071,7 +2287,7 @@
             }
           }
         },
-        "description": "Ends another session of your own account at once. The session you are using cannot be ended here (409): sign out instead. A session that is not yours is reported as not found.",
+        "description": "Ends another session of your own account at once. The session you are using cannot be ended here (409): sign out instead. A session that is not yours is reported as not found. A caller session that ended or changed epoch answers 401.",
         "parameters": [
           {
             "name": "id",
@@ -2110,6 +2326,24 @@
               }
             }
           },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -2121,7 +2355,7 @@
             }
           }
         },
-        "description": "Keeps the session you are using and ends every other session of your account.",
+        "description": "Keeps the session you are using and ends every other session of your account, pending ones included. A sign-in that is still under way cannot leave a session behind either: the credential epoch moves on even when there is nothing to end, and the change is recorded with its count, also zero.",
         "security": [
           {
             "session": []
@@ -2195,6 +2429,24 @@
           "204": {
             "description": "The session is gone."
           },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -2206,7 +2458,7 @@
             }
           }
         },
-        "description": "Ends the session at once and records it. The session you are using cannot be ended here (409).",
+        "description": "Ends the session at once and records it. The session you are using cannot be ended here (409). The caller session and its permission and elevation are rechecked in the transaction.",
         "parameters": [
           {
             "name": "id",
@@ -2247,6 +2499,24 @@
               }
             }
           },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -2258,7 +2528,7 @@
             }
           }
         },
-        "description": "Ends all sessions of the user at once, for example after a suspected theft of a cookie. Refused with 409 for your own account (use \"end all other sessions\").",
+        "description": "Ends all sessions of the user at once, including pending ones. It advances the credential epoch even when the count is zero. The caller session and its permission and elevation are rechecked in the transaction. Refused with 409 for your own account (use \"end all other sessions\").",
         "parameters": [
           {
             "name": "id",
@@ -2329,6 +2599,24 @@
           "204": {
             "description": "The token is revoked."
           },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -2340,7 +2628,7 @@
             }
           }
         },
-        "description": "Stops the token at once. Revoking a token that is already revoked succeeds. A token of someone else is reported as not found.",
+        "description": "Stops the token at once. Revoking a token that is already revoked succeeds. A token of someone else is reported as not found. A caller session that ended or changed epoch answers 401.",
         "parameters": [
           {
             "name": "id",
@@ -2375,6 +2663,24 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CreatedToken"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
                 }
               }
             }
@@ -2474,6 +2780,24 @@
           "204": {
             "description": "The token is revoked."
           },
+          "429": {
+            "description": "The authentication transaction is busy (`rate_limited`). Retry the request.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            },
+            "headers": {
+              "Retry-After": {
+                "description": "Whole seconds to wait before trying again.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
           "default": {
             "description": "Error envelope.",
             "content": {
@@ -2485,7 +2809,7 @@
             }
           }
         },
-        "description": "Stops the token at once and records it.",
+        "description": "Stops the token at once and records it. The caller session and its permission and elevation are rechecked in the transaction.",
         "parameters": [
           {
             "name": "id",
@@ -8575,7 +8899,7 @@
             "type": "string",
             "minLength": 6,
             "maxLength": 32,
-            "description": "A 6-digit authenticator code, or one recovery code (only on sign-in)."
+            "description": "A 6-digit authenticator code, or one recovery code at sign-in and step-up. Confirming the authenticator takes an authenticator code only."
           }
         },
         "required": [
@@ -8779,6 +9103,8 @@
           "setup.owner.created",
           "setup.owner.refused",
           "auth.login.failed",
+          "auth.password.throttled",
+          "auth.failures.summarized",
           "auth.second_step.failed",
           "auth.login.succeeded",
           "auth.totp.enrolled",

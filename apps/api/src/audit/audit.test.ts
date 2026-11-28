@@ -419,11 +419,16 @@ describe('what the audit log keeps about failures', { skip: !databaseUrl }, () =
   });
 
   it('records the lock once, and stays quiet about refusals while the account is locked', async () => {
+    // Wrong passwords never lock (ADR 0049): the lock comes from wrong second factors.
     const client = instance.client();
-    const wrong = (): Promise<unknown> =>
-      client.post('/auth/login', { username: 'owner', password: typedByCaller[2] });
-    await wrong(); // the second failure; the first was above
-    await wrong(); // the third: locks
+    assert.equal(
+      (await client.post('/auth/login', { username: 'owner', password: PASSWORD })).status,
+      200,
+    );
+    const wrongCode = codeFor(secret) === '000000' ? '000001' : '000000';
+    for (let i = 0; i < 3; i += 1) {
+      assert.equal((await client.post('/auth/totp', { code: wrongCode })).status, 401);
+    }
     const locks = (await stored(instance)).filter((e) => e.action === 'auth.account.locked');
     assert.equal(locks.length, 1);
     assert.deepEqual(at(locks, 0).details, { failures: 3, minutes: 15 });
@@ -441,9 +446,8 @@ describe('what the audit log keeps about failures', { skip: !databaseUrl }, () =
 
   it('records a wrong second step, a recovery code used up, the sign-in and the sign-out', async () => {
     const db = instance.isolated.database.client;
-    await db.credential.updateMany({
-      data: { lockedUntil: null, failedAttempts: 0, totpLastStep: null },
-    });
+    await db.mfaSourceFailure.deleteMany();
+    await db.credential.updateMany({ data: { totpLastStep: null } });
     const client = instance.client();
     await client.post('/auth/login', { username: 'owner', password: PASSWORD });
     const wrong = codeFor(secret) === '000000' ? '000001' : '000000';

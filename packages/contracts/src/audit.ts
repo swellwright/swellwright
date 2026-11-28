@@ -8,6 +8,8 @@ export const AUDIT_ACTIONS = [
   'setup.owner.created',
   'setup.owner.refused',
   'auth.login.failed',
+  'auth.password.throttled',
+  'auth.failures.summarized',
   'auth.second_step.failed',
   'auth.login.succeeded',
   'auth.totp.enrolled',

@@ -11,8 +11,23 @@ import { AuditController } from './audit/audit.controller.js';
 import { AuditService } from './audit/audit.service.js';
 import { AuthController } from './auth/auth.controller.js';
 import { AuthService } from './auth/auth.service.js';
-import { AuthGuard, OriginGuard, PermissionGuard, StepUpGuard } from './auth/guards.js';
-import { DEFAULT_PASSWORD_PARAMS, PasswordHasher, type PasswordParams } from './auth/password.js';
+import { AuthFailureNotes } from './auth/failure-notes.js';
+import {
+  type AttemptPolicy,
+  AuthAttemptGuard,
+  AuthGuard,
+  DEFAULT_ATTEMPT_POLICY,
+  OriginGuard,
+  PermissionGuard,
+  StepUpGuard,
+} from './auth/guards.js';
+import {
+  DEFAULT_HASHER_LIMITS,
+  DEFAULT_PASSWORD_PARAMS,
+  type HasherLimits,
+  PasswordHasher,
+  type PasswordParams,
+} from './auth/password.js';
 import { SecretBox } from './auth/secret-box.js';
 import { SessionManagementService } from './auth/session-management.service.js';
 import { SessionService } from './auth/session.service.js';
@@ -40,6 +55,7 @@ import { PrismaRunStore } from './engine/prisma-run-store.js';
 import {
   CHECKS_CLOCK,
   CLOCK,
+  ATTEMPT_POLICY,
   CONFIG,
   DATABASE,
   DNS_QUERY,
@@ -109,6 +125,10 @@ export interface AppOptions {
   readonly readinessChecks?: readonly ReadinessCheck[];
   /** Cheaper Argon2id parameters for tests; production always uses the defaults. */
   readonly passwordParams?: PasswordParams;
+  /** The bounds of the password hasher's queue; tests make them small to reach them. */
+  readonly hasherLimits?: HasherLimits;
+  /** The per-source budgets of the authentication routes; tests that make many sign-ins from one address raise them. */
+  readonly attemptPolicy?: Partial<AttemptPolicy>;
   /** A database to use instead of the one built from the configuration (tests with a schema of their own). */
   readonly database?: Database;
   /** Cheaper Argon2id parameters for the vault passphrase in tests; production uses the configuration. */
@@ -185,10 +205,14 @@ export class AppModule implements OnApplicationShutdown {
         UpdatesService,
         {
           provide: PASSWORD_HASHER,
-          useValue: new PasswordHasher(options.passwordParams ?? DEFAULT_PASSWORD_PARAMS),
+          useValue: new PasswordHasher(
+            options.passwordParams ?? DEFAULT_PASSWORD_PARAMS,
+            options.hasherLimits ?? DEFAULT_HASHER_LIMITS,
+          ),
         },
         { provide: SECRET_BOX, useValue: new SecretBox(config.authKey) },
         SessionService,
+        AuthFailureNotes,
         TokenService,
         SessionManagementService,
         AuditService,
@@ -254,8 +278,14 @@ export class AppModule implements OnApplicationShutdown {
         { provide: PLUGIN_NETWORK, useValue: options.pluginNetwork ?? new PluginNetwork() },
         { provide: VAULT_KDF, useValue: options.vaultKdf ?? config.vaultKdf },
         VaultService,
-        // Guards run in this order: the origin check, the session, the role's permission, the step-up.
+        {
+          provide: ATTEMPT_POLICY,
+          useValue: { ...DEFAULT_ATTEMPT_POLICY, ...options.attemptPolicy },
+        },
+        // Guards run in this order: the origin check, the budget of authentication requests by source, the session,
+        // the role's permission, the step-up.
         { provide: APP_GUARD, useClass: OriginGuard },
+        { provide: APP_GUARD, useClass: AuthAttemptGuard },
         { provide: APP_GUARD, useClass: AuthGuard },
         { provide: APP_GUARD, useClass: PermissionGuard },
         { provide: APP_GUARD, useClass: StepUpGuard },

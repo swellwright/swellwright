@@ -50,9 +50,8 @@ services:
       SW_DATABASE_URL: postgresql://sw:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/swellwright
       SW_VALKEY_URL: redis://valkey:6379
       SW_AUTH_KEY: ${SW_AUTH_KEY:?Set SW_AUTH_KEY in .env}
-      # The reverse proxy reaches the container from a private address (the Docker bridge). Only those
-      # addresses may say who the client is; an address from the Internet cannot.
-      SW_TRUSTED_PROXIES: ${SW_TRUSTED_PROXIES:-uniquelocal}
+      # Opt in only for the reverse proxy's exact address or dedicated CIDR as seen by the API, never the plugin network.
+      SW_TRUSTED_PROXIES: "${SW_TRUSTED_PROXIES:?Set it to the proxy address or exclusive CIDR as seen by the API, or false for direct access}"
     ports:
       - "${SW_LISTEN:-127.0.0.1:3100}:3000"
     depends_on:

@@ -117,7 +117,8 @@ export const auth = {
     newHint_one: 'At least {{count}} character.',
     newHint_other: 'At least {{count}} characters.',
     repeatLabel: 'Repeat the new password',
-    lockoutNote: 'Five wrong current passwords in a row lock the account for a while.',
+    lockoutNote:
+      'After five wrong current passwords this page has to wait a while. Your sign-in and other sessions are not affected.',
     submit: 'Change the password',
   },
 

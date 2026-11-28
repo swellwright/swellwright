@@ -2,6 +2,7 @@
 # Smoke test of a running Swellwright stack (deploy/compose): the server is ready, serves the console with its
 # security headers, leaves the API alone, and the first-run setup works with the right token only.
 # It creates the owner, so run it against a stack you are about to throw away.
+# It does not start Compose. Set SW_TRUSTED_PROXIES=false before starting a direct-access smoke stack.
 #
 # Usage: scripts/smoke-test.sh <base url> <setup token>
 #   scripts/smoke-test.sh http://127.0.0.1:3100 "$SW_SETUP_TOKEN"

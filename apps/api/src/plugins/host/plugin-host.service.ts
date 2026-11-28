@@ -108,7 +108,7 @@ export class PluginHostService implements OnApplicationShutdown {
   private readonly notes = new Map<string, number[]>();
   private readonly idle = new Map<string, NodeJS.Timeout>();
   /** Wrong tokens at the gateway, per address: it is open to the network, so it is slowed down for guessing. */
-  private readonly gatewayGuesses = new WindowLimiter(20, 5 * 60_000, Date.now, 1024);
+  private readonly gatewayGuesses = new WindowLimiter(20, 5 * 60_000, Date.now, 1024, 'shared');
   private readonly gatewayRate = new WindowLimiter(120, 60_000);
   private readonly gatewayBusy = new Map<string, number>();
   private readonly gatewayCache = new Map<

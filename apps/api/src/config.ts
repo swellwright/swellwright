@@ -94,7 +94,12 @@ const EnvSchema = z.object({
   SW_ALLOWED_ORIGINS: optionalString,
   SW_SESSION_IDLE_MINUTES: z.coerce.number().int().min(5).max(1440).default(120),
   SW_SESSION_MAX_HOURS: z.coerce.number().int().min(1).max(168).default(12),
+  /**
+   * Second-factor failures in fifteen minutes that lock one sign-in source or one active step-up session (ADR 0049).
+   * Twice this many failures pauses pending factor checks across all sources for the account.
+   */
   SW_LOCKOUT_ATTEMPTS: z.coerce.number().int().min(3).max(20).default(5),
+  /** How long that lock lasts. */
   SW_LOCKOUT_MINUTES: z.coerce.number().int().min(1).max(1440).default(15),
   /** How long a session counts as freshly verified after the second factor (ADR 0017). */
   SW_STEP_UP_MINUTES: z.coerce.number().int().min(1).max(30).default(5),
@@ -105,7 +110,7 @@ const EnvSchema = z.object({
    * comma-separated list of addresses, CIDR ranges and the names `loopback`, `linklocal`, `uniquelocal`.
    * Not set: nobody is trusted and the address of the connection is the client.
    */
-  SW_TRUSTED_PROXIES: optionalString,
+  SW_TRUSTED_PROXIES: z.string().optional(),
   /** Argon2id cost of the vault passphrase (ADR 0018). Raising it only affects vaults set up afterwards. */
   SW_VAULT_KDF_MEMORY_MIB: z.coerce.number().int().min(64).max(4096).default(256),
   SW_VAULT_KDF_PASSES: z.coerce.number().int().min(1).max(10).default(3),
@@ -506,6 +511,9 @@ function parseTrustedProxies(value: string | undefined): number | string[] | fal
     return false;
   }
   const text = value.trim();
+  if (text === 'false') {
+    return false;
+  }
   if (/^\d+$/u.test(text)) {
     const hops = Number(text);
     if (hops < 1 || hops > 10) {
@@ -519,11 +527,12 @@ function parseTrustedProxies(value: string | undefined): number | string[] | fal
     .filter((entry) => entry.length > 0);
   const named = new Set(['loopback', 'linklocal', 'uniquelocal']);
   for (const entry of entries) {
-    const address = entry.split('/')[0] ?? '';
     if (
       !named.has(entry) &&
-      !z.ipv4().safeParse(address).success &&
-      !z.ipv6().safeParse(address).success
+      !z.ipv4().safeParse(entry).success &&
+      !z.ipv6().safeParse(entry).success &&
+      !z.cidrv4().safeParse(entry).success &&
+      !z.cidrv6().safeParse(entry).success
     ) {
       throw new Error(
         `Invalid configuration: SW_TRUSTED_PROXIES entries must be addresses, CIDR ranges, loopback, linklocal or uniquelocal, got "${entry}".`,

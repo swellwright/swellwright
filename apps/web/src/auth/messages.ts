@@ -37,10 +37,14 @@ export function describeError(
       case 'unauthorized':
         return whenUnauthorized;
       case 'rate_limited': {
-        const minutes = error.retryAfterSeconds
-          ? Math.ceil(error.retryAfterSeconds / 60)
-          : undefined;
-        return minutes ? t('errors:rateLimited', { count: minutes }) : t('errors:rateLimitedShort');
+        const seconds = error.retryAfterSeconds;
+        if (!seconds) {
+          return t('errors:rateLimitedShort');
+        }
+        // A sign-in that has to wait a few seconds (ADR 0049) says so in seconds, not as "about a minute".
+        return seconds < 60
+          ? t('errors:rateLimitedSeconds', { count: seconds })
+          : t('errors:rateLimited', { count: Math.ceil(seconds / 60) });
       }
       case 'forbidden':
         return whenForbidden ?? t('errors:forbidden');
