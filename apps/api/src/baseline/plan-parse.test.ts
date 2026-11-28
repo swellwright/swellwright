@@ -182,6 +182,7 @@ describe('the parser', () => {
       '| envNames=LEAKED=fragment-of-a-value',
       '| envNames=two words',
       '| envNames=_OK_2',
+      '| envNames=app.config-mode',
       '| envFlags=TZ=UTC',
       '| envFlags=TZ=UTC\\nINJECTED=1',
       '| envFlags=SECRET_KEY=hunter2',
@@ -195,7 +196,7 @@ describe('the parser', () => {
       planned(['docker.container name=x']),
     ).observations.get(1)?.fields;
     assert.ok(fields);
-    assert.deepEqual(fields['envNames'], ['PATH', '_OK_2']);
+    assert.deepEqual(fields['envNames'], ['PATH', '_OK_2', 'app.config-mode']);
     assert.deepEqual(fields['envFlags'], ['TZ=UTC']);
   });
 
@@ -248,30 +249,32 @@ describe('the parser', () => {
     );
   });
 
-  it('survives binary output, invalid UTF-8, a huge line and a huge number of lines', () => {
+  it('survives invalid bytes and rejects observations over the line and list limits', () => {
     const binary = Buffer.concat([
       Buffer.from('@@swb v1\n@@swb begin 1 os.release\n| id=ubu'),
       Buffer.from([0x00, 0xff, 0xfe, 0x80]),
       Buffer.from('ntu\r\n| name=\u001b[31mred\u001b[0m\n| prettyName='),
-      Buffer.from('x'.repeat(100_000)),
+      Buffer.from('Example'),
       Buffer.from('\n\n@@swb end 1 0\n@@swb done\n'),
     ]);
     const parsed = parseObservations(binary, planned(['os.release']));
     const fields = parsed.observations.get(1)?.fields;
     assert.ok(fields);
-    // Control characters are gone, bad bytes became the replacement character, the line is cut.
+    // Control characters are gone and bad bytes became the replacement character.
     assert.equal(fields['id'], 'ubu���ntu'.replaceAll('\u0000', ''));
     assert.equal(fields['name'], '[31mred[0m');
-    assert.ok(String(fields['prettyName']).length <= 600);
+    assert.equal(fields['prettyName'], 'Example');
     const many =
       '@@swb v1\n@@swb begin 1 systemd.failed\n' +
       '| units=u\n'.repeat(50_000) +
       '\n@@swb end 1 0\n@@swb done\n';
-    const list = parseObservations(Buffer.from(many), planned(['systemd.failed'])).observations.get(
-      1,
-    )?.fields?.['units'];
-    assert.ok(Array.isArray(list));
-    assert.ok(list.length <= 200);
+    const observation = parseObservations(
+      Buffer.from(many),
+      planned(['systemd.failed']),
+    ).observations.get(1);
+    assert.ok(observation);
+    assert.equal(observation.status, 'error');
+    assert.equal(observation.fields, null);
   });
 
   it('turns exit codes into statuses and reads booleans and numbers strictly', () => {
@@ -314,5 +317,30 @@ describe('the parser', () => {
   it('says when the output was cut', () => {
     const parsed = parseObservations(Buffer.from('@@swb v1\n'), [], { truncated: true });
     assert.ok(parsed.warnings.some((warning) => warning.includes('cut')));
+  });
+
+  it('does not evaluate observations with incomplete fields or lists', () => {
+    const output = [
+      '@@swb v1',
+      '@@swb begin 1 ports.public',
+      '| truncated=yes',
+      '| count=201',
+      '@@swb end 1 0',
+      '@@swb begin 2 iptables.chain',
+      `| text=${'x'.repeat(601)}`,
+      '@@swb end 2 0',
+      '@@swb begin 3 users.login',
+      ...Array.from({ length: 201 }, () => '| accounts=synthetic'),
+      '@@swb end 3 0',
+      '@@swb done',
+    ].join('\n');
+    const result = parseObservations(
+      Buffer.from(output),
+      planned(['ports.public', 'iptables.chain', 'users.login']),
+    );
+    for (const index of [1, 2, 3]) {
+      assert.equal(result.observations.get(index)?.status, 'error');
+      assert.equal(result.observations.get(index)?.fields, null);
+    }
   });
 });

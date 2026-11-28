@@ -104,7 +104,7 @@ function fieldValue(def: ObservationFieldDef, lines: readonly string[] | undefin
     if (lines === undefined) {
       return def.optional === true ? null : [];
     }
-    return lines.filter((line) => line.length > 0).slice(0, MAX_LIST_ENTRIES);
+    return lines.filter((line) => line.length > 0);
   }
   const first = lines?.[0];
   if (first === undefined) {
@@ -123,20 +123,29 @@ function fieldValue(def: ObservationFieldDef, lines: readonly string[] | undefin
  */
 const ENTRY_FORMS: Readonly<Record<string, Readonly<Record<string, RegExp>>>> = {
   'docker.container': {
-    envNames: /^[A-Za-z_][A-Za-z0-9_]*$/u,
+    envNames: /^[A-Za-z_][A-Za-z0-9_.-]*$/u,
     envFlags: /^(?:SNI_VERIFICATION|NODE_PORT|NODE_ENV|TZ)=[A-Za-z0-9._:/+-]*$/u,
   },
 };
 
 /** Reads the fields of one observation of the catalogue. Keys the catalogue does not know are ignored. */
-function fieldsOf(kind: string, lines: readonly string[]): Record<string, ObservedValue> {
+function fieldsOf(kind: string, lines: readonly string[]): Record<string, ObservedValue> | null {
   const def = observationKind(kind);
   const grouped = groupLines(lines);
+  if (grouped.has('truncated')) {
+    return null;
+  }
   const forms = ENTRY_FORMS[kind];
   const fields: Record<string, ObservedValue> = {};
   for (const field of def?.fields ?? []) {
     const form = forms?.[field.name];
     const raw = grouped.get(field.name);
+    if (
+      field.type === 'list' &&
+      (raw?.filter((entry) => entry !== '').length ?? 0) > MAX_LIST_ENTRIES
+    ) {
+      return null;
+    }
     fields[field.name] = fieldValue(
       field,
       form === undefined || raw === undefined ? raw : raw.filter((entry) => form.test(entry)),
@@ -149,6 +158,7 @@ interface Open {
   readonly index: number;
   readonly kind: string;
   readonly lines: string[];
+  truncated: boolean;
 }
 
 /**
@@ -182,12 +192,14 @@ export function parseObservations(
       return;
     }
     const kind = open.kind;
-    const status = duplicates.has(index) ? 'error' : statusOf(code);
+    const result = duplicates.has(index) ? 'error' : statusOf(code);
+    const fields = result === 'ok' && !open.truncated ? fieldsOf(kind, open.lines) : null;
+    const status = result === 'ok' && fields === null ? 'error' : result;
     done.set(index, {
       index,
       kind,
       status,
-      fields: status === 'ok' ? fieldsOf(kind, open.lines) : null,
+      fields,
     });
     open = undefined;
   };
@@ -195,8 +207,12 @@ export function parseObservations(
   for (const rawLine of text.split('\n')) {
     const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
     if (line.startsWith('| ')) {
-      if (open && open.lines.length < MAX_LINES_PER_OBSERVATION) {
-        open.lines.push(line.slice(2, 2 + MAX_LINE_CHARS).replaceAll(CONTROL, ''));
+      if (open) {
+        if (open.lines.length >= MAX_LINES_PER_OBSERVATION || line.length - 2 > MAX_LINE_CHARS) {
+          open.truncated = true;
+        } else {
+          open.lines.push(line.slice(2).replaceAll(CONTROL, ''));
+        }
       }
       continue;
     }
@@ -231,7 +247,7 @@ export function parseObservations(
         duplicates.add(index);
       }
       seenBegin.add(index);
-      open = { index, kind: kindOf.get(index) ?? kind, lines: [] };
+      open = { index, kind: kindOf.get(index) ?? kind, lines: [], truncated: false };
     } else if (word === 'end') {
       const [indexText = '', codeText = ''] = rest.split(' ');
       const index = Number(indexText);

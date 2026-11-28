@@ -326,11 +326,20 @@ export function adaptInternalSquad(
   });
 }
 
+/** Header maps must keep their contract shape even when the masker refuses an entire input. */
+function maskedHeaders(
+  headers: Record<string, string>,
+  context: AdaptContext,
+): Record<string, string> {
+  const { value } = maskSecrets<unknown>(headers, context);
+  return typeof value === 'string' ? {} : (value as Record<string, string>);
+}
+
 export function adaptExternalSquad(
   dto: ExternalSquadDtoType,
   context: AdaptContext,
 ): PanelExternalSquadView {
-  const headers = maskSecrets(dto.responseHeadersAdd ?? {}, context).value;
+  const headers = maskedHeaders(dto.responseHeadersAdd ?? {}, context);
   const view = {
     uuid: dto.uuid,
     name: dto.name,
@@ -439,7 +448,7 @@ export function adaptSubscriptionSettings(
     isShowCustomRemarks: dto.isShowCustomRemarks ?? false,
     randomizeHosts: dto.randomizeHosts ?? false,
     customRemarks: dto.customRemarks ?? {},
-    customResponseHeaders: maskSecrets(dto.customResponseHeaders ?? {}, context).value,
+    customResponseHeaders: maskedHeaders(dto.customResponseHeaders ?? {}, context),
     responseRules: maskSecrets(dto.responseRules ?? null, context).value,
     hwidSettings: {
       enabled: dto.hwidSettings?.enabled ?? false,

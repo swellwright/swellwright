@@ -194,7 +194,7 @@ describe('the observation script, read as text', () => {
     assert.ok(envUse.includes('{{range .Config.Env}}{{println (json .)}}{{end}}'));
     assert.ok(!envUse.includes('{{println .}}'));
     // Of every variable only the name is kept, and only when it is a variable name; besides the four that are not secret.
-    assert.ok(envUse.includes('if (name !~ /^[A-Za-z_][A-Za-z0-9_]*$/) next'));
+    assert.ok(envUse.includes('if (name !~ /^[A-Za-z_][A-Za-z0-9_.-]*$/) next'));
     assert.ok(
       envUse.includes(
         'name == "SNI_VERIFICATION" || name == "NODE_PORT" || name == "NODE_ENV" || name == "TZ"',
@@ -919,6 +919,97 @@ describe('the observation script against stand-in tools', { skip: !available() }
       assert.equal(observations.get(index)?.status, 'ok');
       assert.equal(observations.get(index)?.fields?.['exists'], false);
     }
+  });
+
+  it('does not report zero after an inode, container-list or jail command fails', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    makeShim(machine.bin, 'df', [
+      [
+        '-P -k /',
+        'Filesystem 1024-blocks Used Available Capacity Mounted on\nfs 100 10 90 10% /\n',
+      ],
+      ['-P -i /', '', 1],
+    ]);
+    makeShim(machine.bin, 'docker', [
+      ['version --format {{.Server.Version}}', '26.0\n'],
+      ['compose version --short', '2.0\n'],
+      ['ps -aq', '', 1],
+    ]);
+    makeShim(machine.bin, 'fail2ban-client', [
+      ['status sshd', '', 1],
+      ['status', 'Jail list: sshd\n'],
+    ]);
+    const { stdout } = runScript(
+      machine,
+      '1\tdisk.usage\tpath=/\n2\tdocker.engine\n3\tfail2ban.status\n',
+    );
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'disk.usage', params: { path: '/' } },
+      { index: 2, kind: 'docker.engine', params: {} },
+      { index: 3, kind: 'fail2ban.status', params: {} },
+    ]);
+    assert.deepEqual(
+      [...parsed.observations.values()].map((row) => row.status),
+      ['error', 'error', 'error'],
+    );
+  });
+
+  it('marks clipped public ports and firewall text incomplete', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    makeShim(machine.bin, 'ss', [
+      [
+        '-H -ltnp',
+        Array.from(
+          { length: 200 },
+          (_unused, i) => `LISTEN 0 128 0.0.0.0:${String(10000 + i)} 0.0.0.0:*\n`,
+        ).join('') + 'LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\n',
+      ],
+      ['-H -lunp', ''],
+    ]);
+    makeShim(machine.bin, 'iptables', [
+      ['-w 5 -S DOCKER-USER', `-N DOCKER-USER\n${'-A DOCKER-USER -j RETURN\n'.repeat(18)}`],
+    ]);
+    const { stdout } = runScript(
+      machine,
+      '1\tports.public\n2\tiptables.chain\tchain=DOCKER-USER\n',
+    );
+    assert.match(stdout, /^\| count=201$/mu);
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'ports.public', params: {} },
+      { index: 2, kind: 'iptables.chain', params: { chain: 'DOCKER-USER' } },
+    ]);
+    assert.deepEqual(
+      [...parsed.observations.values()].map((row) => row.status),
+      ['error', 'error'],
+    );
+  });
+
+  it('rejects clipped sudoers and login account lists instead of evaluating a prefix', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    for (let index = 0; index < 51; index += 1) {
+      writeFileSync(join(machine.root, 'etc/sudoers.d', `test-${String(index)}`), '');
+    }
+    const accounts = Array.from(
+      { length: 101 },
+      (_unused, index) => `test-${String(index)}:x:1000:1000::/:/bin/sh`,
+    );
+    makeShim(machine.bin, 'getent', [['passwd', `${accounts.join('\n')}\n`]]);
+    const { stdout } = runScript(machine, '1\tsudoers\n2\tusers.login\n');
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'sudoers', params: {} },
+      { index: 2, kind: 'users.login', params: {} },
+    ]);
+    assert.deepEqual(
+      [...parsed.observations.values()].map(({ status, fields }) => ({ status, fields })),
+      [
+        { status: 'error', fields: null },
+        { status: 'error', fields: null },
+      ],
+    );
+    assert.match(stdout, /^\| count=101$/mu);
   });
 
   it('fails the container observation when its variables cannot be read, and tells an empty list from it', () => {

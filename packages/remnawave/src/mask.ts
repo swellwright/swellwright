@@ -158,24 +158,6 @@ const PEOPLE_FIELDS: ReadonlySet<string> = new Set([
   'key',
 ]);
 
-/** Query parameters of a URL that carry a secret. */
-const SECRET_PARAMS: ReadonlySet<string> = new Set([
-  'password',
-  'pass',
-  'pwd',
-  'token',
-  'key',
-  'secret',
-  'sid',
-  'psk',
-  'seed',
-  'apikey',
-  'accesstoken',
-  'obfspassword',
-  'privatekey',
-  'auth',
-]);
-
 /** The properties that name the value of a name/value pair (compared like every name: case and separators ignored). */
 const NAME_KEYS: ReadonlySet<string> = new Set([
   'name',
@@ -200,15 +182,23 @@ const NAME_KEYS: ReadonlySet<string> = new Set([
  */
 export function isTrivialText(text: string): boolean {
   const trimmed = text.trim();
-  if (startsFlowDocument(trimmed) || /[\r\n\u0085\u2028\u2029]|["'][\t \p{Cf}]*:/u.test(trimmed)) {
+  if (
+    startsFlowDocument(trimmed) ||
+    /[\p{Cc}\u2028\u2029]|:(?:\s|$)|["'][ \p{Cf}]*:/u.test(trimmed) ||
+    /(?:^|\s)(?:--(?:password|passwd|passphrase|token|secret)(?:\s|=)|curl(?:\s|$))/iu.test(trimmed)
+  ) {
     return false;
   }
-  const mapped = /^([\p{L}\p{N}\p{Cf}_.\\\t -]+):(\s|$)?/u.exec(trimmed);
-  if (mapped?.[1] !== undefined) {
-    const key = norm(mapped[1]);
-    // YAML needs a delimiter after a plain key, but a credential label is still suspicious without one.
+  // URL tails include query assignments and authority delimiters. The value rules know how to read those.
+  const remaining = trimmed.replace(/:\/\/[^\s"'<>]*/gu, '');
+  if (remaining.includes('=') && !/^[A-Za-z0-9+/_-]+={1,2}$/u.test(remaining)) {
+    return false;
+  }
+  for (const [word] of remaining.matchAll(/[^\s:=]+(?::[^\s:]*)?/gu)) {
+    const colon = word.indexOf(':');
+    if (colon < 0 || word.includes('@', colon)) continue;
+    const key = norm(word.slice(0, colon));
     if (
-      mapped[2] !== undefined ||
       key === 'auth' ||
       key === 'decryption' ||
       isSecretName(key) ||
@@ -217,7 +207,7 @@ export function isTrivialText(text: string): boolean {
       return false;
     }
   }
-  return !/(?:^|[\s{,"'])[\p{L}\p{N}_.-]+["']?[ \t]*(?::(?:\s|$)|=(?![=\s]*$))/u.test(trimmed);
+  return true;
 }
 
 const startsFlowDocument = (trimmed: string): boolean =>
@@ -270,7 +260,9 @@ const COLLECTION_METADATA: ReadonlySet<string> = new Set([
 ]);
 
 /** How many values one call may visit, aliases and embedded documents included: past it the whole value is masked. */
-const MAX_VISITS = 2_000_000;
+const MAX_VISITS = 200_000;
+/** No single fragment gets more scans than a YAML document; repeated text work also shares a call budget. */
+const MAX_TEXT_WORK = 4 * 1024 * 1024;
 /** Shared containers can expand far beyond their input size. Bound repeat work without lowering the limit for trees. */
 const MAX_REPEAT_VISITS = 4096;
 
@@ -394,10 +386,14 @@ const PEM_PRIVATE =
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/gu;
 /** A whole PEM block of base64 lines (no header lines): its body cannot hold a `-`, so the match is linear. */
 const PEM_BLOCK = /-----BEGIN [A-Z0-9 ]{1,40}-----[A-Za-z0-9+/=\s]*-----END [A-Z0-9 ]{1,40}-----/gu;
-const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s@?#"'<>]+)@/giu;
-const URL_PARAM = /([?&;])([A-Za-z0-9_.-]{1,40})=([^&#\s"'<>]*)/gu;
-const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b/gu;
+// Anchored by a literal delimiter. A new :// cannot start inside a previous authority.
+const URL_USERINFO = /(:\/\/)([^/\s@?#"'<>]+)@/gu;
+const URL_PARAM = /([?&;])([^/?&;=#\s"'<>]+)=([^&#;\s"'<>]*)/gu;
+// Consume whole runs, then inspect pieces without retrying a greedy match at each word boundary.
+const JWT_RUN = /[A-Za-z0-9_.-]+/gu;
+const AUTHORITY_RUN = /[^/\s?#"'<>]+/gu;
 const BEARER = /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/giu;
+const BASIC = /\b(Basic\s+)[A-Za-z0-9+/_-]+={0,2}/giu;
 
 class Masker {
   count = 0;
@@ -428,11 +424,13 @@ class Masker {
       typeof original === 'string'
         ? original
         : JSON.stringify(original === undefined ? null : original);
+    this.chargeText(text.length);
     const digest = createHmac('sha256', this.key).update(text).digest('hex').slice(0, 8);
     return `[masked:${digest}]`;
   }
 
   private visits = 0;
+  private textWork = 0;
   private repeatVisits = 0;
   private repeatDepth = 0;
   private readonly seen = new WeakMap<object, ContainerMode>();
@@ -455,6 +453,25 @@ class Masker {
     if (this.repeatVisits > MAX_REPEAT_VISITS) {
       throw new UnsafeMaskStructure();
     }
+  }
+
+  private chargeText(length: number): void {
+    this.textWork += length;
+    if (this.textWork > MAX_TEXT_WORK) {
+      throw new UnsafeMaskStructure();
+    }
+  }
+
+  /** Reject wide objects before reading their values or allocating a second array of entries. */
+  private keys(source: Readonly<Record<string, unknown>>): string[] {
+    const keys = Object.keys(source);
+    if (2 * keys.length > MAX_VISITS - this.visits) {
+      throw new UnsafeMaskStructure();
+    }
+    for (const key of keys) {
+      this.chargeText(key.length);
+    }
+    return keys;
   }
 
   /** Refuses aliases that can expose a value masked in another context; a cycle is masked rather than followed. */
@@ -500,7 +517,10 @@ class Masker {
     if (value !== null && typeof value === 'object') {
       return this.inside(value, 'all', () =>
         this.named(
-          Object.entries(value).map(([key, item]) => [key, this.maskAll(item, depth + 1)] as const),
+          this.keys(value as Record<string, unknown>).map(
+            (key) =>
+              [key, this.maskAll((value as Record<string, unknown>)[key], depth + 1)] as const,
+          ),
         ),
       );
     }
@@ -512,21 +532,65 @@ class Masker {
 
   /** The shape-only rules, also used on already-read documents and mapping names. */
   text(input: string): string {
+    if (input.length > MAX_YAML_CHARS) {
+      return this.unreadable();
+    }
+    this.chargeText(input.length);
     let out = input;
     out = out.replace(PEM_PRIVATE, () => this.mask('pem'));
+    out = out.replace(AUTHORITY_RUN, (run: string, offset: number, source: string) => {
+      // A schemed authority is handled below; never fingerprint its replacement as another credential.
+      if (offset >= 3 && source.startsWith('://', offset - 3)) {
+        return run;
+      }
+      const at = run.indexOf('@');
+      const colon = run.indexOf(':');
+      // Also recognize bare user:password@host. An email address alone has no password delimiter.
+      return colon > 0 && at > colon + 1 && at + 1 < run.length
+        ? `${this.mask(run.slice(0, at))}${run.slice(at)}`
+        : run;
+    });
     out = out.replace(
       URL_USERINFO,
-      (_whole, scheme: string, userinfo: string) => `${scheme}${this.mask(userinfo)}@`,
+      (_whole, delimiter: string, userinfo: string) => `${delimiter}${this.mask(userinfo)}@`,
     );
     out = out.replace(
       OPAQUE_LINK,
       (_whole, scheme: string, payload: string) => `${scheme}${this.mask(payload)}`,
     );
-    out = out.replace(URL_PARAM, (whole, sep: string, name: string, value: string) =>
-      SECRET_PARAMS.has(norm(name)) && value !== '' ? `${sep}${name}=${this.mask(value)}` : whole,
-    );
-    out = out.replace(JWT, (whole) => this.mask(whole));
+    out = out.replace(URL_PARAM, (whole, sep: string, name: string, value: string) => {
+      let decoded = name;
+      try {
+        decoded = decodeURIComponent(name);
+      } catch {
+        // The literal name is still checked when percent encoding is malformed.
+      }
+      const key = norm(decoded);
+      return (key === 'key' ||
+        key === 'auth' ||
+        this.secretName(decoded) ||
+        isSecretCollectionName(decoded)) &&
+        value !== ''
+        ? `${sep}${name}=${this.mask(value)}`
+        : whole;
+    });
+    out = out.replace(JWT_RUN, (run) => {
+      if (!run.includes('.') || !run.includes('eyJ')) return run;
+      const parts = run.split('.');
+      return parts.some((head, index) => {
+        const prefix = head.indexOf('eyJ');
+        return (
+          prefix !== -1 &&
+          head.length - prefix >= 11 &&
+          (parts[index + 1]?.length ?? 0) >= 8 &&
+          (parts[index + 2]?.length ?? 0) >= 4
+        );
+      })
+        ? this.mask(run)
+        : run;
+    });
     out = out.replace(BEARER, (_whole, prefix: string) => `${prefix}${this.mask('bearer')}`);
+    out = out.replace(BASIC, (_whole, prefix: string) => `${prefix}${this.mask('basic')}`);
     return out;
   }
 
@@ -536,6 +600,7 @@ class Masker {
    * read that way is masked as a whole: it fails closed.
    */
   private encodedYaml(value: string, depth: number): string {
+    this.chargeText(value.length);
     if (value.trim() === '') {
       return value;
     }
@@ -568,6 +633,7 @@ class Masker {
   }
 
   private scrubYaml(text: string): string {
+    this.chargeText(text.length);
     const scrubbed = this.scrubDecodedYaml?.(text);
     this.count += scrubbed?.count ?? 0;
     return scrubbed?.text ?? text;
@@ -580,7 +646,7 @@ class Masker {
    * sentence, a number, `ok`, a bare link).
    */
   failClosed(input: string): string {
-    if (isTrivialText(input)) {
+    if (input.length <= MAX_YAML_CHARS && isTrivialText(input)) {
       return this.text(input);
     }
     return this.unreadable();
@@ -598,6 +664,10 @@ class Masker {
    * when nothing was); not readable that way, it is masked whole. Depth and work count towards the same limits.
    */
   stringValue(value: string, depth = 0): string {
+    if (value.length > MAX_YAML_CHARS) {
+      return this.unreadable();
+    }
+    this.chargeText(value.length);
     // A PEM block is a known shape on several lines (a private key is masked by the value rules, a certificate kept):
     // a text that is trivial apart from its PEM blocks keeps the value rules.
     if (isTrivialText(value) || isTrivialText(value.replace(PEM_BLOCK, ' '))) {
@@ -704,7 +774,11 @@ class Masker {
     }
     if (value !== null && typeof value === 'object') {
       return this.inside(value, 'collection', () =>
-        this.named(Object.entries(value).map(([key, entry]) => [key, item(entry)] as const)),
+        this.named(
+          this.keys(value as Record<string, unknown>).map(
+            (key) => [key, item((value as Record<string, unknown>)[key])] as const,
+          ),
+        ),
       );
     }
     return this.maskAll(value, depth);
@@ -715,7 +789,8 @@ class Masker {
     this.visit();
     return this.inside(source, 'record', () =>
       this.named(
-        Object.entries(source).map(([key, entry]): [string, unknown] => {
+        this.keys(source).map((key): [string, unknown] => {
+          const entry = source[key];
           // The names the caller's profile hides (the console's profile for people hides `uuid`) are hidden here too:
           // the metadata list never makes a value readable that the profile hides.
           if (this.extra.has(norm(key))) {
@@ -743,16 +818,19 @@ class Masker {
   ): Record<string, unknown> {
     // `{ "name": "Authorization", "value": "..." }` and `{ "key": "x-api-key", "value": "..." }` pairs, in any case and
     // order of their properties: the value is secret when ANY of the naming properties names a secret.
-    const hasValue = Object.keys(source).some((candidate) => norm(candidate) === 'value');
+    const keys = this.keys(source);
+    const hasValue = keys.some((candidate) => norm(candidate) === 'value');
     const sensitivePair =
       hasValue &&
-      Object.entries(source).some(
-        ([candidate, given]) =>
-          NAME_KEYS.has(norm(candidate)) &&
-          typeof given === 'string' &&
-          (this.secretName(given) || isSecretCollectionName(given)),
-      );
-    const entries = Object.entries(source).map(([name, item]): [string, unknown] => {
+      keys.some((candidate) => {
+        if (!NAME_KEYS.has(norm(candidate))) return false;
+        const given = source[candidate];
+        if (typeof given !== 'string') return false;
+        this.chargeText(given.length);
+        return this.secretName(given) || isSecretCollectionName(given);
+      });
+    const entries = keys.map((name): [string, unknown] => {
+      const item = source[name];
       const n = norm(name);
       if (n === 'auth') {
         // Xray's `"auth": "password"` is a mode, not a secret; a plain mode word stays readable.
@@ -814,6 +892,9 @@ export function maskSecrets<T>(value: T, options: MaskOptions = {}): Masked<T> {
 
 /** Masks the credentials and secret parameters in a URL or any text that holds one (a node's proxy URL). */
 export function maskText(value: string, options: MaskOptions = {}): Masked<string> {
+  if (value.length > MAX_YAML_CHARS) {
+    return { value: UNREADABLE_DOCUMENT, count: 1 };
+  }
   const masker = new Masker(options);
   try {
     const masked = startsFlowDocument(value.trimStart())
