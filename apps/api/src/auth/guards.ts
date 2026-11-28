@@ -12,11 +12,13 @@ import { hasPermission, type Permission, type RouteDef, routes } from '@swellwri
 import { AuditService } from '../audit/audit.service.js';
 import { type AppConfig } from '../config.js';
 import { ROUTE_METADATA } from '../contract-route.js';
-import { StepUpRequiredException } from '../http.js';
-import { CONFIG } from '../tokens.js';
+import { RateLimitedException, StepUpRequiredException } from '../http.js';
+import { ATTEMPT_POLICY, CONFIG } from '../tokens.js';
+import { busyAsRateLimited } from './account-lock.js';
+import { addressBucket } from './cidr.js';
 import { type AuthContext, type AuthedRequest, requestMeta } from './context.js';
 import { readCookie, SESSION_COOKIE } from './cookies.js';
-import { WindowLimiter } from './rate-limit.js';
+import { DEFAULT_LIMITER_KEYS, WindowLimiter } from './rate-limit.js';
 import { SessionService } from './session.service.js';
 import { TokenService } from './token.service.js';
 
@@ -105,6 +107,102 @@ export function classifyAuthorization(
   return { kind: 'bearer', value: match?.[1] ?? '' };
 }
 
+/** One budget of authentication requests per source and window. */
+export interface AttemptBudget {
+  readonly limit: number;
+  readonly windowMs: number;
+}
+
+/**
+ * The budgets of the authentication routes per source (ADR 0049), by group. Each group counts every request of its
+ * routes, right or wrong, before the session is looked up or the body is validated: the cheap gate in front of the
+ * database and the password hasher.
+ */
+export interface AttemptPolicy {
+  /** A process-wide ceiling for setup and invitation acceptance, separately for each of those flows. */
+  readonly ingress: AttemptBudget;
+  readonly login: AttemptBudget;
+  readonly setup: AttemptBudget;
+  readonly invitation: AttemptBudget;
+  /** Second-factor sign-in and enrollment confirmation share one budget. */
+  readonly secondFactor: AttemptBudget;
+  readonly stepUp: AttemptBudget;
+  readonly changePassword: AttemptBudget;
+  readonly enrollment: AttemptBudget;
+}
+
+export const DEFAULT_ATTEMPT_POLICY: AttemptPolicy = {
+  ingress: { limit: 800, windowMs: 10_000 },
+  login: { limit: 30, windowMs: 5 * 60_000 },
+  setup: { limit: 10, windowMs: 15 * 60_000 },
+  invitation: { limit: 10, windowMs: 15 * 60_000 },
+  secondFactor: { limit: 30, windowMs: 5 * 60_000 },
+  stepUp: { limit: 30, windowMs: 5 * 60_000 },
+  changePassword: { limit: 30, windowMs: 5 * 60_000 },
+  enrollment: { limit: 30, windowMs: 5 * 60_000 },
+};
+
+/** Which group an operation counts towards. Operations not listed here are not limited by this guard. */
+type IngressGroup = Exclude<keyof AttemptPolicy, 'stepUp' | 'ingress'>;
+const ATTEMPT_GROUP: Readonly<Record<string, IngressGroup>> = {
+  login: 'login',
+  createOwner: 'setup',
+  acceptInvitation: 'invitation',
+  verifyTotp: 'secondFactor',
+  confirmTotpEnrollment: 'secondFactor',
+  changePassword: 'changePassword',
+  startTotpEnrollment: 'enrollment',
+};
+
+/**
+ * Admits requests to the authentication routes by source: an IPv4 address, or an IPv6 /64 (`addressBucket`, from the
+ * address Express derives through the trusted proxies). Runs after the origin check and before the session lookup, so
+ * a flood is refused with 429 before it costs a query or a password hash. The counters live in memory, per process,
+ * and start over at a restart; the per-account counters in the database are the durable control.
+ */
+@Injectable()
+export class AuthAttemptGuard implements CanActivate {
+  private readonly limiters: Readonly<Record<IngressGroup, WindowLimiter>>;
+  private readonly ingress: WindowLimiter;
+
+  constructor(@Inject(ATTEMPT_POLICY) policy: AttemptPolicy) {
+    const of = (budget: AttemptBudget): WindowLimiter =>
+      new WindowLimiter(
+        budget.limit,
+        budget.windowMs,
+        undefined,
+        DEFAULT_LIMITER_KEYS,
+        'evict-oldest',
+      );
+    this.ingress = new WindowLimiter(policy.ingress.limit, policy.ingress.windowMs);
+    this.limiters = {
+      login: of(policy.login),
+      setup: of(policy.setup),
+      invitation: of(policy.invitation),
+      secondFactor: of(policy.secondFactor),
+      changePassword: of(policy.changePassword),
+      enrollment: of(policy.enrollment),
+    };
+  }
+
+  canActivate(context: ExecutionContext): boolean {
+    const group = ATTEMPT_GROUP[routeOf(context).operationId];
+    if (group === undefined) {
+      return true;
+    }
+    const req = context.switchToHttp().getRequest<AuthedRequest>();
+    const source = addressBucket(req.ip);
+    const limiter = this.limiters[group];
+    if (!limiter.hit(source)) {
+      throw new RateLimitedException(limiter.retryAfterSeconds(source));
+    }
+    if ((group === 'setup' || group === 'invitation') && !this.ingress.hit(group)) {
+      throw new RateLimitedException(this.ingress.retryAfterSeconds(group));
+    }
+    return true;
+  }
+}
+
 /** Whether the caller may do it: a session by the role, a token by what it carries and the role still allows. */
 export function can(auth: AuthContext, permission: Permission): boolean {
   return auth.via === 'token'
@@ -115,10 +213,18 @@ export function can(auth: AuthContext, permission: Permission): boolean {
 /** Resolves the session cookie and enforces the `auth` level the route declares in the contract. */
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private readonly stepUpPerSessionAndSource: WindowLimiter;
+  private readonly stepUpDeniedPerSource: WindowLimiter;
+
   constructor(
     @Inject(SessionService) private readonly sessions: SessionService,
     @Inject(TokenService) private readonly tokens: TokenService,
-  ) {}
+    @Inject(ATTEMPT_POLICY) policy: AttemptPolicy,
+  ) {
+    const { limit, windowMs } = policy.stepUp;
+    this.stepUpPerSessionAndSource = new WindowLimiter(limit, windowMs);
+    this.stepUpDeniedPerSource = new WindowLimiter(limit, windowMs);
+  }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const route = routeOf(context);
@@ -144,8 +250,23 @@ export class AuthGuard implements CanActivate {
       }
     }
     const token = readCookie(req.header('cookie'), SESSION_COOKIE);
-    const auth = token ? await this.sessions.authenticate(token) : null;
+    const auth = token
+      ? await (route.responses[429]
+          ? busyAsRateLimited(() => this.sessions.authenticate(token))
+          : this.sessions.authenticate(token))
+      : null;
     const wanted = route.auth === 'pending' ? 'password_verified' : 'active';
+    if (route.operationId === 'stepUp') {
+      // A denied request or a different session at a shared address must not spend this session's step-up budget.
+      const source = addressBucket(req.ip);
+      const valid = auth?.stage === 'active';
+      const bucket = valid ? `${auth.sessionId}/${source}` : source;
+      const limiter = valid ? this.stepUpPerSessionAndSource : this.stepUpDeniedPerSource;
+      const admitted = valid ? limiter.tryHit(bucket) !== false : limiter.hit(bucket);
+      if (!admitted) {
+        throw new RateLimitedException(limiter.retryAfterSeconds(bucket));
+      }
+    }
     if (auth?.stage !== wanted) {
       throw new UnauthorizedException('Authentication required.');
     }

@@ -442,7 +442,28 @@ describe('resetting credentials', { skip: !databaseUrl }, () => {
     const session = await signInAs(instance, 'person', userSecret);
     const db = instance.isolated.database.client;
     await db.recoveryCode.create({ data: { userId, codeHash: 'a'.repeat(64) } });
-    await db.credential.update({ where: { userId }, data: { failedAttempts: 2 } });
+    await db.credential.update({
+      where: { userId },
+      data: { passwordFailures: 2 },
+    });
+    await db.mfaSourceFailure.create({
+      data: {
+        userId,
+        sourceBucket: '192.0.2.9',
+        failures: 2,
+        windowEndsAt: new Date(Date.now() + 60_000),
+      },
+    });
+    await db.passwordSourceFailure.create({
+      data: {
+        userId,
+        sourceBucket: '192.0.2.9',
+        failures: 2,
+        windowEndsAt: new Date(Date.now() + 60_000),
+      },
+    });
+    const epochBefore = (await db.user.findUniqueOrThrow({ where: { id: userId } }))
+      .credentialEpoch;
 
     const reply = await owner.post(`/users/${userId}/reset-credentials`);
     assert.equal(reply.status, 200);
@@ -459,6 +480,13 @@ describe('resetting credentials', { skip: !databaseUrl }, () => {
     assert.equal(await db.credential.count({ where: { userId } }), 0);
     assert.equal(await db.recoveryCode.count({ where: { userId } }), 0);
     assert.equal(await db.session.count({ where: { userId } }), 0);
+    assert.equal(await db.passwordSourceFailure.count({ where: { userId } }), 0);
+    assert.equal(await db.mfaSourceFailure.count({ where: { userId } }), 0);
+    assert.equal(
+      (await db.user.findUniqueOrThrow({ where: { id: userId } })).credentialEpoch,
+      epochBefore + 1n,
+      'the credential epoch moved on',
+    );
 
     const event = found(
       (await auditEvents(instance)).find((e) => e.action === 'user.credentials.reset'),
@@ -569,26 +597,28 @@ describe('changing your own password', { skip: !databaseUrl }, () => {
     );
   });
 
-  it('counts a wrong current password towards the lockout, and records it', async () => {
+  it('limits a wrong current password to this session, records it, and leaves sign-in alone (ADR 0049)', async () => {
     const client = await signInAs(instance, 'person', secret, NEW_PASSWORD);
     const wrong = (): Promise<{ status: number }> =>
       client.post('/auth/password', {
         currentPassword: 'not it at all',
         newPassword: THEIR_PASSWORD,
       });
-    assert.equal((await wrong()).status, 401);
-    assert.equal((await wrong()).status, 401);
-    assert.equal((await wrong()).status, 401, 'the third failure locks the account');
-    assert.equal((await client.get('/auth/me')).status, 401, 'and ends the sessions');
+    for (let i = 0; i < 5; i += 1) {
+      assert.equal((await wrong()).status, 401);
+    }
+    assert.equal((await wrong()).status, 429, 'this session waits now');
+    assert.equal((await client.get('/auth/me')).status, 200, 'and is not ended');
     const failures = (await auditEvents(instance)).filter(
       (e) => e.action === 'auth.password.changed' && e.outcome === 'failure',
     );
-    assert.equal(failures.length, 3);
+    assert.equal(failures.length, 5);
     assert.deepEqual(failures[0]?.details, { reason: 'invalid_current_password' });
     assert.equal(
       (await instance.client().post('/auth/login', { username: 'person', password: NEW_PASSWORD }))
         .status,
-      429,
+      200,
+      'signing in is not affected',
     );
   });
 });

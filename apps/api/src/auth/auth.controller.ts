@@ -96,7 +96,7 @@ export class AuthController {
 
   @ContractRoute(totpEnrollmentRoute)
   enrollment(@Req() req: AuthedRequest): Promise<TotpEnrollment> {
-    return this.auth.startEnrollment(requireAuth(req));
+    return this.auth.startEnrollment(requireAuth(req), requestMeta(req));
   }
 
   @ContractRoute(totpConfirmRoute)

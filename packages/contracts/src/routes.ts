@@ -238,6 +238,8 @@ export interface ResponseDef {
     /** The media type of the file; `application/octet-stream` when it is left out. */
     readonly contentType?: string;
   };
+  /** Headers a JSON or empty response carries, by name, with what they say. */
+  readonly headers?: Readonly<Record<string, string>>;
 }
 
 export interface RouteDef {
@@ -278,6 +280,22 @@ export interface RouteDef {
 export const defineRoute = <const T extends RouteDef>(route: T): T => route;
 
 const ERROR = { description: 'Error envelope.', schema: ApiErrorSchema } as const;
+
+/**
+ * 429 `rate_limited` of the authentication routes (ADR 0049): too many requests from this source, a password or second
+ * factor that has to wait, or a server too busy hashing passwords. `Retry-After` says how long.
+ */
+const AUTH_RATE_LIMITED = {
+  description:
+    'Too many attempts (`rate_limited`): an address or account limit is active, or the server is busy. A refused request does not extend a cooldown.',
+  schema: ApiErrorSchema,
+  headers: { 'Retry-After': 'Whole seconds to wait before trying again.' },
+} as const;
+const AUTH_TRANSACTION_BUSY = {
+  description: 'The authentication transaction is busy (`rate_limited`). Retry the request.',
+  schema: ApiErrorSchema,
+  headers: { 'Retry-After': 'Whole seconds to wait before trying again.' },
+} as const;
 
 export const healthRoute = defineRoute({
   operationId: 'getHealth',
@@ -360,11 +378,12 @@ export const createOwnerRoute = defineRoute({
   tags: ['setup'],
   summary: 'Create the instance owner',
   description:
-    'Works once, with the setup token the server printed to its log at start. Starts a session that still needs the authenticator to be set up (`/auth/totp/enrollment`).',
+    'Works once, with the setup token the server printed to its log at start. Starts a session that still needs the authenticator to be set up (`/auth/totp/enrollment`). Ten attempts per source (an IPv4 address, an IPv6 /64) in fifteen minutes.',
   auth: 'none',
   request: { body: SetupOwnerRequestSchema },
   responses: {
     200: { description: 'The owner was created.', schema: PendingSessionSchema },
+    429: AUTH_RATE_LIMITED,
   },
 });
 
@@ -375,10 +394,13 @@ export const loginRoute = defineRoute({
   tags: ['auth'],
   summary: 'Sign in with a password',
   description:
-    'The first of two steps. On success a session cookie is set that is not yet usable for anything except finishing the sign-in. Wrong credentials and unknown users answer the same 401; repeated failures lock the account for a while (429).',
+    'The first of two steps. On success a session cookie is set that is not yet usable for anything except finishing the sign-in. Wrong credentials and unknown or disabled users normally answer the same 401. Wrong passwords delay sign-ins without ending sessions (ADR 0049): after five in fifteen minutes from one source that source waits until the window ends; after twenty from all sources the account waits 1, 2, 4 and at most 8 seconds between checks. A password cooldown or a second-factor lock for this account and source returns 429, regardless of the password, and does not count a failure. The route allows thirty requests per source in five minutes, of which up to twenty can reach account lookup, regardless of the username.',
   auth: 'none',
   request: { body: LoginRequestSchema },
-  responses: { 200: { description: 'The password was accepted.', schema: PendingSessionSchema } },
+  responses: {
+    200: { description: 'The password was accepted.', schema: PendingSessionSchema },
+    429: AUTH_RATE_LIMITED,
+  },
 });
 
 export const totpRoute = defineRoute({
@@ -388,10 +410,13 @@ export const totpRoute = defineRoute({
   tags: ['auth'],
   summary: 'Finish signing in with an authenticator code or a recovery code',
   description:
-    'A recovery code works once. The session cookie is replaced by a new one when the sign-in completes.',
+    'A recovery code works once. The session cookie is replaced when sign-in completes. A password-only session can be used only from its original source (an IPv4 address or an IPv6 /64). Wrong codes here and during enrollment confirmation lock the account/source pair at `SW_LOCKOUT_ATTEMPTS` for `SW_LOCKOUT_MINUTES` and end its pending sessions. At twice that many failures across all sources, password-only verification for the account waits until its fixed fifteen-minute window ends. Active sessions and their step-up are unaffected. This route and confirmation share thirty requests per source in five minutes.',
   auth: 'pending',
   request: { body: TotpCodeRequestSchema },
-  responses: { 200: { description: 'Signed in.', schema: SessionInfoSchema } },
+  responses: {
+    200: { description: 'Signed in.', schema: SessionInfoSchema },
+    429: AUTH_RATE_LIMITED,
+  },
 });
 
 export const totpEnrollmentRoute = defineRoute({
@@ -401,10 +426,11 @@ export const totpEnrollmentRoute = defineRoute({
   tags: ['auth'],
   summary: 'Get the authenticator secret',
   description:
-    'Only before the authenticator was confirmed. Repeated calls return the same secret until it is confirmed.',
+    'Only before the authenticator was confirmed (409 after). Repeated calls, also ones at the same moment, return the same secret until it is confirmed. A second-factor lock for this account and source also prevents requesting the secret. Thirty requests per source in five minutes.',
   auth: 'pending',
   responses: {
     200: { description: 'The secret to add to an authenticator.', schema: TotpEnrollmentSchema },
+    429: AUTH_RATE_LIMITED,
   },
 });
 
@@ -414,10 +440,14 @@ export const totpConfirmRoute = defineRoute({
   path: '/auth/totp/confirm',
   tags: ['auth'],
   summary: 'Confirm the authenticator and finish signing in',
-  description: 'Returns the recovery codes. They are shown once and only their hashes are kept.',
+  description:
+    'Takes a code from the authenticator of the secret `/auth/totp/enrollment` returned. Returns the recovery codes. They are shown once and only their hashes are kept. The confirmation, the codes and the new session are made together or not at all. 409 when the enrollment was not started or is already confirmed. A wrong code counts like one at sign-in.',
   auth: 'pending',
   request: { body: TotpCodeRequestSchema },
-  responses: { 200: { description: 'Signed in.', schema: TotpConfirmedSchema } },
+  responses: {
+    200: { description: 'Signed in.', schema: TotpConfirmedSchema },
+    429: AUTH_RATE_LIMITED,
+  },
 });
 
 export const logoutRoute = defineRoute({
@@ -426,10 +456,12 @@ export const logoutRoute = defineRoute({
   path: '/auth/logout',
   tags: ['auth'],
   summary: 'Sign out',
-  description: 'Ends the current session if there is one. Always answers 204.',
+  description:
+    'Ends the current session if there is one. Signing out without a live session is not an error.',
   auth: 'none',
   responses: {
     204: { description: 'The session is gone.', schema: z.undefined(), empty: true },
+    429: AUTH_TRANSACTION_BUSY,
   },
 });
 
@@ -450,10 +482,13 @@ export const stepUpRoute = defineRoute({
   tags: ['auth'],
   summary: 'Prove the second factor again to elevate the session',
   description:
-    'Takes a code from the authenticator or a recovery code. For a short time afterwards the session may call the routes marked `x-sw-step-up`; they answer 403 `step_up_required` before that. A wrong code counts towards the lockout like a wrong code at sign-in. Signing in elevates the session already.',
+    'Takes a code from the authenticator or a recovery code. For a short time afterwards the session may call `x-sw-step-up` routes. Step-up has a separate request budget per session and source, and counts wrong codes within the active session independently of sign-in or enrollment. At `SW_LOCKOUT_ATTEMPTS` the requesting session ends unless already elevated. An already elevated session keeps its deadline, but cannot renew it until the session lock expires.',
   auth: 'session',
   request: { body: TotpCodeRequestSchema },
-  responses: { 200: { description: 'The session is elevated.', schema: ElevationSchema } },
+  responses: {
+    200: { description: 'The session is elevated.', schema: ElevationSchema },
+    429: AUTH_RATE_LIMITED,
+  },
 });
 
 export const acceptInvitationRoute = defineRoute({
@@ -463,10 +498,13 @@ export const acceptInvitationRoute = defineRoute({
   tags: ['auth'],
   summary: 'Choose a password with an invitation token',
   description:
-    'For a new user or one whose credentials were reset. The token is used up. Starts a session that still needs the authenticator to be set up (`/auth/totp/enrollment`). An unknown, used or expired token answers 401.',
+    'For a new user or one whose credentials were reset. The token is used up and every earlier session of the account ends. Starts a session that still needs the authenticator to be set up (`/auth/totp/enrollment`). An unknown, used, replaced or expired token answers 401, also when a reset came in while the password was being hashed. Ten attempts per source in fifteen minutes.',
   auth: 'none',
   request: { body: AcceptInvitationRequestSchema },
-  responses: { 200: { description: 'The password was set.', schema: PendingSessionSchema } },
+  responses: {
+    200: { description: 'The password was set.', schema: PendingSessionSchema },
+    429: AUTH_RATE_LIMITED,
+  },
 });
 
 export const changePasswordRoute = defineRoute({
@@ -476,12 +514,13 @@ export const changePasswordRoute = defineRoute({
   tags: ['auth'],
   summary: 'Change your own password',
   description:
-    'Needs the current password and an elevated session. Ends your other sessions, keeps this one, and revokes every live API token of yours. A wrong current password counts towards the lockout. The new password is 12 to 128 characters after Unicode NFKC normalization. A session that ended, or a password that changed, while the new one was being hashed answers 401.',
+    'Needs the current password and an elevated session. Ends your other sessions, pending ones included, keeps this one, and revokes every live API token of yours. Allows one password change at a time per session and thirty requests per source in five minutes. Five wrong current passwords in fifteen minutes make this session wait (429); they never count towards the sign-in limits. The new password is 12 to 128 characters after Unicode NFKC normalization. A session that ended, or a password that changed, while the new one was being hashed answers 401.',
   auth: 'session',
   stepUp: true,
   request: { body: ChangePasswordRequestSchema },
   responses: {
     204: { description: 'The password was changed.', schema: z.undefined(), empty: true },
+    429: AUTH_RATE_LIMITED,
   },
 });
 
@@ -524,7 +563,10 @@ export const updateUserRoute = defineRoute({
   permission: 'users:write',
   stepUp: true,
   request: { params: UserIdParamsSchema, body: UpdateUserRequestSchema },
-  responses: { 200: { description: 'The user after the change.', schema: UserViewSchema } },
+  responses: {
+    200: { description: 'The user after the change.', schema: UserViewSchema },
+    429: AUTH_TRANSACTION_BUSY,
+  },
 });
 
 export const deleteUserRoute = defineRoute({
@@ -569,6 +611,7 @@ export const resetCredentialsRoute = defineRoute({
   request: { params: UserIdParamsSchema },
   responses: {
     200: { description: 'The user and a new invitation.', schema: UserInvitationSchema },
+    429: AUTH_TRANSACTION_BUSY,
   },
 });
 
@@ -824,10 +867,13 @@ export const revokeMySessionRoute = defineRoute({
   tags: ['sessions'],
   summary: 'End one of your sessions',
   description:
-    'Ends another session of your own account at once. The session you are using cannot be ended here (409): sign out instead. A session that is not yours is reported as not found.',
+    'Ends another session of your own account at once. The session you are using cannot be ended here (409): sign out instead. A session that is not yours is reported as not found. A caller session that ended or changed epoch answers 401.',
   auth: 'session',
   request: { params: SessionIdParamsSchema },
-  responses: { 204: { description: 'The session is gone.', schema: z.undefined(), empty: true } },
+  responses: {
+    204: { description: 'The session is gone.', schema: z.undefined(), empty: true },
+    429: AUTH_TRANSACTION_BUSY,
+  },
 });
 
 export const revokeOtherSessionsRoute = defineRoute({
@@ -836,9 +882,13 @@ export const revokeOtherSessionsRoute = defineRoute({
   path: '/auth/sessions/revoke-others',
   tags: ['sessions'],
   summary: 'End all your other sessions',
-  description: 'Keeps the session you are using and ends every other session of your account.',
+  description:
+    'Keeps the session you are using and ends every other session of your account, pending ones included. A sign-in that is still under way cannot leave a session behind either: the credential epoch moves on even when there is nothing to end, and the change is recorded with its count, also zero.',
   auth: 'session',
-  responses: { 200: { description: 'How many were ended.', schema: SessionsRevokedSchema } },
+  responses: {
+    200: { description: 'How many were ended.', schema: SessionsRevokedSchema },
+    429: AUTH_TRANSACTION_BUSY,
+  },
 });
 
 export const listSessionsRoute = defineRoute({
@@ -861,12 +911,15 @@ export const revokeSessionRoute = defineRoute({
   tags: ['sessions'],
   summary: 'End a session of any user',
   description:
-    'Ends the session at once and records it. The session you are using cannot be ended here (409).',
+    'Ends the session at once and records it. The session you are using cannot be ended here (409). The caller session and its permission and elevation are rechecked in the transaction.',
   auth: 'session',
   permission: 'sessions:revoke',
   stepUp: true,
   request: { params: SessionIdParamsSchema },
-  responses: { 204: { description: 'The session is gone.', schema: z.undefined(), empty: true } },
+  responses: {
+    204: { description: 'The session is gone.', schema: z.undefined(), empty: true },
+    429: AUTH_TRANSACTION_BUSY,
+  },
 });
 
 export const revokeUserSessionsRoute = defineRoute({
@@ -876,12 +929,15 @@ export const revokeUserSessionsRoute = defineRoute({
   tags: ['sessions'],
   summary: 'End every session of a user',
   description:
-    'Ends all sessions of the user at once, for example after a suspected theft of a cookie. Refused with 409 for your own account (use "end all other sessions").',
+    'Ends all sessions of the user at once, including pending ones. It advances the credential epoch even when the count is zero. The caller session and its permission and elevation are rechecked in the transaction. Refused with 409 for your own account (use "end all other sessions").',
   auth: 'session',
   permission: 'sessions:revoke',
   stepUp: true,
   request: { params: UserIdParamsSchema },
-  responses: { 200: { description: 'How many were ended.', schema: SessionsRevokedSchema } },
+  responses: {
+    200: { description: 'How many were ended.', schema: SessionsRevokedSchema },
+    429: AUTH_TRANSACTION_BUSY,
+  },
 });
 
 export const exportAuditRoute = defineRoute({
@@ -947,10 +1003,13 @@ export const revokeMyTokenRoute = defineRoute({
   tags: ['tokens'],
   summary: 'Revoke one of your tokens',
   description:
-    'Stops the token at once. Revoking a token that is already revoked succeeds. A token of someone else is reported as not found.',
+    'Stops the token at once. Revoking a token that is already revoked succeeds. A token of someone else is reported as not found. A caller session that ended or changed epoch answers 401.',
   auth: 'session',
   request: { params: TokenIdParamsSchema },
-  responses: { 204: { description: 'The token is revoked.', schema: z.undefined(), empty: true } },
+  responses: {
+    204: { description: 'The token is revoked.', schema: z.undefined(), empty: true },
+    429: AUTH_TRANSACTION_BUSY,
+  },
 });
 
 export const createTokenRoute = defineRoute({
@@ -965,7 +1024,10 @@ export const createTokenRoute = defineRoute({
   permission: 'tokens:create',
   stepUp: true,
   request: { body: CreateTokenRequestSchema },
-  responses: { 201: { description: 'The token and its record.', schema: CreatedTokenSchema } },
+  responses: {
+    201: { description: 'The token and its record.', schema: CreatedTokenSchema },
+    429: AUTH_TRANSACTION_BUSY,
+  },
 });
 
 export const listTokensRoute = defineRoute({
@@ -987,12 +1049,16 @@ export const revokeTokenRoute = defineRoute({
   path: '/tokens/{id}',
   tags: ['tokens'],
   summary: 'Revoke the token of any user',
-  description: 'Stops the token at once and records it.',
+  description:
+    'Stops the token at once and records it. The caller session and its permission and elevation are rechecked in the transaction.',
   auth: 'session',
   permission: 'tokens:revoke',
   stepUp: true,
   request: { params: TokenIdParamsSchema },
-  responses: { 204: { description: 'The token is revoked.', schema: z.undefined(), empty: true } },
+  responses: {
+    204: { description: 'The token is revoked.', schema: z.undefined(), empty: true },
+    429: AUTH_TRANSACTION_BUSY,
+  },
 });
 
 export const listPluginsRoute = defineRoute({

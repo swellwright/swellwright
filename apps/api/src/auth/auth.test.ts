@@ -67,7 +67,11 @@ describe('first-run setup', { skip: !databaseUrl }, () => {
     });
     assert.equal(user.role, 'owner');
     assert.match(user.credential?.passwordHash ?? '', /^\$argon2id\$/u);
-    assert.ok(!JSON.stringify(user).includes(PASSWORD));
+    // The credential epoch is a bigint, which JSON does not take as it is.
+    const text = JSON.stringify(user, (_key, value: unknown) =>
+      typeof value === 'bigint' ? value.toString() : value,
+    );
+    assert.ok(!text.includes(PASSWORD));
   });
 });
 
@@ -423,65 +427,7 @@ describe('session lifetime', { skip: !databaseUrl }, () => {
   });
 });
 
-describe('lockout', { skip: !databaseUrl }, () => {
-  let instance: Instance;
-  let secret: string;
-  before(async () => {
-    instance = await start();
-    ({ secret } = await createOwner(instance));
-  });
-  after(async () => {
-    await stop(instance);
-  });
-
-  it('locks the account after repeated wrong passwords, even for the right one', async () => {
-    const client = instance.client();
-    const attempt = (password: string): Promise<Reply> =>
-      client.post('/auth/login', { username: 'owner', password });
-    for (let i = 0; i < 3; i += 1) {
-      assert.equal((await attempt('wrong password!!')).status, 401);
-    }
-    const locked = await attempt(PASSWORD);
-    assert.equal(locked.status, 429);
-    assert.equal(errorCode(locked), 'rate_limited');
-    assert.ok(Number(locked.headers.get('retry-after')) > 0);
-
-    // When the lock runs out the account works again, with a fresh count.
-    await instance.isolated.database.client.credential.updateMany({
-      data: { lockedUntil: new Date(Date.now() - 1000) },
-    });
-    assert.equal((await attempt(PASSWORD)).status, 200);
-  });
-
-  it('counts wrong authenticator codes too, and ends the pending session at the limit', async () => {
-    await instance.isolated.database.client.credential.updateMany({
-      data: { failedAttempts: 0, lockedUntil: null },
-    });
-    const client = instance.client();
-    await client.post('/auth/login', { username: 'owner', password: PASSWORD });
-    const wrong = codeFor(secret) === '000000' ? '000001' : '000000';
-    assert.equal((await client.post('/auth/totp', { code: wrong })).status, 401);
-    assert.equal((await client.post('/auth/totp', { code: wrong })).status, 401);
-    assert.equal((await client.post('/auth/totp', { code: wrong })).status, 401);
-    // The third failure locked the account and ended the session that was trying.
-    assert.equal((await client.post('/auth/totp', { code: codeFor(secret) })).status, 401);
-    const login = await instance
-      .client()
-      .post('/auth/login', { username: 'owner', password: PASSWORD });
-    assert.equal(login.status, 429);
-  });
-
-  it('resets the count after a completed sign-in', async () => {
-    await instance.isolated.database.client.credential.updateMany({
-      data: { failedAttempts: 2, lockedUntil: null, totpLastStep: null },
-    });
-    const client = instance.client();
-    await client.post('/auth/login', { username: 'owner', password: PASSWORD });
-    assert.equal((await client.post('/auth/totp', { code: codeFor(secret) })).status, 200);
-    const credential = await instance.isolated.database.client.credential.findFirstOrThrow();
-    assert.equal(credential.failedAttempts, 0);
-  });
-});
+// The limits of wrong passwords and second factors (ADR 0049) are tested in lockout.test.ts.
 
 describe('requests from other origins', { skip: !databaseUrl }, () => {
   let instance: Instance;

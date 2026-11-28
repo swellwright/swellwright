@@ -2,9 +2,11 @@
 export const errors = {
   unreachable: 'The API does not answer. Check that the server is running.',
   stepUpCancelled: 'You did not confirm with a code, so nothing was changed.',
-  rateLimited_one: 'Too many failed attempts. Try again in about {{count}} minute.',
-  rateLimited_other: 'Too many failed attempts. Try again in about {{count}} minutes.',
+  rateLimited_one: 'Too many attempts. Try again in about {{count}} minute.',
+  rateLimited_other: 'Too many attempts. Try again in about {{count}} minutes.',
   rateLimitedShort: 'Too many attempts. Try again in a moment.',
+  rateLimitedSeconds_one: 'Too many attempts. Try again in {{count}} second.',
+  rateLimitedSeconds_other: 'Too many attempts. Try again in {{count}} seconds.',
   forbidden: 'The server refused this request.',
   stepUpRequired: 'Confirm with a code from your authenticator, then try again.',
   notReady: 'The server cannot sign anyone in yet: it has no database.',

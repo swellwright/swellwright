@@ -8,10 +8,11 @@ import {
   TotpConfirmedSchema,
   TotpEnrollmentSchema,
 } from '@swellwright/contracts';
-import { Database } from '@swellwright/db';
+import { Database, type Prisma } from '@swellwright/db';
 import { createIsolatedDatabase, type IsolatedDatabase } from '@swellwright/db/testing';
 
 import { toAuditEvent } from './audit/audit.service.js';
+import { ACCOUNT_LOCK_NAMESPACE, lockAccount } from './auth/account-lock.js';
 import { PasswordHasher } from './auth/password.js';
 import { SecretBox } from './auth/secret-box.js';
 import { base32Decode, base32Encode, generateTotpSecret, timeStep, totpCode } from './auth/totp.js';
@@ -30,6 +31,16 @@ export const CHEAP = { memory: 256, passes: 1, parallelism: 1 } as const;
 /** The vault's Argon2id cost for tests: real parameters would take a quarter of a gibibyte per attempt. */
 export const CHEAP_KDF = { memoryKib: 256, passes: 1, parallelism: 1 } as const;
 export const AUTH_KEY = Buffer.alloc(32, 1).toString('base64');
+/**
+ * Every test request comes from 127.0.0.1: the shared budgets of the second factor and the enrollment are raised so a
+ * file that signs in many times does not run into them. The sign-in, setup and invitation budgets stay as shipped; the
+ * tests of the budgets pass their own policy.
+ */
+export const TEST_ATTEMPT_POLICY = {
+  secondFactor: { limit: 10_000, windowMs: 5 * 60_000 },
+  stepUp: { limit: 10_000, windowMs: 5 * 60_000 },
+  enrollment: { limit: 10_000, windowMs: 5 * 60_000 },
+} as const;
 
 export interface Reply {
   readonly status: number;
@@ -118,6 +129,7 @@ export async function start(
     readinessChecks: [],
     passwordParams: CHEAP,
     vaultKdf: CHEAP_KDF,
+    attemptPolicy: TEST_ATTEMPT_POLICY,
     database: isolated.database,
     // The loop of the run engine polls the database: the tests that are not about it leave it off (those that are turn it on).
     engine: { tuning: { autostart: false } },
@@ -161,6 +173,7 @@ export async function restart(
     readinessChecks: [],
     passwordParams: CHEAP,
     vaultKdf: CHEAP_KDF,
+    attemptPolicy: TEST_ATTEMPT_POLICY,
     database,
     engine: { tuning: { autostart: false } },
     ...extra,
@@ -231,6 +244,81 @@ export async function createUser(
     },
   });
   return { id: created.id, secret: base32Encode(secret) };
+}
+
+/**
+ * Whether the database can run transactions of several connections side by side. The single-connection stand
+ * (`SW_TEST_DATABASE_POOL=1`) cannot: the tests of real overlap are left to the PostgreSQL service of the CI.
+ */
+export const overlapSkip: string | false = !databaseUrl
+  ? 'SW_TEST_DATABASE_URL is not set'
+  : process.env['SW_TEST_DATABASE_POOL'] === '1'
+    ? 'the stand runs one connection'
+    : false;
+
+/**
+ * Holds the account lock of a user (ADR 0049) from a connection of its own while `race` starts, waits until `waiters`
+ * transactions queue behind it, then runs `inside` under the lock (a change that "commits first") and lets go. Returns
+ * what `race` resolved to. A barrier without sleeps: the request is known to be inside its locked section.
+ */
+export async function raceBehindAccountLock<T>(
+  instance: Instance,
+  userId: string,
+  inside: (tx: Prisma.TransactionClient) => Promise<void>,
+  race: () => Promise<T>,
+  waiters = 1,
+): Promise<T> {
+  const barrier = new Database({
+    url: databaseUrl ?? '',
+    schema: instance.isolated.schema,
+    poolSize: 1,
+  });
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let held: (tx: Prisma.TransactionClient) => void = () => undefined;
+  const holding = new Promise<Prisma.TransactionClient>((resolve) => {
+    held = resolve;
+  });
+  try {
+    const holder = barrier.client.$transaction(
+      async (tx) => {
+        await lockAccount(tx, userId);
+        held(tx);
+        await released;
+        await inside(tx);
+      },
+      { maxWait: 10_000, timeout: 60_000 },
+    );
+    // The app's pool may have every slot waiting on the lock: inspect from the holder's separate connection.
+    const holderTx = await Promise.race([holding, holder.then(() => holding)]);
+    const raced = race();
+    void raced.catch(() => undefined);
+    const deadline = Date.now() + 20_000;
+    for (;;) {
+      const rows = await holderTx.$queryRaw<{ n: bigint }[]>`
+        SELECT count(*) AS n FROM pg_locks
+        WHERE locktype = 'advisory' AND NOT granted AND objsubid = 2
+          AND classid::bigint = ${ACCOUNT_LOCK_NAMESPACE}
+          AND objid::bigint = (hashtext(${userId})::bigint & 4294967295)`;
+      if (Number(rows[0]?.n ?? 0) >= waiters) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        release();
+        await holder;
+        throw new Error('the raced request never queued behind the account lock');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    release();
+    await holder;
+    return await raced;
+  } finally {
+    release();
+    await barrier.close();
+  }
 }
 
 /** A value that must be there, or a failed test. Keeps later lines free of `?.` that the type no longer needs. */

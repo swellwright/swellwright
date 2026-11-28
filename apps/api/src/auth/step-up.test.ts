@@ -207,8 +207,8 @@ describe('step-up with a recovery code, and under the lockout', { skip: !databas
   });
 
   it('counts wrong codes towards the lockout, records them, and ends the sessions at the limit', async () => {
+    owner = await signInAs(instance, 'owner', ownerSecret);
     await lapse(instance);
-    await instance.isolated.database.client.credential.updateMany({ data: { failedAttempts: 0 } });
     const valid = [-1, 0, 1].map((n) => codeFor(ownerSecret, n));
     const wrong = ['000000', '000001'].find((c) => !valid.includes(c)) ?? '000002';
     const countFailures = async (): Promise<number> =>
@@ -222,17 +222,15 @@ describe('step-up with a recovery code, and under the lockout', { skip: !databas
       .filter((e) => e.action === 'auth.step_up.failed')
       .at(-1);
     assert.deepEqual(last?.details, { method: 'totp' });
-    assert.equal((await owner.get('/auth/me')).status, 401, 'the third failure locked the account');
+    assert.equal((await owner.get('/auth/me')).status, 401, 'the third failure ended this session');
     const login = await instance
       .client()
       .post('/auth/login', { username: 'owner', password: PASSWORD });
-    assert.equal(login.status, 429);
+    assert.equal(login.status, 200, 'a session-specific step-up lock does not block new sign-in');
   });
 
   it('keeps the password change behind the same elevation', async () => {
-    await instance.isolated.database.client.credential.updateMany({
-      data: { failedAttempts: 0, lockedUntil: null, totpLastStep: null },
-    });
+    await forgetLastStep(instance);
     const client = await signInAs(instance, 'owner', ownerSecret);
     await lapse(instance);
     const body = { currentPassword: PASSWORD, newPassword: NEW_PASSWORD_FOR_TESTS };

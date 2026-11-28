@@ -29,10 +29,11 @@ import { type Database, SessionStage, type User } from '@swellwright/db';
 import { AuditService } from '../audit/audit.service.js';
 import { RateLimitedException, StepUpRequiredException } from '../http.js';
 import { DATABASE } from '../tokens.js';
-import { lockAccount } from './account-lock.js';
-import { ipInRanges } from './cidr.js';
+import { databaseNow, inAccountTransaction } from './account-lock.js';
+import { addressBucket, ipInRanges } from './cidr.js';
 import { type AuthContext, type RequestMeta, requireDatabase } from './context.js';
 import { WindowLimiter } from './rate-limit.js';
+import { SessionService } from './session.service.js';
 import { hashToken } from './tokens.js';
 
 /** The most tokens one listing returns. */
@@ -130,6 +131,7 @@ export class TokenService {
   constructor(
     @Inject(DATABASE) private readonly database: Database | undefined,
     @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(SessionService) private readonly sessions: SessionService,
   ) {}
 
   private get db(): Database['client'] {
@@ -147,9 +149,8 @@ export class TokenService {
     meta: RequestMeta,
   ): Promise<CreatedToken> {
     const token = `${TOKEN_PREFIX}${randomBytes(32).toString('base64url')}`;
-    const { row, now } = await this.db.$transaction(async (tx) => {
-      await lockAccount(tx, auth.user.id);
-      const now = new Date();
+    const { row, now } = await inAccountTransaction(this.db, auth.user.id, async (tx) => {
+      const now = await databaseNow(tx);
       const user = await this.requireLiveCreator(tx, auth, now);
       const missing = input.permissions.filter((p) => !hasPermission(user.role, p));
       if (missing.length > 0) {
@@ -226,14 +227,16 @@ export class TokenService {
     if (!session) {
       throw new UnauthorizedException('Authentication required.');
     }
-    // A credential reset deletes the credential; a session that a sign-in still in flight wrote after the reset
-    // (browser sessions are fenced by the reset only from the next change on) must not turn into a token.
+    // A session of an older credential epoch than its user's (a reset, a password change, disabling came in between,
+    // ADR 0049) is dead, also when the guard still saw it alive; so is one without a confirmed authenticator.
     if (
       session.userId !== auth.user.id ||
       session.stage !== SessionStage.active ||
       session.expiresAt.getTime() <= now.getTime() ||
       session.absoluteExpiresAt.getTime() <= now.getTime() ||
       session.user.status !== 'active' ||
+      session.credentialEpoch !== session.user.credentialEpoch ||
+      session.credentialEpoch !== auth.sessionEpoch ||
       !session.user.credential?.totpConfirmedAt
     ) {
       throw new UnauthorizedException('Authentication required.');
@@ -280,10 +283,15 @@ export class TokenService {
     if (!owner || (scope === 'own' && owner.userId !== auth.user.id)) {
       throw new NotFoundException('There is no such token.');
     }
-    await this.db.$transaction(async (tx) => {
+    await inAccountTransaction(this.db, [auth.user.id, owner.userId], async (tx) => {
       // The same lock as a reset or disabling the account, which revoke every live token of the owner: whichever
       // comes second sees the token revoked and neither moves the time or writes a second record.
-      await lockAccount(tx, owner.userId);
+      const now = await databaseNow(tx);
+      if (scope === 'any') {
+        await this.sessions.requirePrivilegedSession(tx, auth, 'tokens:revoke', now);
+      } else {
+        await this.sessions.requireLiveSession(tx, auth, 'active', now);
+      }
       const row = await tx.apiToken.findUnique({
         where: { id },
         include: { user: { select: { username: true } } },
@@ -294,7 +302,7 @@ export class TokenService {
       if (row.revokedAt) {
         return;
       }
-      await tx.apiToken.update({ where: { id }, data: { revokedAt: new Date() } });
+      await tx.apiToken.update({ where: { id }, data: { revokedAt: now } });
       await this.audit.record(
         {
           action: 'token.revoked',
@@ -367,6 +375,7 @@ export class TokenService {
       user: row.user,
       expiresAt: row.expiresAt,
       elevatedUntil: null,
+      sessionEpoch: null,
       via: 'token',
       tokenId: row.id,
       grants: grantsOf(row, row.user),
@@ -374,8 +383,10 @@ export class TokenService {
   }
 
   private failed(meta: RequestMeta): null {
-    if (!this.failures.hit(meta.ip ?? 'unknown')) {
-      throw new RateLimitedException(Math.ceil(FAILURE_WINDOW_MS / 1000));
+    // Counted by source (an IPv4 address, an IPv6 /64), so rotating through one's own /64 does not reset the count.
+    const source = addressBucket(meta.ip);
+    if (!this.failures.hit(source)) {
+      throw new RateLimitedException(this.failures.retryAfterSeconds(source));
     }
     return null;
   }

@@ -7,6 +7,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { NextFunction, Request, Response } from 'express';
 
 import { AppModule, type AppOptions } from './app.module.js';
+import { ipInRanges } from './auth/cidr.js';
 import { type AppConfig } from './config.js';
 import { API_PREFIX } from './contract-route.js';
 import {
@@ -16,6 +17,37 @@ import {
   ContractResponseInterceptor,
   requestContext,
 } from './http.js';
+
+const PRIVATE_PROXY_PEERS = [
+  '127.0.0.0/8',
+  '10.0.0.0/8',
+  '172.16.0.0/12',
+  '192.168.0.0/16',
+  '169.254.0.0/16',
+  '::1',
+  'fc00::/7',
+  'fe80::/10',
+] as const;
+
+/** Detects a possible missed proxy configuration without trusting or logging the header. */
+function warnOnUntrustedForwarding(): (req: Request, res: Response, next: NextFunction) => void {
+  const logger = new Logger('Config');
+  let warned = false;
+  return (req, _res, next) => {
+    const peer = req.socket.remoteAddress;
+    if (!warned && peer && req.headers['x-forwarded-for'] !== undefined) {
+      // Use Express's actual immediate-peer trust decision, including IPv4-mapped addresses.
+      const trusts = req.app.get('trust proxy fn') as (address: string, index: number) => boolean;
+      if (!trusts(peer, 0) && ipInRanges(peer, PRIVATE_PROXY_PEERS)) {
+        warned = true;
+        logger.warn(
+          'X-Forwarded-For was ignored from an untrusted private peer. Behind a reverse proxy, set SW_TRUSTED_PROXIES to its exact address or exclusive CIDR; otherwise clients share the peer address for rate limits.',
+        );
+      }
+    }
+    next();
+  };
+}
 
 /**
  * What the browser may load for the console: everything from this origin, styles may be inline (React sets
@@ -115,6 +147,9 @@ export async function createApp(
   app.set('trust proxy', config.trustProxy);
   // The request id and the safe headers come first, so that even a body that cannot be read is answered with them.
   app.use(requestContext);
+  if (!config.silent) {
+    app.use(warnOnUntrustedForwarding());
+  }
   app.useBodyParser('json', { limit: '3mb' });
   app.use(bodyParserErrors);
   if (config.webDir) {

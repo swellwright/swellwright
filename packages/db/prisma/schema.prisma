@@ -56,12 +56,17 @@ model User {
   lastLoginAt DateTime?  @map("last_login_at") @db.Timestamptz(3)
   createdAt   DateTime   @default(now()) @map("created_at") @db.Timestamptz(3)
   updatedAt   DateTime   @updatedAt @map("updated_at") @db.Timestamptz(3)
+  /// The credential epoch (ADR 0049). Every browser session carries the epoch it was issued under and stops working
+  /// when this moves on: a reset, disabling, a password change, an accepted invitation, ending every session, a
+  /// separate operations that invalidate all old proofs. On the user because a reset deletes the credential.
+  credentialEpoch BigInt @default(0) @map("credential_epoch")
 
-  credential    Credential?
-  recoveryCodes RecoveryCode[]
-  sessions      Session[]
-  invitation    Invitation?
-  apiTokens     ApiToken[]
+  credential             Credential?
+  recoveryCodes          RecoveryCode[]
+  sessions               Session[]
+  invitation             Invitation?
+  apiTokens              ApiToken[]
+  passwordSourceFailures PasswordSourceFailure[]
 
   @@map("users")
 }
@@ -104,13 +109,46 @@ model Credential {
   totpConfirmedAt   DateTime? @map("totp_confirmed_at") @db.Timestamptz(3)
   /// Time step of the last accepted code; a code is accepted only for a later step (no replay).
   totpLastStep      Int?      @map("totp_last_step")
-  /// Consecutive failures of the password or the second step; reset on a completed sign-in.
-  failedAttempts    Int       @default(0) @map("failed_attempts")
-  lockedUntil       DateTime? @map("locked_until") @db.Timestamptz(3)
+  /// Wrong passwords for this account from every source in the window that ends at `passwordWindowEndsAt` (ADR 0049).
+  /// They slow new sign-ins down; they never end a session.
+  passwordFailures      Int       @default(0) @map("password_failures")
+  passwordWindowEndsAt  DateTime? @map("password_window_ends_at") @db.Timestamptz(3)
+  /// No password is checked for this account before then: the short wait after many wrong ones.
+  passwordRetryAt       DateTime? @map("password_retry_at") @db.Timestamptz(3)
+  pendingFactorFailures Int       @default(0) @map("pending_factor_failures")
+  pendingFactorWindowEndsAt DateTime? @map("pending_factor_window_ends_at") @db.Timestamptz(3)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mfaSourceFailures MfaSourceFailure[]
+
+  @@map("credentials")
+}
+
+/// Wrong second factors for one credential and one address bucket (ADR 0049).
+model MfaSourceFailure {
+  userId       String    @map("user_id") @db.Uuid
+  sourceBucket String    @map("source_bucket") @db.VarChar(64)
+  failures     Int
+  windowEndsAt DateTime? @map("window_ends_at") @db.Timestamptz(3)
+  lockedUntil  DateTime? @map("locked_until") @db.Timestamptz(3)
+
+  credential Credential @relation(fields: [userId], references: [userId], onDelete: Cascade)
+
+  @@id([userId, sourceBucket])
+  @@map("auth_mfa_source_failures")
+}
+
+/// Wrong passwords for one account from one source (an IPv4 address, or an IPv6 /64) in a window (ADR 0049). At most a
+/// few dozen live rows per account; a source past its limit waits until the window ends, the others do not.
+model PasswordSourceFailure {
+  userId       String   @map("user_id") @db.Uuid
+  sourceBucket String   @map("source_bucket") @db.VarChar(64)
+  failures     Int
+  windowEndsAt DateTime @map("window_ends_at") @db.Timestamptz(3)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@map("credentials")
+  @@id([userId, sourceBucket])
+  @@map("auth_password_source_failures")
 }
 
 /// One-time codes for a lost authenticator. Only SHA-256 hashes are stored.
@@ -250,7 +288,14 @@ model Session {
   /// The session counts as freshly verified until then (step-up authentication, ADR 0017). Null: never elevated.
   elevatedUntil     DateTime?    @map("elevated_until") @db.Timestamptz(3)
   ip                String?      @db.VarChar(64)
+  /// Canonical address bucket at issuance; the original address above remains display metadata.
+  sourceBucket      String       @map("source_bucket") @db.VarChar(64)
+  stepUpFailures    Int          @default(0) @map("step_up_failures")
+  stepUpWindowEndsAt DateTime?   @map("step_up_window_ends_at") @db.Timestamptz(3)
+  stepUpLockedUntil DateTime?    @map("step_up_locked_until") @db.Timestamptz(3)
   userAgent         String?      @map("user_agent") @db.VarChar(256)
+  /// The credential epoch of the user when the session was issued (ADR 0049). Unequal to the user's: the session is dead.
+  credentialEpoch   BigInt       @map("credential_epoch")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

@@ -19,6 +19,11 @@ export interface AuthContext {
   readonly expiresAt: Date;
   /** The session counts as freshly verified until then (ADR 0017); null if it never was. */
   readonly elevatedUntil: Date | null;
+  /**
+   * The credential epoch the session was issued under (ADR 0049), as the guard saw it; null for a token. A mutation
+   * re-reads the session under the account lock and requires the same epoch.
+   */
+  readonly sessionEpoch: bigint | null;
   /** A cookie session, or an API token (ADR 0023). A token has no session and no second factor. */
   readonly via: 'session' | 'token';
   readonly tokenId: string | null;

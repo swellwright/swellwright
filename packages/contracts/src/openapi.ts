@@ -330,7 +330,7 @@ import {
 } from './system.js';
 
 /** Version of the API description. Bump it with every contract change (oasdiff checks the rules). */
-export const OPENAPI_INFO_VERSION = '0.32.0';
+export const OPENAPI_INFO_VERSION = '0.33.0';
 
 /** Named schemas that appear under `components.schemas`. Every response schema must be listed here. */
 const COMPONENT_SCHEMAS: readonly z.ZodType[] = [
@@ -823,12 +823,21 @@ function operation(route: RouteDef): Json {
       };
       continue;
     }
-    responses[status] = def.empty
+    const response: Json = def.empty
       ? { description: def.description }
       : {
           description: def.description,
           content: { 'application/json': { schema: schemaRef(def.schema) } },
         };
+    if (def.headers) {
+      response['headers'] = Object.fromEntries(
+        Object.entries(def.headers).map(([name, description]) => [
+          name,
+          { description, schema: { type: 'string' } },
+        ]),
+      );
+    }
+    responses[status] = response;
   }
   responses['default'] = {
     description: 'Error envelope.',

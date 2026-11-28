@@ -11,19 +11,16 @@ import {
 import type { SetupOwnerRequest, SetupStatus } from '@swellwright/contracts';
 import { type Database, UserRole } from '@swellwright/db';
 
-import { AuditService } from '../audit/audit.service.js';
 import { type AppConfig } from '../config.js';
-import { RateLimitedException } from '../http.js';
 import { CONFIG, DATABASE, PASSWORD_HASHER } from '../tokens.js';
-import { AuthService } from './auth.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { databaseNow, lockAccount } from './account-lock.js';
 import { type RequestMeta, requireDatabase } from './context.js';
+import { AuthFailureNotes } from './failure-notes.js';
 import { PasswordHasher } from './password.js';
-import { WindowLimiter } from './rate-limit.js';
-import { type IssuedSession } from './session.service.js';
+import { type IssuedSession, SessionService } from './session.service.js';
 import { hashToken } from './tokens.js';
 
-const SETUP_ATTEMPTS = 10;
-const SETUP_WINDOW_MS = 15 * 60_000;
 /** An arbitrary constant: one transaction at a time may create the first user. */
 const SETUP_LOCK_KEY = 7_761_234;
 
@@ -35,15 +32,15 @@ const SETUP_LOCK_KEY = 7_761_234;
 @Injectable()
 export class SetupService implements OnApplicationBootstrap {
   private readonly logger = new Logger('Setup');
-  private readonly attempts = new WindowLimiter(SETUP_ATTEMPTS, SETUP_WINDOW_MS);
   private token: string | undefined;
 
   constructor(
     @Inject(DATABASE) private readonly database: Database | undefined,
     @Inject(CONFIG) private readonly config: AppConfig,
     @Inject(PASSWORD_HASHER) private readonly hasher: PasswordHasher,
-    @Inject(AuthService) private readonly auth: AuthService,
+    @Inject(SessionService) private readonly sessions: SessionService,
     @Inject(AuditService) private readonly audit: AuditService,
+    @Inject(AuthFailureNotes) private readonly failureNotes: AuthFailureNotes,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -86,9 +83,7 @@ export class SetupService implements OnApplicationBootstrap {
     meta: RequestMeta,
   ): Promise<{ session: IssuedSession }> {
     const db = requireDatabase(this.database).client;
-    if (!this.attempts.hit(meta.ip ?? 'unknown')) {
-      throw new RateLimitedException(Math.ceil(SETUP_WINDOW_MS / 1000));
-    }
+    // The budget per source (ten per quarter hour) is the guard's (`AuthAttemptGuard`), before this runs.
     if (await this.isInitialized()) {
       throw new ConflictException('The instance is already set up.');
     }
@@ -96,8 +91,8 @@ export class SetupService implements OnApplicationBootstrap {
     this.ensureToken();
     if (!this.tokenMatches(request.setupToken)) {
       this.logger.warn('setup refused: wrong token');
-      // At most 10 attempts per address and quarter hour get this far, so the record cannot be flooded.
-      await this.audit.note({
+      // At most 10 attempts per source and quarter hour get this far, under the process-wide budget of failure notes.
+      await this.failureNotes.note({
         action: 'setup.owner.refused',
         outcome: 'failure',
         details: { reason: 'invalid_token' },
@@ -106,7 +101,7 @@ export class SetupService implements OnApplicationBootstrap {
       throw new ForbiddenException('Invalid setup token.');
     }
     const passwordHash = await this.hasher.hash(request.password);
-    const userId = await db.$transaction(async (tx) => {
+    const { userId, session } = await db.$transaction(async (tx) => {
       // Two requests that both passed the check above must not both create an owner.
       // $executeRaw: the function returns void, which a $queryRaw result cannot represent.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${SETUP_LOCK_KEY})`;
@@ -120,6 +115,9 @@ export class SetupService implements OnApplicationBootstrap {
           credential: { create: { passwordHash } },
         },
       });
+      // The owner was made in this transaction, so no other one can hold its lock yet; taken all the same, in the
+      // order every other path uses.
+      await lockAccount(tx, user.id);
       // The owner and the record of the owner stand or fall together.
       await this.audit.record(
         {
@@ -131,11 +129,20 @@ export class SetupService implements OnApplicationBootstrap {
         },
         tx,
       );
-      return user.id;
+      // The owner, the record and the session that goes on to the authenticator stand or fall together.
+      const issued = await this.sessions.createInTransaction(
+        tx,
+        user.id,
+        user.credentialEpoch,
+        'password_verified',
+        meta,
+        await databaseNow(tx),
+      );
+      return { userId: user.id, session: issued };
     });
     this.token = undefined;
     this.logger.log(`instance owner created (user ${userId})`);
-    return { session: await this.auth.startPending(userId, meta) };
+    return { session };
   }
 
   private async isInitialized(): Promise<boolean> {

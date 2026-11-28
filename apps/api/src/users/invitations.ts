@@ -10,8 +10,9 @@ export const INVITATION_TTL_MS = 72 * 3_600_000;
 export type InvitationWriter = Pick<PrismaClient, 'invitation'>;
 
 /**
- * Makes the one open invitation of a user, replacing any earlier one, and removes invitations that ran out.
- * The token is returned once; only its hash is stored.
+ * Makes the one open invitation of a user, replacing any earlier one. The token is returned once; only its hash is
+ * stored. Only this user's row is touched, so the caller's account lock covers everything it writes; expired rows of
+ * other accounts are removed by `pruneExpiredInvitations`, outside it.
  */
 export async function issueInvitation(
   tx: InvitationWriter,
@@ -22,9 +23,17 @@ export async function issueInvitation(
 ): Promise<Invitation> {
   const token = newSessionToken();
   const expiresAt = new Date(now.getTime() + INVITATION_TTL_MS);
-  await tx.invitation.deleteMany({ where: { OR: [{ userId }, { expiresAt: { lt: now } }] } });
+  await tx.invitation.deleteMany({ where: { userId } });
   await tx.invitation.create({
     data: { userId, tokenHash: hashToken(token), purpose, expiresAt, createdById },
   });
   return { token, expiresAt: expiresAt.toISOString(), purpose };
+}
+
+/** Removes the invitations of every account that ran out. Never inside an account's transaction. */
+export async function pruneExpiredInvitations(
+  db: InvitationWriter,
+  now: Date = new Date(),
+): Promise<void> {
+  await db.invitation.deleteMany({ where: { expiresAt: { lt: now } } });
 }

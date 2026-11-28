@@ -131,7 +131,9 @@ export const TotpCodeRequestSchema = z
       .string()
       .min(TOTP_CODE_LENGTH)
       .max(32)
-      .describe('A 6-digit authenticator code, or one recovery code (only on sign-in).'),
+      .describe(
+        'A 6-digit authenticator code, or one recovery code at sign-in and step-up. Confirming the authenticator takes an authenticator code only.',
+      ),
   })
   .meta({ id: 'TotpCodeRequest' });
 export type TotpCodeRequest = z.infer<typeof TotpCodeRequestSchema>;

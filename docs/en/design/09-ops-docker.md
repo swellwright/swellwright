@@ -17,7 +17,7 @@ The image is built by the `Dockerfile` at the repository root with `pnpm install
 ## 2. `docker-compose.yml`
 The file is `deploy/compose/docker-compose.yml`; the secrets go into a `.env` next to it (`.env.example` explains each), then `docker compose up -d --build` (ADR 0019). What it sets:
 - `migrate` runs `prisma migrate deploy` and exits; `swellwright` starts after it has finished successfully and after Postgres and Valkey are healthy.
-- `swellwright`: non-root user, `read_only: true` with a memory `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, `init`, published on `127.0.0.1:3100` (`SW_LISTEN`), `SW_TRUSTED_PROXIES=uniquelocal` because the proxy reaches it from the Docker bridge.
+- `swellwright`: non-root user, `read_only: true` with a memory `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, `init`, published on `127.0.0.1:3100` (`SW_LISTEN`). Compose requires a nonempty `SW_TRUSTED_PROXIES`. Use the reverse proxy's address as seen by the API or an exclusive proxy CIDR, not the private ranges or the plugin network. `false` is for direct access: behind a proxy it makes clients share the peer address for audits, limits and token allowlists. A forwarded header from an untrusted private peer produces a one-time warning and is still ignored.
 - Networks: `backend` is `internal: true` (Postgres, Valkey, `migrate`, the server); `frontend` carries the published port and the outbound traffic of the server.
 - Required secrets (`POSTGRES_PASSWORD`, `SW_AUTH_KEY`) are checked by Compose; a missing one stops the start with a message.
 - Planned and not in the file yet: the worker, Docker secrets for the database password, resource limits.

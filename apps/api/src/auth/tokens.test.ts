@@ -629,6 +629,7 @@ describe('API tokens and what happens to their owner', { skip: !databaseUrl }, (
         user: session.user,
         expiresAt: session.expiresAt,
         elevatedUntil: session.elevatedUntil,
+        sessionEpoch: session.credentialEpoch,
         via: 'session' as const,
         tokenId: null,
         grants: null,
@@ -664,8 +665,8 @@ describe('API tokens and what happens to their owner', { skip: !databaseUrl }, (
     assert.equal(await db().apiToken.count({ where: { userId: personId, name: 'late' } }), 0);
     assert.equal((await again.get('/auth/me')).status, 200);
 
-    // A sign-in that was still under way when the credentials were reset can write a session after the reset. It
-    // gives no token: the account has no credential any more.
+    // A session of the credentials before a reset (its epoch is the old one, ADR 0049) gives no token, even if a row of
+    // it were still there.
     await elevate(instance);
     assert.equal((await owner.post(`/users/${personId}/reset-credentials`)).status, 200);
     const escaped = await db().session.create({
@@ -676,6 +677,8 @@ describe('API tokens and what happens to their owner', { skip: !databaseUrl }, (
         expiresAt: new Date(Date.now() + 600_000),
         absoluteExpiresAt: new Date(Date.now() + 3_600_000),
         elevatedUntil: new Date(Date.now() + 600_000),
+        credentialEpoch: live.sessionEpoch,
+        sourceBucket: 'unknown',
       },
       include: { user: true },
     });
@@ -686,6 +689,7 @@ describe('API tokens and what happens to their owner', { skip: !databaseUrl }, (
           sessionId: escaped.id,
           user: escaped.user,
           elevatedUntil: escaped.elevatedUntil,
+          sessionEpoch: escaped.credentialEpoch,
         },
         input,
         meta,

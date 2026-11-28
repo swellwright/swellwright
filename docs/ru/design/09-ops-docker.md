@@ -15,7 +15,7 @@
 ## 2. `docker-compose.yml`
 Файл лежит в `deploy/compose/docker-compose.yml`; секреты пишутся в `.env` рядом (каждый объяснён в `.env.example`), затем `docker compose up -d --build` (ADR 0019). Что он задаёт:
 - `migrate` выполняет `prisma migrate deploy` и завершается; `swellwright` стартует после его успешного завершения и после готовности Postgres и Valkey.
-- `swellwright`: непривилегированный пользователь, `read_only: true` с `/tmp` в памяти, `cap_drop: [ALL]`, `no-new-privileges`, `init`, публикация на `127.0.0.1:3100` (`SW_LISTEN`), `SW_TRUSTED_PROXIES=uniquelocal`, потому что прокси приходит к нему из сети Docker.
+- `swellwright`: непривилегированный пользователь, `read_only: true` с `/tmp` в памяти, `cap_drop: [ALL]`, `no-new-privileges`, `init`, публикация на `127.0.0.1:3100` (`SW_LISTEN`). Compose требует непустое `SW_TRUSTED_PROXIES`. Указывайте адрес прокси, видимый API, или выделенный CIDR доверенных прокси, а не все частные сети или сеть плагинов. `false` подходит только для прямого доступа: за прокси у всех клиентов будет общий адрес для аудита, лимитов и списков разрешённых адресов токенов. При пересланном заголовке от недоверенного частного адреса API один раз предупреждает и игнорирует заголовок.
 - Сети: `backend` с `internal: true` (Postgres, Valkey, `migrate`, сервер); `frontend` несёт опубликованный порт и исходящий трафик сервера.
 - Обязательные секреты (`POSTGRES_PASSWORD`, `SW_AUTH_KEY`) проверяет Compose; без них запуск останавливается с сообщением.
 - Планируется и пока не в файле: worker, Docker secrets для пароля базы, лимиты ресурсов.

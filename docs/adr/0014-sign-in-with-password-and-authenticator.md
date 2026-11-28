@@ -21,3 +21,7 @@ The Phase 1 acceptance criterion starts with "login with TOTP". Three questions 
 - The owner can sign in while the vault is sealed, and the database copy is still useless without the key. The price is a second key to look after: it lives with the deployment's secrets, and a lost `SW_AUTH_KEY` means every user enrolls the authenticator again.
 - Known gaps, to be closed in later slices: no password change or reset, no user management, so an owner who loses both password and authenticator has no supported way back in yet (a command-line reset is planned); no WebAuthn, OIDC or IP restrictions. (Step-up authentication came with ADR 0017.)
 - Node 24.7 or later is required for `crypto.argon2`; the project already pins Node 26 (ADR 0009).
+
+## Note of 2026-11-26: the lockout is split (ADR 0049)
+
+Changed by ADR 0049. Wrong passwords delay new sign-ins without ending sessions. Wrong second factors at sign-in or enrollment can lock an account/source pair and end its pending sessions (`SW_LOCKOUT_ATTEMPTS`, `SW_LOCKOUT_MINUTES`). A separate account-wide ceiling limits pending factor failures across sources. An active session has its own step-up budget and keeps existing elevation. Every session carries the user's credential epoch, and sign-in is serialized per account in PostgreSQL. An IPv6 `/64` counts as one source and the hasher queue is bounded.

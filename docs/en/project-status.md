@@ -1,7 +1,7 @@
 # Project status
 
 Baseline: `phase-3-complete`, commit `19cdee2`, 2026-11-22. This is a pre-alpha
-implementation, not a production release. API description version: 0.32.0.
+implementation, not a production release. API description version: 0.33.0.
 
 ## Implemented
 
@@ -102,6 +102,27 @@ Every intermittent CI failure had a cause in the code or in the test; none was r
   The OpenAPI document marks fields with a default as optional in requests, declares the
   sidecar gateway's token and the JSON type of a snapshot export, and a script run can
   name the revision the person confirmed (`expectedScriptRevision`). Still open from the
-  same review: a separate password throttle and second-factor lockout and a credential
-  epoch for browser sessions (a later change), and the one-time rotation of API tokens
-  issued before this change (an owner decision).
+  same review: the one-time rotation of API tokens issued before this change (an owner
+  decision).
+- **Sign-in: soft lockout and the credential epoch (review of 2026-11-25, second part;
+  ADR 0049).** Wrong passwords no longer lock an account or end its sessions: five from
+  one source (an IPv4 address, an IPv6 /64) in fifteen minutes make that source wait, and
+  twenty from all sources make the account wait 1, 2, 4 and at most 8 seconds between
+   checks. A password-only session is bound to its source. Wrong second factors at
+   sign-in or enrollment lock the account/source pair and end its pending sessions at
+   `SW_LOCKOUT_ATTEMPTS`. Twice that many failures across sources pause new factor checks
+   for the account until its fixed 15-minute window ends. Already authenticated sessions
+   have independent step-up budgets and keep any current elevation. Every browser session
+   carries the user's credential epoch. A reset, disabling, a password change, an accepted
+   invitation or bulk revocation advances it so an earlier sign-in cannot leave a session
+   behind. Sign-in, the second step, enrollment, invitations,
+   setup and session revocation take a per-account PostgreSQL lock and re-read what they
+   depend on. Most per-source request budgets run before session lookup; step-up uses a
+   separate budget after lookup so anonymous requests do not spend a signed-in person's
+   allowance. A full ingress address map evicts its oldest window; only setup and
+   invitation acceptance have shared budgets across sources. Known and unknown logins
+   use the same source admission budget before lookup. Argon2 reserves work and queue capacity for authenticated
+   and known-account requests. Audit notes for unknown attempts cannot spend the known-account
+   budget; summaries report suppressed counts and the log records when account-wide password
+   throttling starts. Compose requires the reverse proxy's peer address or exclusive CIDR,
+   or explicit `false` for direct access. The migration ends all browser sessions once.

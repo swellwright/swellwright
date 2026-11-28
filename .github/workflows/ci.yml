@@ -240,6 +240,8 @@ jobs:
     env:
       # Every `docker compose` command below uses this file, and reads the .env next to it.
       COMPOSE_FILE: deploy/compose/docker-compose.yml
+      # The smoke test connects directly to the published port, without a reverse proxy.
+      SW_TRUSTED_PROXIES: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

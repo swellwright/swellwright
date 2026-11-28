@@ -5,7 +5,7 @@ Docker Compose files. The decisions are in [ADR 0019](../../docs/adr/0019-contai
 | File | What it is |
 | --- | --- |
 | `docker-compose.yml` | Swellwright with PostgreSQL and Valkey, built from this checkout. For running it. |
-| `.env.example` | The settings of that stack. Copy it to `.env` and fill in three secrets. |
+| `.env.example` | The settings of that stack. Copy it to `.env`, fill in three secrets, and set proxy trust explicitly. |
 | `docker-compose.dev.yml` | Only PostgreSQL and Valkey on `127.0.0.1`, for developing on the host. Not a deployment. |
 
 ## Run it
@@ -15,11 +15,13 @@ You need Docker with Compose v2 and a reverse proxy with TLS in front (see `depl
 ```sh
 cd deploy/compose
 cp .env.example .env
-# fill in POSTGRES_PASSWORD, SW_AUTH_KEY and SW_SETUP_TOKEN (the commands are in the file)
+# fill in POSTGRES_PASSWORD, SW_AUTH_KEY and SW_SETUP_TOKEN, then set SW_TRUSTED_PROXIES
 docker compose up -d --build
 ```
 
 The first build downloads and compiles everything and takes a few minutes. When it is up, the console is on `http://127.0.0.1:3100`; put the proxy in front of it and open it under your own name. The first visitor enters `SW_SETUP_TOKEN` and creates the owner; **remove the token from `.env` afterwards** (`docker compose up -d` applies it).
+
+**Compose refuses to start with missing or empty `SW_TRUSTED_PROXIES`.** Behind a proxy, set it to the proxy's exact peer address as seen by the API, or an exclusive proxy CIDR. A proxy running on the Docker host may appear as the bridge gateway rather than loopback. Make the proxy overwrite the forwarded header (see `deploy/nginx`). Do not trust `uniquelocal`, a whole shared bridge, or the plugin network: sidecars reach the same API port. Set `false` only for direct access, such as the CI smoke stack. Behind a proxy with trust disabled, all clients share its source limits: five wrong passwords for the same account can delay a legitimate login even when every request carries a different forwarded address. The API warns once if it ignores `X-Forwarded-For` from a private peer.
 
 What starts: `postgres`, `valkey`, then `migrate` (applies the database migrations and exits), then the server. The server container has a read-only file system, no capabilities and runs as a normal user; the database and the cache sit on a network nothing outside can reach; the only published port is the server's, on the loopback address.
 

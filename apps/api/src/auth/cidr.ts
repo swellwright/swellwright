@@ -86,6 +86,30 @@ export function parseAddress(raw: string | undefined): ParsedAddress | null {
   return mapped === null ? { address: bare, family: 6 } : { address: mapped, family: 4 };
 }
 
+/**
+ * The source an address counts as for the limits of sign-in attempts (ADR 0049): an IPv4 address on its own (in any
+ * spelling, also mapped into IPv6), an IPv6 address by its /64, which one host usually holds whole and can rotate
+ * through freely. A missing or unreadable address is the single source `unknown`. The full address still goes into the
+ * session and the audit record; this is only the key of a counter.
+ */
+export function addressBucket(raw: string | undefined): string {
+  const parsed = parseAddress(raw);
+  if (!parsed) {
+    return 'unknown';
+  }
+  if (parsed.family === 4) {
+    return parsed.address;
+  }
+  const words = expandIpv6(parsed.address);
+  if (!words) {
+    return 'unknown';
+  }
+  return `${words
+    .slice(0, 4)
+    .map((word) => word.toString(16))
+    .join(':')}::/64`;
+}
+
 /** A range of one family. A mapped IPv6 range of /96 or narrower is the IPv4 range it covers. */
 interface ParsedRange {
   readonly base: string;
