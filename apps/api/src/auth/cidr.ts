@@ -86,6 +86,24 @@ export function parseAddress(raw: string | undefined): ParsedAddress | null {
   return mapped === null ? { address: bare, family: 6 } : { address: mapped, family: 4 };
 }
 
+/** Group IPv6 sources without recording their interface identifier. IPv4 uses one address. */
+export function auditAddressPrefix(raw: string | undefined): string {
+  const parsed = parseAddress(raw);
+  if (parsed === null) {
+    return 'unknown';
+  }
+  if (parsed.family === 4) {
+    return parsed.address;
+  }
+  const words = expandIpv6(parsed.address);
+  return words === null
+    ? 'unknown'
+    : `${words
+        .slice(0, 4)
+        .map((word) => word.toString(16))
+        .join(':')}::/64`;
+}
+
 /** A range of one family. A mapped IPv6 range of /96 or narrower is the IPv4 range it covers. */
 interface ParsedRange {
   readonly base: string;

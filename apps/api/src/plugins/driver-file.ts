@@ -1,7 +1,7 @@
-import { readFile } from 'node:fs/promises';
-
 import { DRIVER_LIMITS, type Driver, parseDriver } from '@swellwright/plugin-api';
 import { parse } from 'yaml';
+
+import { readBoundedFile } from './files.js';
 
 /**
  * Reads the driver file of a plugin (ADR 0030). The YAML is parsed as strictly as the library allows: the 1.2 core
@@ -9,21 +9,18 @@ import { parse } from 'yaml';
  * What comes out is plain data, checked by the driver schema.
  */
 export async function readDriver(
+  root: string,
   path: string,
   label: string,
 ): Promise<{ driver: Driver | undefined; problems: string[] }> {
-  let text: string;
-  try {
-    text = await readFile(path, 'utf8');
-  } catch {
+  const read = await readBoundedFile(root, path, DRIVER_LIMITS.fileBytes);
+  if (read.kind === 'missing') {
     return { driver: undefined, problems: [`${label} cannot be read`] };
   }
-  if (Buffer.byteLength(text) > DRIVER_LIMITS.fileBytes) {
-    return {
-      driver: undefined,
-      problems: [`${label} is larger than ${String(DRIVER_LIMITS.fileBytes / 1024)} KiB`],
-    };
+  if (read.kind === 'refused') {
+    return { driver: undefined, problems: [`${label} ${read.reason}`] };
   }
+  const text = read.data.toString('utf8');
   let value: unknown;
   try {
     value = parse(text, {

@@ -41,12 +41,94 @@ const REQUEST_TIMEOUT_MS = 15_000;
 
 const METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
 
-/** The parts of an IPv4 address, or undefined if it is not one. */
-function octets(address: string): number[] | undefined {
-  if (!isIPv4(address)) {
+/** True for an IPv4 address, as four numbers, that a plugin may be sent to. */
+function isPublicV4(a: number, b: number, c: number): boolean {
+  return !(
+    a === 0 ||
+    a === 10 ||
+    a === 127 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 0 && (c === 0 || c === 2)) ||
+    (a === 192 && b === 88 && c === 99) || // the old 6to4 relays
+    (a === 192 && b === 168) ||
+    (a === 198 && (b === 18 || b === 19)) ||
+    (a === 198 && b === 51 && c === 100) ||
+    (a === 203 && b === 0 && c === 113) ||
+    a >= 224
+  );
+}
+
+/** The eight 16-bit groups of an IPv6 literal (a trailing dotted IPv4 included), or undefined. */
+function groupsOf(address: string): number[] | undefined {
+  let text = address;
+  const dotted = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/u.exec(text);
+  if (dotted !== null) {
+    if (!isIPv4(dotted[0])) {
+      return undefined;
+    }
+    const [a, b, c, d] = dotted.slice(1).map(Number);
+    text = `${text.slice(0, dotted.index)}${(((a ?? 0) << 8) | (b ?? 0)).toString(16)}:${(((c ?? 0) << 8) | (d ?? 0)).toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) {
     return undefined;
   }
-  return address.split('.').map(Number);
+  const parse = (part: string): number[] | undefined => {
+    if (part === '') {
+      return [];
+    }
+    const out: number[] = [];
+    for (const group of part.split(':')) {
+      if (!/^[0-9a-f]{1,4}$/u.test(group)) {
+        return undefined;
+      }
+      out.push(Number.parseInt(group, 16));
+    }
+    return out;
+  };
+  const head = parse(halves[0] ?? '');
+  const tail = halves.length === 2 ? parse(halves[1] ?? '') : [];
+  if (head === undefined || tail === undefined) {
+    return undefined;
+  }
+  if (halves.length === 1) {
+    return head.length === 8 ? head : undefined;
+  }
+  const missing = 8 - head.length - tail.length;
+  return missing < 1 ? undefined : [...head, ...Array<number>(missing).fill(0), ...tail];
+}
+
+/**
+ * True for an IPv6 address a plugin may be sent to. Only global unicast (2000::/3) qualifies, without the ranges in
+ * it that are not an ordinary destination: documentation, the IETF protocol block (Teredo, benchmarking, ORCHID and
+ * the like), 6to4. An address that carries an IPv4 one (mapped, compatible, or translated by NAT64) is judged by the
+ * IPv4 address it carries. Every other form is refused, so an unusual spelling or a special prefix cannot lead a
+ * plugin to the network the core sits in.
+ */
+function isPublicV6(groups: readonly number[]): boolean {
+  const g = (index: number): number => groups[index] ?? 0;
+  const v4 = (): boolean => isPublicV4(g(6) >> 8, g(6) & 0xff, g(7) >> 8);
+  const zeroUpTo = (end: number): boolean => groups.slice(0, end).every((x) => x === 0);
+  // ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible, deprecated): the IPv4 address decides.
+  if (zeroUpTo(5) && (g(5) === 0xffff || g(5) === 0)) {
+    return !(g(5) === 0 && g(6) === 0) && v4();
+  }
+  // 64:ff9b::/96, the NAT64 prefix every IPv6-only network uses to reach IPv4: the IPv4 address decides.
+  if (g(0) === 0x64 && g(1) === 0xff9b && g(2) === 0 && g(3) === 0 && g(4) === 0 && g(5) === 0) {
+    return v4();
+  }
+  if ((g(0) & 0xe000) !== 0x2000) {
+    // Not global unicast: unique local, link local, site local, multicast, discard, local NAT64, reserved.
+    return false;
+  }
+  return !(
+    (g(0) === 0x2001 && g(1) < 0x0200) || // 2001::/23, IETF protocol assignments (Teredo is 2001::/32)
+    (g(0) === 0x2001 && g(1) === 0x0db8) || // 2001:db8::/32, documentation
+    g(0) === 0x2002 || // 2002::/16, 6to4: an IPv4 address behind a relay
+    (g(0) & 0xfff0) === 0x3ff0 // 3ff0::/12, documentation (3fff::/20) and what is left of the old 6bone block
+  );
 }
 
 /**
@@ -55,41 +137,16 @@ function octets(address: string): number[] | undefined {
  */
 export function isPublicAddress(address: string): boolean {
   const lower = address.toLowerCase();
-  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/u.exec(lower);
-  if (mapped?.[1] !== undefined) {
-    return isPublicAddress(mapped[1]);
+  if (isIPv4(lower)) {
+    const [a = 0, b = 0, c = 0] = lower.split('.').map(Number);
+    return isPublicV4(a, b, c);
   }
-  const v4 = octets(lower);
-  if (v4 !== undefined) {
-    const [a = 0, b = 0, c = 0] = v4;
-    return !(
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 0 && (c === 0 || c === 2)) ||
-      (a === 192 && b === 168) ||
-      (a === 198 && (b === 18 || b === 19)) ||
-      (a === 198 && b === 51 && c === 100) ||
-      (a === 203 && b === 0 && c === 113) ||
-      a >= 224
-    );
-  }
-  if (!isIPv6(lower)) {
+  // A zone (`fe80::1%eth0`) is not part of an address a plugin is sent to.
+  if (!isIPv6(lower) || lower.includes('%')) {
     return false;
   }
-  const head = lower.split(':')[0] ?? '';
-  const first = head === '' ? 0 : Number.parseInt(head, 16);
-  return !(
-    lower === '::' ||
-    lower === '::1' ||
-    (first & 0xfe00) === 0xfc00 || // fc00::/7, unique local
-    (first & 0xffc0) === 0xfe80 || // fe80::/10, link local
-    (first & 0xff00) === 0xff00 || // ff00::/8, multicast
-    lower.startsWith('2001:db8:') // documentation
-  );
+  const groups = groupsOf(lower);
+  return groups !== undefined && isPublicV6(groups);
 }
 
 export interface ResolvedAddress {
@@ -107,6 +164,8 @@ export interface TransportRequest {
   readonly body: string | undefined;
   /** The address to connect to, already checked. The name is only for the certificate and the Host header. */
   readonly address: ResolvedAddress;
+  /** Ends the request when the call it belongs to is over. */
+  readonly signal?: AbortSignal;
 }
 
 export type Transport = (request: TransportRequest) => Promise<NetworkResponse>;
@@ -128,6 +187,10 @@ async function systemResolve(host: string): Promise<readonly ResolvedAddress[]> 
 function realTransport(plain: boolean): Transport {
   return (r) =>
     new Promise<NetworkResponse>((resolve, reject) => {
+      if (r.signal?.aborted === true) {
+        reject(new Error('The call this request belongs to is over.'));
+        return;
+      }
       const send = plain ? httpRequest : httpsRequest;
       const request = send(
         {
@@ -175,6 +238,18 @@ function realTransport(plain: boolean): Transport {
           response.on('error', reject);
         },
       );
+      // A deadline for the whole exchange, not only for a silence: an answer that trickles in is ended too.
+      const deadline = setTimeout(() => {
+        request.destroy(new Error('The request timed out.'));
+      }, REQUEST_TIMEOUT_MS);
+      const abort = (): void => {
+        request.destroy(new Error('The call this request belongs to is over.'));
+      };
+      r.signal?.addEventListener('abort', abort, { once: true });
+      request.on('close', () => {
+        clearTimeout(deadline);
+        r.signal?.removeEventListener('abort', abort);
+      });
       request.on('timeout', () => request.destroy(new Error('The request timed out.')));
       request.on('error', reject);
       request.end(r.body);
@@ -207,8 +282,12 @@ export class PluginNetwork {
     allowed: readonly string[],
     url: string,
     init: PluginFetchInit = {},
+    signal?: AbortSignal,
   ): Promise<NetworkResponse> {
     const target = this.check(allowed, url, init);
+    if (signal?.aborted === true) {
+      throw new Error('The call this request belongs to is over.');
+    }
     const active = this.inFlight.get(pluginId) ?? 0;
     if (active >= PLUGIN_LIMITS.concurrentFetches) {
       throw new NetworkRefused('Too many requests at once.', 'limit');
@@ -226,7 +305,9 @@ export class PluginNetwork {
           'address',
         );
       }
-      return await this.transport({ ...target, address });
+      // The name was being resolved while the call could have ended: nothing is sent for a call that is over.
+      signal?.throwIfAborted();
+      return await this.transport({ ...target, address, ...(signal ? { signal } : {}) });
     } finally {
       this.inFlight.set(pluginId, (this.inFlight.get(pluginId) ?? 1) - 1);
     }

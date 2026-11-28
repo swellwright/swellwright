@@ -25,6 +25,28 @@ export default {
     storedKeys: (params, context) => context.storage.keys(),
     forget: async (params, context) => { await context.storage.delete(params.key); return context.storage.keys(); },
     pid: () => process.pid,
+    keep: (params, context) => { globalThis.kept = context; return 'kept'; },
+    later: async (params) => {
+      try { return await globalThis.kept.secret(params.field); } catch (error) { return 'refused: ' + error.message; }
+    },
+    printAndDie: async (params, context) => {
+      const value = await context.secret(params.field);
+      console.log('diagnostics: ' + value);
+      console.error('diagnostics: ' + value);
+      process.exit(3);
+    },
+    flood: async (params, context) => {
+      let refused = '';
+      for (let i = 0; i < params.times; i++) {
+        try { await context.storage.keys(); } catch (error) { refused = error.message; }
+      }
+      return refused;
+    },
+    burst: (params, context) => Promise.all(
+      Array.from({ length: params.times }, () => context.storage.keys())
+    ),
+    rogue: (params) => { process.send(params.message); return new Promise(() => {}); },
+    slow: () => new Promise((resolve) => setTimeout(() => resolve('slow'), 300)),
     throws: () => { throw new Error('nope'); },
     loop: () => { for (;;) { /* never returns */ } },
     hog: () => { const keep = []; for (;;) keep.push({ n: keep.length, text: 'x'.repeat(100) }); },
@@ -93,18 +115,21 @@ export function servicesFor(options: {
   readonly network?: readonly string[];
   readonly settings?: ConfigValues;
   readonly secrets?: Readonly<Record<string, string>>;
+  /** Fields whose secret the vault refuses as expired. */
+  readonly expired?: readonly string[];
   readonly onRefused?: (host: string, reason: string) => void;
 }): CoreServices {
   const store = new Map<string, unknown>();
   return {
     settings: () => Promise.resolve(options.settings ?? {}),
-    fetch: async (url, init) => {
+    fetch: async (url, init, signal) => {
       try {
         return await options.gateway.fetch(
           'dns-example',
           options.network ?? ['api.example.com:443'],
           url,
           init,
+          signal,
         );
       } catch (error) {
         if (error instanceof NetworkRefused) {
@@ -114,6 +139,14 @@ export function servicesFor(options: {
       }
     },
     secret: (field) => {
+      if (options.expired?.includes(field) === true) {
+        // What the broker raises for an expired secret: the text, and the stable code beside it.
+        return Promise.reject(
+          Object.assign(new Error(`secret_expired: the secret for ${field} has expired`), {
+            code: 'secret_expired',
+          }),
+        );
+      }
       const value = options.secrets?.[field];
       return value === undefined
         ? Promise.reject(new Error(`no secret is chosen for ${field}`))

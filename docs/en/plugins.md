@@ -54,12 +54,17 @@ Permissions are requested explicitly and shown when a plugin is enabled. A plugi
 
 ## Trust levels and isolation
 
-- **builtin / official:** shipped in the image or monorepo, signed; run in a worker process under restrictions (Node permission model where available); network only through a core proxy limited to the hosts in the manifest.
-- **community:** run only as **container sidecars** (OCI image + manifest) or as declarative drivers. A sidecar is a compose service on an internal network with a network policy, resource limits and no access to the database or other secrets; Swellwright **does not get `docker.sock`**: enabling a plugin generates a compose fragment that the operator applies.
+- **Official:** can run in a separate process under Node permissions; outbound requests go through the core and are limited to approved hosts. Official signatures are not verified yet.
+- **Community:** run only as **container sidecars** (OCI image and manifest) or declarative drivers. A sidecar has a dedicated internal network shared only with the core. It cannot access the database directly; the gateway handles approved outbound requests and bound secrets. Swellwright does not use `docker.sock`: the operator exports and applies the Compose fragment after enabling the plugin.
 - **local:** a directory owned by the operator, at the operator's risk.
-- Secrets are handed to a plugin only for the duration of a call and only of the declared kind. No `postinstall` scripts, pinned versions, hash and signature verification, an SBOM per plugin, manual approval of updates (permission diff first), every call audited, immediate disable.
+- **Implemented:** SHA-256 approvals, blocked install scripts (including `postinstall`), manual approval of updates, and audit events for lifecycle, refusals and secret use. A sidecar must be enabled before export; export a fresh fragment after reapproval. Binding secrets and exporting a fragment that authorizes secrets require `vault:reveal`.
+- **Planned:** signature verification, a plugin SBOM, and a complete audit trail of plugin calls.
 
 In-process isolation in Node is not a hard boundary and is never relied on for untrusted code.
+
+The sidecar gateway audits every successful secret delivery, up to its rate limit of 120 requests per minute per plugin and API instance. Process plugins and declarative drivers instead use best-effort audit notes, deduplicated per plugin and secret for ten minutes. Before upgrading or changing a settings schema, an owner should review saved secret bindings and remove obsolete IDs. Approval with a saved value in a secret field requires `vault:reveal`.
+
+Install an exported tree without `.git` where possible. Swellwright rejects links and includes repository metadata in the approval digest if it is present; a Git working copy may exceed the ordinary plugin file and size limits. An existing working copy may require reapproval after an upgrade. Plugin stdout, stderr and startup exceptions are not shown in the runtime status. See [ADR 0050](../adr/0050-plugin-boundaries-and-vault-key-generations.md).
 
 ## Lifecycle
 

@@ -1,10 +1,25 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import fs, {
+  chmod,
+  link,
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { after, before, beforeEach, describe, it } from 'node:test';
 
-import { discoverPlugins, type DiscoveredPlugin, type PluginRoot } from './discovery.js';
+import {
+  discoverPlugin,
+  discoverPlugins,
+  type DiscoveredPlugin,
+  type PluginRoot,
+} from './discovery.js';
 
 const CORE = '1.2.0';
 
@@ -205,6 +220,120 @@ describe('plugin discovery', () => {
     assert.deepEqual(found.problems, ['"ui/settings.json" does not exist']);
   });
 
+  it('treats a non-directory path component as a missing manifest file, without aborting discovery', async () => {
+    await plugin(
+      local,
+      'broken-path',
+      manifest('broken-path', { ui: { settings: 'ui/settings.json' } }),
+      {
+        'dist/provider.js': 'export {};',
+        ui: 'not a directory',
+      },
+    );
+    await plugin(local, 'other-plugin');
+    const found = await discoverPlugins([local], CORE);
+    assert.match(found[0]?.problems.join() ?? '', /ui\/settings\.json.*does not exist/u);
+    assert.equal(found[1]?.state, 'available');
+  });
+
+  it('isolates unreadable files to their plugin and retries once', async (t) => {
+    await plugin(local, 'blocked-plugin');
+    await plugin(local, 'other-plugin');
+    const openFile = fs.open.bind(fs);
+    const unreadable = await realpath(
+      join(local.directory, 'blocked-plugin', 'swellwright.plugin.json'),
+    );
+    let attempts = 0;
+    const open = t.mock.method(fs, 'open', (...args: Parameters<typeof fs.open>) => {
+      if (typeof args[0] === 'string' && relative(unreadable, args[0]) === '') {
+        attempts += 1;
+        return Promise.reject(Object.assign(new Error('read denied'), { code: 'EACCES' }));
+      }
+      return openFile(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      const found = await discoverPlugins([local], CORE);
+      assert.equal(found[0]?.transient, true);
+      assert.equal(found[1]?.state, 'available');
+      assert.equal(attempts, 2);
+    } finally {
+      open.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('does not stat any sibling directories when verifying a single plugin', async (t) => {
+    await plugin(local, 'only-this');
+    await plugin(local, 'unrelated');
+    const stat = t.mock.method(fs, 'lstat');
+    syncBuiltinESMExports();
+    try {
+      assert.equal((await discoverPlugin([local], CORE, 'only-this'))?.state, 'available');
+      assert.ok(stat.mock.callCount() > 0);
+      assert.ok(stat.mock.calls.every((call) => !String(call.arguments[0]).includes('unrelated')));
+    } finally {
+      stat.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
+  it('does not let an unverifiable candidate shadow a valid plugin in another root', async () => {
+    await plugin(official, 'same-plugin');
+    await plugin(local, 'same-plugin');
+    await link(
+      join(official.directory, 'same-plugin', 'dist', 'provider.js'),
+      join(base, 'hardlink-alias.js'),
+    );
+    assert.equal((await discoverPlugin([official, local], CORE, 'same-plugin'))?.trust, 'local');
+    const found = await discoverPlugins([official, local], CORE);
+    assert.equal(found.find((candidate) => candidate.state === 'available')?.trust, 'local');
+    assert.equal((await discoverPlugin([local, official], CORE, 'same-plugin'))?.trust, 'local');
+  });
+
+  it(
+    'isolates a mode-000 manifest on POSIX',
+    { skip: process.platform === 'win32' || process.getuid?.() === 0 },
+    async () => {
+      await plugin(local, 'locked-plugin');
+      await plugin(local, 'other-plugin');
+      const file = join(local.directory, 'locked-plugin', 'swellwright.plugin.json');
+      await chmod(file, 0);
+      try {
+        const found = await discoverPlugins([local], CORE);
+        assert.equal(found[0]?.transient, true);
+        assert.equal(found[1]?.state, 'available');
+      } finally {
+        await chmod(file, 0o600);
+      }
+    },
+  );
+
+  it('reports an ELOOP in a manifest reference without aborting sibling discovery', async (t) => {
+    await plugin(
+      local,
+      'loop-plugin',
+      manifest('loop-plugin', { ui: { settings: 'ui/settings.json' } }),
+    );
+    await plugin(local, 'other-plugin');
+    const target = join(local.directory, 'loop-plugin', 'ui', 'settings.json');
+    const original = fs.lstat.bind(fs);
+    const stat = t.mock.method(fs, 'lstat', (...args: Parameters<typeof fs.lstat>) =>
+      args[0] === target
+        ? Promise.reject(Object.assign(new Error('symlink loop'), { code: 'ELOOP' }))
+        : original(...args),
+    );
+    syncBuiltinESMExports();
+    try {
+      const found = await discoverPlugins([local], CORE);
+      assert.match(found[0]?.problems.join() ?? '', /reached through a link/u);
+      assert.equal(found[1]?.state, 'available');
+    } finally {
+      stat.mock.restore();
+      syncBuiltinESMExports();
+    }
+  });
+
   it('refuses a path that leaves the plugin, however it is written', async () => {
     await plugin(official, 'escape', manifest('escape', { config: { schema: '../outside.json' } }));
     const found = only(await discoverPlugins([official], CORE));
@@ -227,7 +356,7 @@ describe('plugin discovery', () => {
     }
     const found = only(await discoverPlugins([official], CORE));
     assert.equal(found.state, 'invalid');
-    assert.match(found.problems.join(), /leads outside the plugin directory/u);
+    assert.match(found.problems.join(), /links are not followed/u);
   });
 
   it('does not follow a plugin directory that is a link', async (t) => {
@@ -245,6 +374,32 @@ describe('plugin discovery', () => {
     const found = only(await discoverPlugins([official], CORE));
     assert.equal(found.state, 'invalid');
     assert.match(found.problems.join(), /is a link/u);
+  });
+
+  it('refuses a module inside .git, which is not part of what is approved', async () => {
+    await plugin(
+      local,
+      'from-history',
+      manifest('from-history', {
+        provides: [{ kind: 'DnsProvider', entry: './.git/hooks/provider.js' }],
+      }),
+      { '.git/hooks/provider.js': 'export {};' },
+    );
+    const found = only(await discoverPlugins([local], CORE));
+    assert.equal(found.state, 'invalid');
+    assert.match(found.problems.join(), /inside \.git/u);
+  });
+
+  it('says why a settings schema is refused instead of leaving the plugin usable without it', async () => {
+    await plugin(
+      local,
+      'big-schema',
+      manifest('big-schema', { config: { schema: './settings.json' } }),
+      { 'dist/provider.js': 'export {};', 'settings.json': ' '.repeat(65 * 1024) },
+    );
+    const found = only(await discoverPlugins([local], CORE));
+    assert.equal(found.state, 'invalid');
+    assert.match(found.problems.join(), /settings\.json is larger than 64 KiB/u);
   });
 
   it('forbids install scripts', async () => {
