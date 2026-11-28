@@ -9,6 +9,7 @@ import {
   Logger,
   NotFoundException,
   type OnApplicationShutdown,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import {
@@ -50,7 +51,10 @@ import {
 } from './keys.js';
 import { Serial } from './serial.js';
 
-/** An arbitrary constant: one transaction at a time may set the vault up. */
+/**
+ * An arbitrary constant: one transaction at a time may set the vault up or replace its keys; a write encrypted under
+ * the key in memory takes it shared, so it never overlaps a replacement of the key (ADR 0050).
+ */
 const VAULT_LOCK_KEY = 7_761_237;
 /**
  * An arbitrary constant: making a run that is handed secrets, replacing a value and deleting a secret take turns, so a
@@ -138,6 +142,19 @@ export function toSecretView(row: Secret, nowMs: number): SecretView {
   };
 }
 
+function statusOf(meta: VaultMeta | null, secretCount: number, current: boolean): VaultStatus {
+  return {
+    state: !meta ? 'uninitialized' : current ? 'unsealed' : 'sealed',
+    secretCount,
+    kekVersion: meta?.kekVersion ?? null,
+    createdAt: meta?.createdAt.toISOString() ?? null,
+    passphraseChangedAt: meta?.passphraseChangedAt?.toISOString() ?? null,
+    recoveryKeyRotatedAt: meta?.recoveryKeyRotatedAt?.toISOString() ?? null,
+    kekRotatedAt: meta?.kekRotatedAt?.toISOString() ?? null,
+    dataKeysRotatedAt: meta?.dataKeysRotatedAt?.toISOString() ?? null,
+  };
+}
+
 const isUniqueViolation = (error: unknown): boolean =>
   error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002';
 
@@ -150,6 +167,12 @@ export class VaultService implements OnApplicationShutdown {
   private readonly logger = new Logger('Vault');
   private readonly attempts = new WindowLimiter(UNSEAL_ATTEMPTS, UNSEAL_WINDOW_MS);
   private kek: Buffer | null = null;
+  /**
+   * The version of the key in memory. Another API process can replace the key (ADR 0024); this one then holds a key
+   * that no longer opens anything and must not write with it. Every use and every encrypted write compares it with
+   * the stored version, and a process that finds it stale seals itself (ADR 0050).
+   */
+  private kekVersion: number | null = null;
   private readonly serial = new Serial();
   /** When a refused use of each secret was last recorded. */
   private readonly refusals = new Map<string, number>();
@@ -172,6 +195,49 @@ export class VaultService implements OnApplicationShutdown {
   private wipe(): void {
     this.kek?.fill(0);
     this.kek = null;
+    this.kekVersion = null;
+  }
+
+  private hold(kek: Buffer, version: number): void {
+    this.wipe();
+    this.kek = kek;
+    this.kekVersion = version;
+  }
+
+  /**
+   * The key in memory must be the stored one. If another process replaced it, this one seals itself and the caller
+   * gets the sealed answer: open the vault again, with the passphrase, to get the key that is in use now.
+   */
+  private async requireCurrentKey(
+    client: Pick<Prisma.TransactionClient, 'vaultMeta'>,
+  ): Promise<void> {
+    const stored = await client.vaultMeta.findUnique({
+      where: { id: 1 },
+      select: { kekVersion: true },
+    });
+    this.verifyKeyVersion(stored?.kekVersion);
+  }
+
+  private verifyKeyVersion(storedVersion: number | undefined): void {
+    if (this.kek === null || storedVersion !== this.kekVersion) {
+      if (this.kek !== null) {
+        this.logger.warn('the vault key was replaced by another process; this one is sealed now');
+      }
+      this.wipe();
+      throw new VaultSealedException();
+    }
+  }
+
+  /**
+   * Inside a transaction that writes something encrypted under the key in memory: waits for a replacement of the
+   * key that is under way (it holds the same lock, exclusively) and then checks the key is still the stored one, so
+   * that nothing is written under a key that was just retired.
+   */
+  private async lockCurrentKey(
+    tx: Pick<Prisma.TransactionClient, 'vaultMeta' | '$executeRaw'>,
+  ): Promise<void> {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock_shared(${VAULT_LOCK_KEY})`;
+    await this.requireCurrentKey(tx);
   }
 
   /** Throws the sealed answer (423) when the key is not in memory; for a caller that must not start before it is. */
@@ -188,20 +254,16 @@ export class VaultService implements OnApplicationShutdown {
   }
 
   async status(): Promise<VaultStatus> {
+    const observed = this.kek;
     const [meta, secretCount] = await Promise.all([
       this.db.vaultMeta.findUnique({ where: { id: 1 } }),
       this.db.secret.count(),
     ]);
-    return {
-      state: !meta ? 'uninitialized' : this.kek ? 'unsealed' : 'sealed',
-      secretCount,
-      kekVersion: meta?.kekVersion ?? null,
-      createdAt: meta?.createdAt.toISOString() ?? null,
-      passphraseChangedAt: meta?.passphraseChangedAt?.toISOString() ?? null,
-      recoveryKeyRotatedAt: meta?.recoveryKeyRotatedAt?.toISOString() ?? null,
-      kekRotatedAt: meta?.kekRotatedAt?.toISOString() ?? null,
-      dataKeysRotatedAt: meta?.dataKeysRotatedAt?.toISOString() ?? null,
-    };
+    // A status read can finish after this process unsealed or rotated; do not wipe a newer in-memory key.
+    if (observed !== null && this.kek === observed && meta?.kekVersion !== this.kekVersion) {
+      this.wipe();
+    }
+    return statusOf(meta, secretCount, meta?.kekVersion === this.kekVersion);
   }
 
   /** Sets the vault up once and leaves it open. The recovery key is returned here and never stored. */
@@ -253,8 +315,7 @@ export class VaultService implements OnApplicationShutdown {
     } finally {
       passphraseKey.fill(0);
     }
-    this.wipe();
-    this.kek = kek;
+    this.hold(kek, 1);
     const formatted = formatRecoveryKey(recoveryKey);
     recoveryKey.fill(0);
     return { status: await this.status(), recoveryKey: formatted };
@@ -315,8 +376,7 @@ export class VaultService implements OnApplicationShutdown {
       kek.fill(0);
       throw error;
     }
-    this.wipe();
-    this.kek = kek;
+    this.hold(kek, stored.kekVersion);
     return this.status();
   }
 
@@ -369,6 +429,7 @@ export class VaultService implements OnApplicationShutdown {
     const blobs = encryptSecret(kek, { id, version: 1, type: request.type }, request.value);
     try {
       const row = await this.db.$transaction(async (tx) => {
+        await this.lockCurrentKey(tx);
         const created = await tx.secret.create({
           data: {
             id,
@@ -426,6 +487,7 @@ export class VaultService implements OnApplicationShutdown {
     try {
       const row = await this.db.$transaction(async (tx) => {
         if (body.value !== undefined) {
+          await this.lockCurrentKey(tx);
           await this.refuseWhileHandedToRun(tx, id, 'replaced');
         }
         const current = await tx.secret.findUnique({ where: { id } });
@@ -610,8 +672,11 @@ export class VaultService implements OnApplicationShutdown {
    * secret must exist, be of a kind the consumer may have and not have expired. Must run inside `serial`.
    */
   private async admit(request: UseRequest): Promise<{ kek: Buffer; row: Secret }> {
-    const kek = this.openKey();
+    this.openKey();
     const row = await this.db.secret.findUnique({ where: { id: request.id } });
+    // Read the row first: a rotation that rewrapped it has advanced the version in the same commit.
+    await this.requireCurrentKey(this.db);
+    const kek = this.openKey();
     if (!row) {
       throw new NotFoundException(request.missing);
     }
@@ -840,8 +905,10 @@ export class VaultService implements OnApplicationShutdown {
   }
 
   private async revealNow(actor: Actor, id: string, meta: RequestMeta): Promise<RevealedSecret> {
-    const kek = this.openKey();
+    this.openKey();
     const row = await this.db.secret.findUnique({ where: { id } });
+    await this.requireCurrentKey(this.db);
+    const kek = this.openKey();
     if (!row) {
       throw new NotFoundException('There is no such secret.');
     }
@@ -931,7 +998,8 @@ export class VaultService implements OnApplicationShutdown {
     meta: RequestMeta,
   ): Promise<VaultStatus> {
     const stored = await this.storedMeta();
-    if (request.currentPassphrase === request.newPassphrase) {
+    // Compared as the key derivation sees them: the same words typed another way are the same passphrase.
+    if (request.currentPassphrase.normalize('NFKC') === request.newPassphrase.normalize('NFKC')) {
       throw new BadRequestException('The new passphrase is the same as the current one.');
     }
     const kek = await this.confirmPassphrase(
@@ -947,7 +1015,11 @@ export class VaultService implements OnApplicationShutdown {
       await this.db.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_LOCK_KEY})`;
         const written = await tx.vaultMeta.updateMany({
-          where: { id: 1, kekVersion: stored.kekVersion },
+          where: {
+            id: 1,
+            kekVersion: stored.kekVersion,
+            passphraseWrappedKek: stored.passphraseWrappedKek,
+          },
           data: {
             kdfSalt: new Uint8Array(salt),
             kdfMemoryKib: this.kdf.memoryKib,
@@ -1005,7 +1077,11 @@ export class VaultService implements OnApplicationShutdown {
       await this.db.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_LOCK_KEY})`;
         const written = await tx.vaultMeta.updateMany({
-          where: { id: 1, kekVersion: stored.kekVersion },
+          where: {
+            id: 1,
+            kekVersion: stored.kekVersion,
+            passphraseWrappedKek: stored.passphraseWrappedKek,
+          },
           data: {
             recoveryWrappedKek: new Uint8Array(wrapKekUnderRecoveryKey(kek, recoveryKey)),
             recoveryKeyRotatedAt: new Date(),
@@ -1051,6 +1127,7 @@ export class VaultService implements OnApplicationShutdown {
   ): Promise<VaultInitialized> {
     const current = this.openKey();
     const stored = await this.storedMeta();
+    this.verifyKeyVersion(stored.kekVersion);
     const confirmed = await this.confirmPassphrase(
       actor,
       request.passphrase,
@@ -1067,9 +1144,12 @@ export class VaultService implements OnApplicationShutdown {
     const recoveryKey = newRecoveryKey();
     const salt = randomBytes(KDF_SALT_BYTES);
     const key = await deriveKey(request.passphrase, salt, this.kdf);
+    const recoveryWrappedKek = wrapKekUnderRecoveryKey(kek, recoveryKey);
+    let status: VaultStatus | undefined;
     try {
       await this.db.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_LOCK_KEY})`;
+        await this.requireCurrentKey(tx);
         const rows = await tx.secret.findMany({
           select: { id: true, version: true, wrappedDek: true },
         });
@@ -1093,14 +1173,18 @@ export class VaultService implements OnApplicationShutdown {
         }
         const now = new Date();
         const written = await tx.vaultMeta.updateMany({
-          where: { id: 1, kekVersion: stored.kekVersion },
+          where: {
+            id: 1,
+            kekVersion: stored.kekVersion,
+            passphraseWrappedKek: stored.passphraseWrappedKek,
+          },
           data: {
             kdfSalt: new Uint8Array(salt),
             kdfMemoryKib: this.kdf.memoryKib,
             kdfPasses: this.kdf.passes,
             kdfParallelism: this.kdf.parallelism,
             passphraseWrappedKek: new Uint8Array(wrapKekUnderPassphraseKey(kek, key)),
-            recoveryWrappedKek: new Uint8Array(wrapKekUnderRecoveryKey(kek, recoveryKey)),
+            recoveryWrappedKek: new Uint8Array(recoveryWrappedKek),
             kekVersion: stored.kekVersion + 1,
             kekRotatedAt: now,
             recoveryKeyRotatedAt: now,
@@ -1119,20 +1203,77 @@ export class VaultService implements OnApplicationShutdown {
           },
           tx,
         );
-        return rows.length;
+        status = statusOf(
+          await tx.vaultMeta.findUniqueOrThrow({ where: { id: 1 } }),
+          rows.length,
+          true,
+        );
       }, ROTATION_TX);
     } catch (error) {
-      kek.fill(0);
-      recoveryKey.fill(0);
-      key.fill(0);
-      throw error;
+      // An error does not prove that nothing was committed: the commit can succeed and its answer be lost. Which key
+      // is stored now decides; the process never keeps a key that is not the stored one.
+      const outcome = await this.rotationOutcome(stored.kekVersion, recoveryWrappedKek);
+      if (outcome !== 'committed') {
+        kek.fill(0);
+        recoveryKey.fill(0);
+        key.fill(0);
+        if (outcome === 'unknown') {
+          // Neither key can be trusted to be the stored one: closed, and opened again with the passphrase (which
+          // opens whichever key is stored). If the new key was stored, its recovery key was never shown: issue
+          // a new one after opening the vault.
+          this.wipe();
+          this.logger.error(
+            'the result of a key rotation is unknown; the vault is sealed until it is opened again',
+          );
+          throw new ServiceUnavailableException(
+            'It is not known whether the key was replaced. The vault is sealed: open it with the passphrase, then issue a new recovery key.',
+          );
+        }
+        throw error;
+      }
+      this.logger.warn('a key rotation was committed although its answer was an error');
     }
     key.fill(0);
-    this.wipe();
-    this.kek = kek;
+    if (status === undefined) {
+      kek.fill(0);
+      recoveryKey.fill(0);
+      this.wipe();
+      throw new ServiceUnavailableException(
+        'The vault is sealed: open it with the passphrase, then issue a new recovery key.',
+      );
+    }
+    this.hold(kek, stored.kekVersion + 1);
     const formatted = formatRecoveryKey(recoveryKey);
     recoveryKey.fill(0);
-    return { status: await this.status(), recoveryKey: formatted };
+    return { status, recoveryKey: formatted };
+  }
+
+  /**
+   * Check the recovery wrap itself: a change to the passphrase does not replace it. If the state cannot be
+   * established, or it has since advanced past this attempt, neither in-memory key is retained.
+   */
+  private async rotationOutcome(
+    previousVersion: number,
+    recoveryWrap: Buffer,
+  ): Promise<'committed' | 'not_committed' | 'unknown'> {
+    let after: VaultMeta | null;
+    try {
+      // A new connection may be able to read while the original COMMIT is still in progress.
+      after = await this.db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_LOCK_KEY})`;
+        return tx.vaultMeta.findUnique({ where: { id: 1 } });
+      }, ROTATION_TX);
+    } catch {
+      return 'unknown';
+    }
+    if (after?.kekVersion === previousVersion) {
+      return 'not_committed';
+    }
+    return after?.kekVersion === previousVersion + 1 &&
+      after.recoveryWrappedKek.length === recoveryWrap.length &&
+      timingSafeEqual(after.recoveryWrappedKek, recoveryWrap)
+      ? 'committed'
+      : 'unknown';
   }
 
   /** Encrypts every secret again under a fresh data key. Values and versions stay as they are. All or nothing. */
@@ -1144,6 +1285,7 @@ export class VaultService implements OnApplicationShutdown {
     const kek = this.openKey();
     const rotated = await this.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${VAULT_LOCK_KEY})`;
+      await this.requireCurrentKey(tx);
       const rows = await tx.secret.findMany();
       for (const row of rows) {
         const identity = { id: row.id, version: row.version, type: row.type };

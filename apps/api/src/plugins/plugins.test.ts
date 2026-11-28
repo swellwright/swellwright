@@ -1,13 +1,26 @@
 import 'reflect-metadata';
 
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import fs, {
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
 import { PluginListSchema, PluginViewSchema } from '@swellwright/contracts';
+import type { Database, PluginApproval } from '@swellwright/db';
 
+import { AuditService } from '../audit/audit.service.js';
 import {
   auditEvents,
   type Client,
@@ -25,6 +38,7 @@ import {
 } from '../test-support.js';
 import { digestPlugin } from './digest.js';
 import { PluginsService } from './plugins.service.js';
+import { PluginRuntime } from './runtime.js';
 
 interface Fixture {
   readonly version?: string;
@@ -60,6 +74,76 @@ async function digestOf(directory: string): Promise<string> {
   return result.digest;
 }
 
+it('spaces transient strikes across listing and runtime checks of the same approval', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'sw-plugin-strikes-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const id = 'unstable-example';
+  const directory = await writePlugin(root, id);
+  const now = new Date('2026-01-01T00:00:00Z');
+  const approval: PluginApproval = {
+    pluginId: id,
+    enabled: true,
+    version: '1.0.0',
+    trust: 'local',
+    digest: await digestOf(directory),
+    permissions: '{"network":[],"secrets":[],"panel":[],"ssh":false}',
+    approvedAt: now,
+    approvedBy: 'operator',
+    updatedAt: now,
+  };
+  const db = {
+    client: {
+      pluginApproval: {
+        findUnique: () => Promise.resolve(approval),
+        findMany: () => Promise.resolve([approval]),
+      },
+    },
+  } as unknown as Database;
+  const runtime = new PluginRuntime();
+  const stops: string[] = [];
+  runtime.onStop((stopped) => stops.push(stopped));
+  const audit = new AuditService(undefined);
+  const notes = t.mock.method(audit, 'note', () => Promise.resolve());
+  const service = new PluginsService(
+    db,
+    audit,
+    { version: '0.0.0-test', pluginRoots: [{ directory: root, trust: 'local' }] },
+    runtime,
+  );
+  t.mock.timers.enable({ apis: ['Date'], now: now.getTime() });
+  const original = fs.lstat.bind(fs);
+  const entry = join(directory, 'dist', 'entry.js');
+  const statFailure = t.mock.method(fs, 'lstat', (...args: Parameters<typeof fs.lstat>) =>
+    args[0] === entry
+      ? Promise.reject(Object.assign(new Error('synthetic read failure'), { code: 'EIO' }))
+      : original(...args),
+  );
+  syncBuiltinESMExports();
+  try {
+    for (let i = 0; i < 3; i += 1) {
+      assert.equal((await service.list()).plugins[0]?.status, 'unavailable');
+      assert.equal((await service.runnable(id)).kind, 'not_enabled');
+    }
+    assert.deepEqual(stops, [], 'a burst of checks is only one strike');
+    t.mock.timers.tick(999);
+    await service.runnable(id);
+    t.mock.timers.tick(1);
+    await service.list();
+    assert.deepEqual(stops, []);
+    t.mock.timers.tick(1000);
+    await service.runnable(id);
+    await service.list();
+    assert.deepEqual(stops, [id]);
+    assert.deepEqual(
+      notes.mock.calls.map(({ arguments: [event] }) => found(event, 'audit note').action),
+      ['plugin.unverifiable'],
+    );
+  } finally {
+    statFailure.mock.restore();
+    syncBuiltinESMExports();
+  }
+});
+
 describe('the digest of a plugin', () => {
   let root: string;
   before(async () => {
@@ -83,16 +167,24 @@ describe('the digest of a plugin', () => {
     assert.notEqual(await digestOf(directory), changed);
   });
 
-  it('does not depend on where the plugin is, and ignores the git history', async () => {
+  it('does not depend on where the plugin is', async () => {
     const one = await writePlugin(root, 'same-a');
     const two = join(root, 'same-b');
     await mkdir(join(two, 'dist'), { recursive: true });
     for (const file of ['swellwright.plugin.json', 'dist/entry.js']) {
       await writeFile(join(two, file), await readFile(join(one, file)));
     }
-    await mkdir(join(two, '.git'));
-    await writeFile(join(two, '.git', 'HEAD'), 'ref: refs/heads/main');
     assert.equal(await digestOf(one), await digestOf(two));
+  });
+
+  it('includes all regular plugin files, including files under .git, in the approval digest', async () => {
+    const directory = await writePlugin(root, 'git-content');
+    const metadata = join(directory, '.git', 'HEAD');
+    await mkdir(join(directory, '.git'));
+    await writeFile(metadata, 'ref: refs/heads/main');
+    const first = await digestOf(directory);
+    await writeFile(metadata, 'ref: refs/heads/next');
+    assert.notEqual(await digestOf(directory), first);
   });
 
   it('refuses a link anywhere inside a plugin', async () => {
@@ -105,6 +197,47 @@ describe('the digest of a plugin', () => {
     const result = await digestPlugin(directory);
     assert.ok(!result.ok);
     assert.match(result.problem, /link/u);
+  });
+
+  it('refuses a .git that is a link, or a link inside .git, since the process can read the whole directory', async () => {
+    const outside = join(root, 'outside-of-plugins');
+    await mkdir(outside, { recursive: true });
+    await writeFile(join(outside, 'host-file.txt'), 'a file of the host');
+    // A directory link (a junction on Windows, which needs no privilege) as the .git of the plugin.
+    const top = await writePlugin(root, 'git-link');
+    await symlink(outside, join(top, '.git'), 'junction');
+    const linked = await digestPlugin(top);
+    assert.ok(!linked.ok);
+    assert.match(linked.problem, /"\.git" is a link/u);
+    // A regular .git with a link somewhere inside it.
+    const nested = await writePlugin(root, 'git-nested-link');
+    await mkdir(join(nested, '.git', 'refs'), { recursive: true });
+    await symlink(outside, join(nested, '.git', 'refs', 'way-out'), 'junction');
+    const inside = await digestPlugin(nested);
+    assert.ok(!inside.ok);
+    assert.match(inside.problem, /"\.git\/refs\/way-out" is a link/u);
+  });
+
+  it('rejects files with more than one hard link, even when their bytes are unchanged', async () => {
+    const directory = await writePlugin(root, 'hard-linked');
+    await digestOf(directory);
+    await link(join(directory, 'dist', 'entry.js'), join(root, 'another-entry.js'));
+    const result = await digestPlugin(directory);
+    assert.equal(result.ok, false);
+  });
+
+  it('hashes a file again when its content changed, even with the same size and modification time', async () => {
+    const directory = await writePlugin(root, 'same-stamp', { entry: 'export default 1;\n' });
+    const entry = join(directory, 'dist', 'entry.js');
+    const fixed = new Date('2026-01-01T00:00:00Z');
+    await utimes(entry, fixed, fixed);
+    const first = await digestOf(directory);
+    const before = await stat(entry);
+    await writeFile(entry, 'export default 2;\n');
+    // Whoever writes the file can put the modification time back; the change time cannot be.
+    await utimes(entry, fixed, fixed);
+    assert.equal((await stat(entry)).mtimeMs, before.mtimeMs);
+    assert.notEqual(await digestOf(directory), first);
   });
 });
 
@@ -273,6 +406,47 @@ describe('plugins of an instance', { skip: !databaseUrl }, () => {
       panel: 0,
       ssh: false,
     });
+  });
+
+  it('does not revoke approval while a file has an unsafe link count', async () => {
+    const entry = join(local, 'dns-example', 'dist', 'entry.js');
+    const alias = join(local, 'another-entry.js');
+    await link(entry, alias);
+    try {
+      assert.equal((await view('dns-example')).status, 'unavailable');
+      const { pluginApproval } = db();
+      assert.equal(
+        (await pluginApproval.findUniqueOrThrow({ where: { pluginId: 'dns-example' } })).enabled,
+        true,
+      );
+    } finally {
+      await rm(alias);
+    }
+    assert.equal((await view('dns-example')).status, 'enabled');
+  });
+
+  it('retries when only file metadata changes between the digest walk and read', async (t) => {
+    const entry = join(local, 'dns-example', 'dist', 'entry.js');
+    const first = new Date('2026-01-01T00:00:00Z');
+    const second = new Date('2026-01-02T00:00:00Z');
+    await utimes(entry, first, first);
+    const original = fs.lstat.bind(fs);
+    let inspections = 0;
+    const stat = t.mock.method(fs, 'lstat', async (...args: Parameters<typeof fs.lstat>) => {
+      const result = await original(...args);
+      if (args[0] === entry && ++inspections === 2) {
+        await utimes(entry, second, second);
+      }
+      return result;
+    });
+    syncBuiltinESMExports();
+    try {
+      assert.equal((await view('dns-example')).status, 'enabled');
+      assert.ok(inspections >= 4, 'the changed file was checked again');
+    } finally {
+      stat.mock.restore();
+      syncBuiltinESMExports();
+    }
   });
 
   it('switches off a plugin whose files changed, shows what it asks for now, and needs a new approval', async () => {

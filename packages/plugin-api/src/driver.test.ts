@@ -208,6 +208,26 @@ describe('the hosts and settings a driver uses', () => {
     assert.deepEqual(checkDriverAgainstPlugin(sound(DRIVER), manifest(), schema), []);
   });
 
+  it('does not treat a literal each field in a request body as a reference to a setting', () => {
+    const driver = sound({
+      ...DRIVER,
+      operations: {
+        send: {
+          steps: [
+            {
+              id: 'call',
+              request: {
+                url: 'https://api.example.com/send',
+                body: { each: 'config.notASetting' },
+              },
+            },
+          ],
+        },
+      },
+    });
+    assert.deepEqual(checkDriverAgainstPlugin(driver, manifest(), schema), []);
+  });
+
   it('finds the host the manifest does not ask for, a missing setting, a secret that is not one, a wrong kind', () => {
     const driver = sound(DRIVER);
     assert.match(
@@ -478,5 +498,123 @@ describe('running an operation', () => {
     });
     const { services: large } = fakeServices([{ body: 'x'.repeat(1024 * 1024 + 10) }]);
     await assert.rejects(runOperation(big, 'all', null, large), /too large/u);
+  });
+
+  const listing = (result: unknown): Driver =>
+    sound({
+      version: 1,
+      kind: 'DnsProvider',
+      operations: {
+        all: { steps: [{ id: 'a', request: { url: 'https://api.example.com/all' } }], result },
+      },
+    });
+
+  it('stops building a result that expands past its budget, before it is built', async () => {
+    const items = Array.from({ length: 300 }, (_, i) => ({ id: i }));
+    // Each item of a list mapped over the same list again: 90 000 parts from a small answer.
+    const nested = listing({
+      rows: {
+        each: 'steps.a.json.items',
+        as: 'row',
+        map: { each: 'steps.a.json.items', as: 'col', map: '{{ col.id }}' },
+      },
+    });
+    const { services } = fakeServices([{ body: { items } }]);
+    await assert.rejects(runOperation(nested, 'all', null, services), /more than 20000 parts/u);
+    // A large answer put into many places is stopped as it adds up, not after it was all made.
+    const copies = listing({
+      rows: { each: 'steps.a.json.items', as: 'row', map: '{{ steps.a.text }}' },
+    });
+    const { services: wide } = fakeServices([{ body: { items, pad: 'x'.repeat(64 * 1024) } }]);
+    await assert.rejects(runOperation(copies, 'all', null, wide), /too large/u);
+    // Long names of the keys of a mapped object count as well.
+    const named = listing({
+      rows: { each: 'steps.a.json.items', as: 'row', map: { [`k${'x'.repeat(10_000)}`]: 1 } },
+    });
+    const { services: keyed } = fakeServices([{ body: { items } }]);
+    await assert.rejects(runOperation(named, 'all', null, keyed), /too large/u);
+    // Within the budget a loop is built as before.
+    const { services: small } = fakeServices([{ body: { items: items.slice(0, 3) } }]);
+    assert.deepEqual(await runOperation(nested, 'all', null, small), {
+      rows: [
+        [0, 1, 2],
+        [0, 1, 2],
+        [0, 1, 2],
+      ],
+    });
+  });
+
+  it('treats each in a request body as a key, the way the body was checked', async () => {
+    const posting = sound({
+      version: 1,
+      kind: 'NotificationChannel',
+      operations: {
+        post: {
+          steps: [
+            {
+              id: 'a',
+              request: {
+                method: 'POST',
+                url: 'https://api.example.com/post',
+                body: { each: 'steps.x.json', as: 'item', map: 'plain' },
+              },
+            },
+          ],
+        },
+      },
+    });
+    const { services, calls } = fakeServices([{}]);
+    await runOperation(posting, 'post', null, services);
+    assert.deepEqual(JSON.parse(calls[0]?.body ?? ''), {
+      each: 'steps.x.json',
+      as: 'item',
+      map: 'plain',
+    });
+  });
+
+  it('sends no further step once the operation is ended', async () => {
+    const steps = sound({
+      version: 1,
+      kind: 'NotificationChannel',
+      operations: {
+        two: {
+          steps: [
+            { id: 'a', request: { url: 'https://api.example.com/a' } },
+            { id: 'b', request: { method: 'POST', url: 'https://api.example.com/b' } },
+          ],
+        },
+      },
+    });
+    const controller = new AbortController();
+    const { services, calls } = fakeServices([{}, {}]);
+    const ending: DriverServices = {
+      ...services,
+      fetch: async (url, init) => {
+        const answer = await services.fetch(url, init);
+        // The deadline passes while the first answer comes back.
+        controller.abort();
+        return answer;
+      },
+    };
+    await assert.rejects(runOperation(steps, 'two', null, ending, controller.signal));
+    assert.equal(calls.length, 1, 'the second request was never sent');
+  });
+
+  it('does not take what every object has for a parameter that was not given', async () => {
+    const named = sound({
+      version: 1,
+      kind: 'NotificationChannel',
+      operations: {
+        send: {
+          params: { constructor: { type: 'string' }, toString: { type: 'string' } },
+          steps: [{ id: 'a', request: { url: 'https://api.example.com/{{ params.toString }}' } }],
+        },
+      },
+    });
+    const { services } = fakeServices([{}]);
+    await assert.rejects(runOperation(named, 'send', {}, services), /has no value/u);
+    const { services: given, calls } = fakeServices([{}]);
+    await runOperation(named, 'send', { toString: 'x' }, given);
+    assert.equal(calls[0]?.url, 'https://api.example.com/x');
   });
 });
