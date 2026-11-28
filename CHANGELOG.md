@@ -68,6 +68,7 @@ All notable changes are documented here. The format follows [Keep a Changelog](h
 - Brand assets (animated banner, workflow and overview diagrams, logo, social preview), English and Russian README, support policy, release-notes categories; a single-tone cyan mark (`LogoMark`, `packages/ui`) used everywhere, replacing the earlier two-tone, filled badge style.
 
 ### Fixed
+- Keep the new session token separate from second-factor verification and enrollment recovery codes. The proof transaction receives only the token hash; the cookie is set after commit (ADR 0049).
 
 - Authentication hardening (ADR 0049): address-window eviction no longer denies a new source solely because the limiter is full. Only setup and invitation acceptance have a shared process ceiling across addresses. Known and unknown logins share the same admission budget per source; Argon2 reserves capacity for authenticated and known-account work. Authentication audit sampling separates unverified and known-account failures, reports suppressed counts and records account-wide password slowdowns. A source MFA lock returns the same 429 for either password result. **Compose upgrade:** `SW_TRUSTED_PROXIES` is required. Set the exact reverse proxy peer address or exclusive proxy CIDR (not the plugin network), or explicitly set `false` for direct access. The API warns once when ignoring a forwarded header from a private peer.
 

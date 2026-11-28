@@ -37,6 +37,7 @@ import { AuthFailureNotes } from './failure-notes.js';
 import type { PasswordHasher } from './password.js';
 import { SessionManagementService } from './session-management.service.js';
 import { SessionService } from './session.service.js';
+import { hashToken, newSessionToken } from './tokens.js';
 
 const WRONG_PASSWORD = 'not the password at all';
 
@@ -355,12 +356,12 @@ describe('wrong second factors', { skip: !databaseUrl }, () => {
     const verify = auth.verifySecondStep.bind(auth);
     const queued = Promise.withResolvers<undefined>();
     const release = Promise.withResolvers<undefined>();
-    const deferCorrect: AuthService['verifySecondStep'] = async (ctx, code, meta) => {
+    const deferCorrect: AuthService['verifySecondStep'] = async (ctx, code, meta, tokenHash) => {
       if (code === correct) {
         queued.resolve(undefined);
         await release.promise;
       }
-      return verify(ctx, code, meta);
+      return verify(ctx, code, meta, tokenHash);
     };
     const hook = mock.method(auth, 'verifySecondStep', deferCorrect);
     const good = signingIn.post('/auth/totp', { code: correct });
@@ -400,12 +401,12 @@ describe('wrong second factors', { skip: !databaseUrl }, () => {
     const verify = auth.verifySecondStep.bind(auth);
     const queued = Promise.withResolvers<undefined>();
     const release = Promise.withResolvers<undefined>();
-    const deferWrong: AuthService['verifySecondStep'] = async (ctx, code, meta) => {
+    const deferWrong: AuthService['verifySecondStep'] = async (ctx, code, meta, tokenHash) => {
       if (code === wrong) {
         queued.resolve(undefined);
         await release.promise;
       }
-      return verify(ctx, code, meta);
+      return verify(ctx, code, meta, tokenHash);
     };
     const hook = mock.method(auth, 'verifySecondStep', deferWrong);
     const bad = old.post('/auth/totp', { code: wrong });
@@ -944,7 +945,7 @@ describe('the credential epoch', { skip: !databaseUrl }, () => {
     await forgetLastStep(instance);
     await management.revoke(actor, revoked.sessionId, 'own', meta);
     await assert.rejects(
-      auth.verifySecondStep(revoked, codeFor(secret), meta),
+      auth.verifySecondStep(revoked, codeFor(secret), meta, hashToken(newSessionToken())),
       UnauthorizedException,
     );
     assert.equal(
@@ -953,12 +954,13 @@ describe('the credential epoch', { skip: !databaseUrl }, () => {
     );
 
     const pending = await open();
-    const completed = await auth.verifySecondStep(pending, codeFor(secret), meta);
+    const token = newSessionToken();
+    await auth.verifySecondStep(pending, codeFor(secret), meta, hashToken(token));
     await assert.rejects(
       management.revoke(actor, pending.sessionId, 'own', meta),
       NotFoundException,
     );
-    const promoted = await sessions.authenticate(completed.session.token);
+    const promoted = await sessions.authenticate(token);
     assert.equal(promoted?.stage, 'active');
     assert.notEqual(promoted.sessionId, pending.sessionId);
   });

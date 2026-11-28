@@ -58,10 +58,9 @@ const CURRENT_PASSWORD_WINDOW_MS = 15 * 60_000;
 
 const WAIT_MESSAGE = 'Too many failed attempts. Try again later.';
 
-export interface Completed {
-  readonly session: IssuedSession;
+interface Completed {
+  readonly expiresAt: Date;
   readonly user: AuthContext['user'];
-  readonly recoveryCodes?: readonly string[];
 }
 
 /** The context that binds a sealed TOTP secret to its owner and purpose. */
@@ -460,7 +459,12 @@ export class AuthService {
   }
 
   /** Step two: an authenticator code, or one recovery code. */
-  async verifySecondStep(ctx: AuthContext, code: string, meta: RequestMeta): Promise<Completed> {
+  async verifySecondStep(
+    ctx: AuthContext,
+    code: string,
+    meta: RequestMeta,
+    tokenHash: string,
+  ): Promise<Completed> {
     return this.proveFactor(
       ctx,
       'password_verified',
@@ -480,7 +484,7 @@ export class AuthService {
             tx,
           );
         }
-        return this.completeSignIn(tx, ctx, session, now, meta, method);
+        return this.completeSignIn(tx, ctx, session, now, meta, method, tokenHash);
       },
     );
   }
@@ -527,7 +531,12 @@ export class AuthService {
    * Proves the user holds the authenticator of the stored proposal, creates the recovery codes and finishes the
    * sign-in, all in one commit: the confirmation, the codes, the records and the new session stand or fall together.
    */
-  async confirmEnrollment(ctx: AuthContext, code: string, meta: RequestMeta): Promise<Completed> {
+  async confirmEnrollment(
+    ctx: AuthContext,
+    code: string,
+    meta: RequestMeta,
+    tokenHash: string,
+  ): Promise<Completed & { readonly recoveryCodes: readonly string[] }> {
     const recoveryCodes = newRecoveryCodes();
     const completed = await this.proveFactor(
       ctx,
@@ -551,7 +560,7 @@ export class AuthService {
           { action: 'auth.totp.enrolled', outcome: 'success', actor: this.actorOf(ctx), meta },
           tx,
         );
-        return this.completeSignIn(tx, ctx, session, now, meta, 'enrollment');
+        return this.completeSignIn(tx, ctx, session, now, meta, 'enrollment', tokenHash);
       },
     );
     return { ...completed, recoveryCodes };
@@ -820,7 +829,8 @@ export class AuthService {
 
   /**
    * Finishes a sign-in in the caller's transaction: records it, consumes the password-verified session and issues an
-   * active, elevated one (the second factor has just been proved, ADR 0017) at the current epoch. Nothing carries over.
+   * active, elevated one (ADR 0017) at the current epoch. The caller holds the new bearer token; only its hash
+   * enters the proof transaction. Nothing carries over from the pending session.
    */
   private async completeSignIn(
     tx: Prisma.TransactionClient,
@@ -829,6 +839,7 @@ export class AuthService {
     now: Date,
     meta: RequestMeta,
     method: FactorMethod | 'enrollment',
+    tokenHash: string,
   ): Promise<Completed> {
     const user: User = await tx.user.update({
       where: { id: ctx.user.id },
@@ -845,17 +856,17 @@ export class AuthService {
       tx,
     );
     await tx.session.delete({ where: { id: pending.id } });
-    const session = await this.sessions.createInTransaction(
+    const expiresAt = await this.sessions.storeInTransaction(
       tx,
       ctx.user.id,
       user.credentialEpoch,
       'active',
       meta,
       now,
-      { elevated: true },
+      { tokenHash, elevated: true },
     );
     this.logger.log(`sign-in completed for user ${ctx.user.id}`);
-    return { session, user };
+    return { expiresAt, user };
   }
 
   /**

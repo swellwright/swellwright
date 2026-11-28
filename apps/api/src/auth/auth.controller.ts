@@ -28,6 +28,7 @@ import { InvitationService } from '../users/invitation.service.js';
 import { AuthService } from './auth.service.js';
 import { type AuthedRequest, requestMeta, requireAuth, toSessionInfo } from './context.js';
 import { clearSessionCookie, readCookie, SESSION_COOKIE, setSessionCookie } from './cookies.js';
+import { hashToken, newSessionToken } from './tokens.js';
 
 @Controller()
 export class AuthController {
@@ -85,13 +86,16 @@ export class AuthController {
     @Req() req: AuthedRequest,
     @Res({ passthrough: true }) res: Response,
   ): Promise<SessionInfo> {
-    const { session, user } = await this.auth.verifySecondStep(
+    // Keep the bearer token out of factor verification. Send it only after the transaction commits.
+    const token = newSessionToken();
+    const { expiresAt, user } = await this.auth.verifySecondStep(
       requireAuth(req),
       body.code,
       requestMeta(req),
+      hashToken(token),
     );
-    setSessionCookie(res, session.token, this.config);
-    return toSessionInfo(user, session.expiresAt);
+    setSessionCookie(res, token, this.config);
+    return toSessionInfo(user, expiresAt);
   }
 
   @ContractRoute(totpEnrollmentRoute)
@@ -105,15 +109,17 @@ export class AuthController {
     @Req() req: AuthedRequest,
     @Res({ passthrough: true }) res: Response,
   ): Promise<TotpConfirmed> {
-    const { session, user, recoveryCodes } = await this.auth.confirmEnrollment(
+    const token = newSessionToken();
+    const { expiresAt, user, recoveryCodes } = await this.auth.confirmEnrollment(
       requireAuth(req),
       body.code,
       requestMeta(req),
+      hashToken(token),
     );
-    setSessionCookie(res, session.token, this.config);
+    setSessionCookie(res, token, this.config);
     return {
-      ...toSessionInfo(user, session.expiresAt),
-      recoveryCodes: [...(recoveryCodes ?? [])],
+      ...toSessionInfo(user, expiresAt),
+      recoveryCodes: [...recoveryCodes],
     };
   }
 

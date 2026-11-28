@@ -66,6 +66,9 @@ problems with it:
   (its time step, or the recovery code) in the transaction that issues or elevates the session, together with the
   strict audit records; a failing record rolls the claim back. An enrollment proposal is written once and returned to
   every later start until it is confirmed.
+  For second-factor sign-in and enrollment confirmation, the HTTP handler creates the new random bearer token and
+  passes only its SHA-256 hash to the proof transaction. The raw token stays separate from the proof result and
+  recovery codes and is sent in the session cookie only after the transaction commits.
 - **Admission is bounded.** Before the session lookup a guard counts requests per source: sign-in 30 per 5 minutes,
   setup and invitation acceptance 10 per 15 minutes each, the second step and enrollment confirmation 30 per 5 minutes
   together, enrollment start and password change 30 per 5 minutes each. Step-up uses its own 30 per 5 minutes after

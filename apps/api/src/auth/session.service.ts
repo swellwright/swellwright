@@ -61,8 +61,24 @@ export class SessionService {
     stage: 'password_verified' | 'active',
     meta: RequestMeta,
     now: Date,
-    options: { readonly elevated?: boolean } = {},
   ): Promise<IssuedSession> {
+    const token = newSessionToken();
+    const expiresAt = await this.storeInTransaction(tx, userId, expectedEpoch, stage, meta, now, {
+      tokenHash: hashToken(token),
+    });
+    return { token, expiresAt };
+  }
+
+  /** Stores a session under the account lock without receiving or returning its bearer token. */
+  async storeInTransaction(
+    tx: Prisma.TransactionClient,
+    userId: string,
+    expectedEpoch: bigint,
+    stage: 'password_verified' | 'active',
+    meta: RequestMeta,
+    now: Date,
+    options: { readonly tokenHash: string; readonly elevated?: boolean },
+  ): Promise<Date> {
     const user = await tx.user.findUnique({
       where: { id: userId },
       select: { status: true, credentialEpoch: true },
@@ -71,7 +87,6 @@ export class SessionService {
       throw new UnauthorizedException('Authentication required.');
     }
     const at = now.getTime();
-    const token = newSessionToken();
     const absolute = new Date(
       stage === 'active' ? at + this.config.sessionMaxMs : at + PENDING_TTL_MS,
     );
@@ -89,7 +104,7 @@ export class SessionService {
     await tx.session.create({
       data: {
         userId,
-        tokenHash: hashToken(token),
+        tokenHash: options.tokenHash,
         stage: STAGE_OF[stage],
         expiresAt: idle,
         absoluteExpiresAt: absolute,
@@ -102,7 +117,7 @@ export class SessionService {
         lastSeenAt: now,
       },
     });
-    return { token, expiresAt: idle };
+    return idle;
   }
 
   /** Removes expired sessions of every account, at most once a minute. Never inside an account's transaction. */
