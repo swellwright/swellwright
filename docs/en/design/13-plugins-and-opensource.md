@@ -131,6 +131,8 @@ A plugin is third-party code with access to secrets, therefore:
 - **Implemented:** install scripts including `postinstall` are prohibited, SHA-256 binds approvals to plugin files, sidecar images are pinned by digest, and updates require manual approval. Lifecycle events, refusals and secret use are audited; secret values are not.
 - **Planned:** signature verification, a plugin SBOM, and an audit record for every plugin call.
 
+Discovery and digesting check path containment before accessing the filesystem. Use relative names with forward slashes, without parent segments, backslashes, NUL, or drive and stream syntax.
+
 The sidecar gateway reserves approval-check capacity for matched tokens and checks the current approval before serving a request. It audits each successful secret delivery and is limited to 120 authenticated requests per minute per plugin and API instance. Process plugins and declarative drivers use best-effort audit notes deduplicated per plugin and per secret for ten minutes. Review saved bindings before upgrading or changing the settings schema; approval with saved values in secret fields requires `vault:reveal`. An unverifiable plugin cannot be called: three consecutive verification strikes, counted at most once per second, or a file with more than one hard link stop the local process and record `plugin.unverifiable` without revoking approval. See [ADR 0050](../../adr/0050-plugin-boundaries-and-vault-key-generations.md) for capacity limits and Linux filesystem guidance.
 
 ## 7. Official plugins and packages (first batch)

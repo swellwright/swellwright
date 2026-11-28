@@ -53,9 +53,9 @@ describe('reading a driver file', () => {
     await rm(root, { recursive: true, force: true });
   });
   const read = async (text: string) => {
-    const path = join(root, `d-${String(Math.random()).slice(2)}.yaml`);
-    await writeFile(path, text);
-    return readDriver(root, path, 'driver.yaml');
+    const name = `d-${String(Math.random()).slice(2)}.yaml`;
+    await writeFile(join(root, name), text);
+    return readDriver(root, name, 'driver.yaml');
   };
 
   it('reads a sound driver', async () => {
@@ -91,7 +91,7 @@ describe('reading a driver file', () => {
 
   it('reports a missing file, a file that is too large and a driver that does not fit the schema', async () => {
     assert.match(
-      (await readDriver(root, join(root, 'nowhere.yaml'), 'driver.yaml')).problems.join(),
+      (await readDriver(root, 'nowhere.yaml', 'driver.yaml')).problems.join(),
       /cannot be read/u,
     );
     assert.match(
@@ -110,13 +110,13 @@ describe('reading a driver file', () => {
     await writeFile(join(elsewhere, 'driver.yaml'), GOOD);
     // A directory link (a junction on Windows) inside the plugin that leads outside it.
     await symlink(elsewhere, join(plugin, 'drivers'), 'junction');
-    const through = await readDriver(plugin, join(plugin, 'drivers', 'driver.yaml'), 'driver.yaml');
+    const through = await readDriver(plugin, 'drivers/driver.yaml', 'driver.yaml');
     assert.equal(through.driver, undefined);
     assert.match(through.problems.join(), /leads outside the plugin directory/u);
     // A directory where a file should be is refused as not a regular file, without trying to read it.
     await mkdir(join(plugin, 'folder.yaml'));
     assert.match(
-      (await readDriver(plugin, join(plugin, 'folder.yaml'), 'driver.yaml')).problems.join(),
+      (await readDriver(plugin, 'folder.yaml', 'driver.yaml')).problems.join(),
       /not a regular file/u,
     );
   });
@@ -126,11 +126,7 @@ describe('reading a driver file', () => {
     await mkdir(join(directory, 'drivers'), { recursive: true });
     await writeFile(join(directory, 'drivers', 'driver.yaml'), GOOD);
     await symlink(join(directory, 'drivers'), join(directory, 'alias'), 'junction');
-    const result = await readDriver(
-      directory,
-      join(directory, 'alias', 'driver.yaml'),
-      'driver.yaml',
-    );
+    const result = await readDriver(directory, 'alias/driver.yaml', 'driver.yaml');
     assert.equal(result.driver, undefined);
     assert.match(result.problems.join(), /link/u);
   });

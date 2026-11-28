@@ -1,6 +1,3 @@
-import { lstat, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
-
 import { SECRET_TYPES } from '@swellwright/contracts';
 import {
   checkDriverAgainstPlugin,
@@ -17,7 +14,13 @@ import semver from 'semver';
 
 import { digestPlugin, MAX_PLUGIN_BYTES } from './digest.js';
 import { readDriver } from './driver-file.js';
-import { fileErrorCode, PluginFilesUnavailable, readBoundedFile } from './files.js';
+import {
+  fileErrorCode,
+  PluginFilesUnavailable,
+  PluginPathRefused,
+  readBoundedFile,
+  resolveInsidePlugin,
+} from './files.js';
 
 /** Where a plugin directory comes from, which decides how far it is trusted (ADR 0008). */
 export type TrustLevel = 'official' | 'local' | 'community';
@@ -89,13 +92,7 @@ async function checkFiles(directory: string, manifest: PluginManifest): Promise<
       problems.push(`"${file}" is inside .git; the manifest must name a file in the working tree`);
       continue;
     }
-    const result = await readBoundedFile(
-      directory,
-      join(directory, file),
-      MAX_PLUGIN_BYTES,
-      undefined,
-      true,
-    );
+    const result = await readBoundedFile(directory, file, MAX_PLUGIN_BYTES, undefined, true);
     if (result.kind === 'missing') {
       problems.push(`"${file}" does not exist`);
     } else if (result.kind === 'refused') {
@@ -106,11 +103,7 @@ async function checkFiles(directory: string, manifest: PluginManifest): Promise<
 }
 
 async function installScriptProblems(directory: string): Promise<string[]> {
-  const file = await readSmallFile(
-    directory,
-    join(directory, 'package.json'),
-    MAX_PACKAGE_JSON_BYTES,
-  );
+  const file = await readSmallFile(directory, 'package.json', MAX_PACKAGE_JSON_BYTES);
   if (file.kind === 'missing') {
     return [];
   }
@@ -160,7 +153,7 @@ async function readConfigSchema(
     // Reported by the check of the files the manifest names; never read.
     return { schema: undefined, problems: [] };
   }
-  const raw = await readSmallFile(directory, join(directory, file), MAX_SCHEMA_BYTES);
+  const raw = await readSmallFile(directory, file, MAX_SCHEMA_BYTES);
   if (raw.kind === 'missing') {
     // A missing file is reported by the check of the files the manifest names.
     return { schema: undefined, problems: [] };
@@ -210,7 +203,7 @@ async function readDrivers(
       // Reported by the check of the files the manifest names; never read.
       continue;
     }
-    const read = await readDriver(directory, join(directory, file), file);
+    const read = await readDriver(directory, file, file);
     problems.push(...read.problems);
     if (read.driver === undefined) {
       continue;
@@ -235,9 +228,9 @@ async function readDrivers(
 async function inspect(
   root: PluginRoot,
   folder: string,
+  directory: string,
   coreVersion: string,
 ): Promise<DiscoveredPlugin> {
-  const directory = join(root.directory, folder);
   const done = (
     state: PluginState,
     problems: readonly string[],
@@ -257,10 +250,10 @@ async function inspect(
     problems,
   });
 
-  if ((await lstat(directory)).isSymbolicLink()) {
+  if ((await resolveInsidePlugin(root.directory, folder, 'lstat')).isSymbolicLink()) {
     return done('invalid', ['is a link; a plugin directory is never followed through a link']);
   }
-  const raw = await readSmallFile(directory, join(directory, MANIFEST_FILE), MAX_MANIFEST_BYTES);
+  const raw = await readSmallFile(directory, MANIFEST_FILE, MAX_MANIFEST_BYTES);
   if (raw.kind === 'missing') {
     return done('invalid', [`has no ${MANIFEST_FILE}`]);
   }
@@ -326,8 +319,8 @@ async function inspect(
 }
 
 /** True for a directory with at least one file and nothing but documentation files (README, LICENSE, `*.md`). */
-async function onlyDocumentation(directory: string): Promise<boolean> {
-  const entries = await readdir(directory, { withFileTypes: true });
+async function onlyDocumentation(root: string, folder: string): Promise<boolean> {
+  const entries = await resolveInsidePlugin(root, folder, 'readdir');
   return (
     entries.length > 0 &&
     entries.every(
@@ -342,10 +335,18 @@ async function inspectCandidate(
   folder: string,
   coreVersion: string,
 ): Promise<DiscoveredPlugin | undefined> {
-  const directory = join(root.directory, folder);
+  let directory: string;
+  try {
+    directory = resolveInsidePlugin(root.directory, folder);
+  } catch (error) {
+    if (error instanceof PluginPathRefused) {
+      return undefined;
+    }
+    throw error;
+  }
   for (let attempt = 0; ; attempt += 1) {
     try {
-      const entry = await lstat(directory);
+      const entry = await resolveInsidePlugin(root.directory, folder, 'lstat');
       if (!entry.isDirectory() && !entry.isSymbolicLink()) {
         return undefined;
       }
@@ -356,14 +357,14 @@ async function inspectCandidate(
       if (attempt === 0 && fileErrorCode(error) !== undefined) {
         continue;
       }
-      return unavailable(root, folder, 'Plugin directory could not be checked.');
+      return unavailable(root, folder, directory, 'Plugin directory could not be checked.');
     }
     try {
-      const plugin = await inspect(root, folder, coreVersion);
+      const plugin = await inspect(root, folder, directory, coreVersion);
       if (
         plugin.manifest === undefined &&
         plugin.problems[0]?.startsWith(`has no ${MANIFEST_FILE}`) === true &&
-        (await onlyDocumentation(directory))
+        (await onlyDocumentation(root.directory, folder))
       ) {
         return undefined;
       }
@@ -380,6 +381,7 @@ async function inspectCandidate(
       return unavailable(
         root,
         folder,
+        directory,
         error instanceof PluginFilesUnavailable
           ? error.message
           : 'Plugin files could not be checked.',
@@ -392,12 +394,13 @@ async function inspectCandidate(
 function unavailable(
   root: PluginRoot,
   folder: string,
+  directory: string,
   problem: string,
   hardLink = false,
 ): DiscoveredPlugin {
   return {
     folder,
-    directory: join(root.directory, folder),
+    directory,
     trust: root.trust,
     state: 'invalid',
     manifest: undefined,
@@ -453,7 +456,7 @@ export async function discoverPlugins(
   for (const root of roots) {
     let entries;
     try {
-      entries = await readdir(root.directory, { withFileTypes: true });
+      entries = await resolveInsidePlugin(root.directory, undefined, 'readdir');
     } catch (error) {
       if (isMissing(error)) {
         continue;

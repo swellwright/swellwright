@@ -10,10 +10,10 @@ import { readBoundedFile } from './files.js';
  */
 export async function readDriver(
   root: string,
-  path: string,
+  name: string,
   label: string,
 ): Promise<{ driver: Driver | undefined; problems: string[] }> {
-  const read = await readBoundedFile(root, path, DRIVER_LIMITS.fileBytes);
+  const read = await readBoundedFile(root, name, DRIVER_LIMITS.fileBytes);
   if (read.kind === 'missing') {
     return { driver: undefined, problems: [`${label} cannot be read`] };
   }

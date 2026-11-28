@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto';
-import { lstat, opendir } from 'node:fs/promises';
-import { join } from 'node:path';
-
-import { fileErrorCode, fileStamp, PluginFilesUnavailable, readBoundedFile } from './files.js';
+import {
+  fileErrorCode,
+  fileStamp,
+  PluginFilesUnavailable,
+  PluginPathRefused,
+  readBoundedFile,
+  resolveInsidePlugin,
+} from './files.js';
 
 /** What a plugin may weigh. A plugin is a few files; more than this is not one (and hashing it is not free). */
 export const MAX_PLUGIN_FILES = 2000;
@@ -40,7 +44,11 @@ async function walk(root: string): Promise<Walk> {
     if (depth > MAX_DEPTH) {
       return `"${relative}" is nested more than ${String(MAX_DEPTH)} directories deep`;
     }
-    const found = await opendir(join(root, relative));
+    const found = await resolveInsidePlugin(
+      root,
+      relative === '' ? undefined : relative,
+      'opendir',
+    );
     for await (const entry of found) {
       if (++seen > MAX_PLUGIN_ENTRIES) {
         return `has more than ${String(MAX_PLUGIN_ENTRIES)} directory entries`;
@@ -61,7 +69,7 @@ async function walk(root: string): Promise<Walk> {
       if (!entry.isFile()) {
         return `"${path}" is neither a file nor a directory`;
       }
-      const info = await lstat(join(root, path), { bigint: true });
+      const info = await resolveInsidePlugin(root, path, 'lstatBig');
       if (!info.isFile()) {
         return `"${path}" is not a regular file with one link`;
       }
@@ -112,6 +120,9 @@ export async function digestPlugin(directory: string): Promise<DigestResult> {
     try {
       return await digestOnce(directory);
     } catch (error) {
+      if (error instanceof PluginPathRefused) {
+        return { ok: false, problem: `contains a file or directory whose name ${error.message}` };
+      }
       if (!(error instanceof PluginFilesUnavailable) && fileErrorCode(error) === undefined) {
         throw error;
       }
@@ -147,12 +158,7 @@ async function digestOnce(directory: string): Promise<DigestResult> {
   let bytes = 0;
   for (const entry of found.entries) {
     // Read as it was listed: an ordinary file inside the plugin, at most the size that was counted.
-    const read = await readBoundedFile(
-      directory,
-      join(directory, entry.path),
-      entry.size,
-      entry.stamp,
-    );
+    const read = await readBoundedFile(directory, entry.path, entry.size, entry.stamp);
     if (read.kind === 'missing') {
       throw new PluginFilesUnavailable('A plugin file disappeared while being checked.');
     }

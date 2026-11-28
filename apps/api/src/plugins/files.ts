@@ -1,6 +1,6 @@
-import { constants, type BigIntStats } from 'node:fs';
-import { lstat, open, realpath } from 'node:fs/promises';
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { constants, type BigIntStats, type Dir, type Dirent, type Stats } from 'node:fs';
+import { lstat, open, opendir, readdir, realpath, type FileHandle } from 'node:fs/promises';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 /** What reading a file of a plugin gave: its bytes, nothing because it is not there, or why it was refused. */
 export type BoundedRead =
@@ -37,26 +37,96 @@ export function fileStamp(info: BigIntStats): string {
 const flags = constants as Record<string, number | undefined>;
 const OPEN_FLAGS = constants.O_RDONLY | (flags['O_NONBLOCK'] ?? 0) | (flags['O_NOFOLLOW'] ?? 0);
 
+export class PluginPathRefused extends Error {
+  constructor() {
+    super('must be a relative path inside the plugin directory');
+  }
+}
+
+interface PluginPathOperations {
+  lstat: Promise<Stats>;
+  lstatBig: Promise<BigIntStats>;
+  open: Promise<FileHandle>;
+  opendir: Promise<Dir>;
+  readdir: Promise<Dirent[]>;
+  realpath: Promise<string>;
+}
+
 /**
- * Reads an ordinary file of at most `limit` bytes inside `root`, with no links in the path below the root.
- * The type and size are checked before reading. A file that changes during the bounded read is refused.
+ * The lexical boundary for plugin paths, including names from a directory listing.
+ * `undefined` explicitly names the caller's root for directory/realpath operations.
+ * Keep the filesystem calls beside the normalized, separator-delimited containment check.
+ */
+export function resolveInsidePlugin(root: string, name: string): string;
+export function resolveInsidePlugin<Operation extends keyof PluginPathOperations>(
+  root: string,
+  name: Operation extends 'opendir' | 'readdir' | 'realpath' ? string | undefined : string,
+  operation: Operation,
+): PluginPathOperations[Operation];
+export function resolveInsidePlugin(
+  root: string,
+  name: string | undefined,
+  operation?: keyof PluginPathOperations,
+): string | PluginPathOperations[keyof PluginPathOperations] {
+  if (
+    name !== undefined &&
+    (isAbsolute(name) ||
+      name.includes('\0') ||
+      name.includes('\\') ||
+      name.includes(':') ||
+      name
+        .replace(/^\.\//u, '')
+        .split('/')
+        .some(
+          (part) =>
+            part === '' ||
+            part === '.' ||
+            part === '..' ||
+            (process.platform === 'win32' && /[. ]$/u.test(part)),
+        ))
+  ) {
+    throw new PluginPathRefused();
+  }
+  const base = resolve(root);
+  const anchor = base.endsWith(sep) ? base.slice(0, -1) : base;
+  const path = name === undefined ? anchor + sep : resolve(base, name);
+  if (!path.startsWith(anchor + sep)) {
+    throw new PluginPathRefused();
+  }
+  switch (operation) {
+    case 'lstat':
+      return lstat(path);
+    case 'lstatBig':
+      return lstat(path, { bigint: true });
+    case 'open':
+      return open(path, OPEN_FLAGS);
+    case 'opendir':
+      return opendir(path);
+    case 'readdir':
+      return readdir(path, { withFileTypes: true });
+    case 'realpath':
+      return realpath(path);
+    case undefined:
+      return path;
+  }
+}
+
+/**
+ * Reads an ordinary relative file of at most `limit` bytes, with no links below `root`.
+ * A file that changes during the bounded read is refused.
  */
 export async function readBoundedFile(
   root: string,
-  path: string,
+  name: string,
   limit: number,
   expectedStamp?: string,
   metadataOnly = false,
 ): Promise<BoundedRead> {
-  const local = relative(root, path);
-  if (local === '' || local === '..' || local.startsWith(`..${sep}`) || isAbsolute(local)) {
-    return { kind: 'refused', reason: 'leads outside the plugin directory' };
-  }
   let info;
   let real: string;
   let realRoot: string;
   try {
-    info = await lstat(path, { bigint: true });
+    info = await resolveInsidePlugin(root, name, 'lstatBig');
     if (!info.isFile()) {
       return { kind: 'refused', reason: 'is not a regular file (links are not followed)' };
     }
@@ -72,9 +142,12 @@ export async function readBoundedFile(
     if (info.size > limit) {
       return { kind: 'refused', reason: `is larger than ${String(Math.floor(limit / 1024))} KiB` };
     }
-    realRoot = await realpath(root);
-    real = await realpath(path);
+    realRoot = await resolveInsidePlugin(root, undefined, 'realpath');
+    real = await resolveInsidePlugin(root, name, 'realpath');
   } catch (error) {
+    if (error instanceof PluginPathRefused) {
+      return { kind: 'refused', reason: error.message };
+    }
     if (isMissing(error)) {
       return { kind: 'missing' };
     }
@@ -92,7 +165,7 @@ export async function readBoundedFile(
   ) {
     return { kind: 'refused', reason: 'leads outside the plugin directory' };
   }
-  if (relative(join(realRoot, local), real) !== '') {
+  if (relative(resolveInsidePlugin(realRoot, name), real) !== '') {
     return { kind: 'refused', reason: 'is reached through a link' };
   }
   const stamp = fileStamp(info);
@@ -101,7 +174,7 @@ export async function readBoundedFile(
   }
   let handle;
   try {
-    handle = await open(real, OPEN_FLAGS);
+    handle = await resolveInsidePlugin(realRoot, name, 'open');
   } catch (error) {
     if (isMissing(error)) {
       return { kind: 'missing' };
