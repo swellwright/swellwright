@@ -18,7 +18,14 @@ import type {
 } from '@swellwright/contracts';
 import { stringify as stringifyYaml } from 'yaml';
 
-import { contentHash, maskSecrets, type MaskOptions, maskText, readYamlDocuments } from './mask.js';
+import {
+  contentHash,
+  MASK,
+  maskSecrets,
+  type MaskOptions,
+  maskText,
+  readYamlDocuments,
+} from './mask.js';
 import type {
   ApiTokenDtoType,
   BillingNodeDtoType,
@@ -376,8 +383,8 @@ export function maskedYaml(
     if (documents?.length !== 1 || parsed === null || typeof parsed !== 'object') {
       return null;
     }
-    const masked = maskSecrets(parsed, context).value;
-    return stringifyYaml(masked, { lineWidth: 0 });
+    const masked = maskSecrets<unknown>(parsed, context).value;
+    return masked === MASK ? null : stringifyYaml(masked, { lineWidth: 0 });
   } catch {
     return null;
   }

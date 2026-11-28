@@ -413,15 +413,21 @@ describe('masking for the API console', () => {
 
   it('masks the whole value when a structure is too large to read, instead of reading it for ever', () => {
     // Shared, not cyclic: every level points twice at the one below, 2^40 paths through a small object.
-    let node: unknown = { password: 'SHARED-SECRET' };
+    let leafReads = 0;
+    let node: unknown = {
+      get password(): string {
+        leafReads += 1;
+        return 'SHARED-SECRET';
+      },
+    };
     for (let level = 0; level < 40; level += 1) {
       node = { left: node, right: node };
     }
-    const started = performance.now();
     const { value, count } = maskConsoleJson({ response: node }, 'standard');
-    assert.ok(performance.now() - started < 5000, 'masking took too long');
     assert.equal(value, MASK);
     assert.ok(count > 0);
+    // Count work on the repeated leaf, not elapsed time on a shared runner.
+    assert.ok(leafReads <= 4096, `read the shared leaf ${String(leafReads)} times`);
   });
 
   it('masks the plain items of a collection of secrets and reads the objects in it by their names', () => {
@@ -578,6 +584,17 @@ describe('masking for the API console', () => {
     );
     assert.ok(!mapping.value.includes('example-only-secret'));
     assert.ok(mapping.value.includes('port: 443'));
+  });
+
+  it('hides a document when an alias crosses masking contexts', () => {
+    const restricted = 'password: &settings [synthetic-private-value]\ncopy: *settings\n';
+    const publicFirst = 'items: &settings [synthetic-private-value]\npassword: *settings\n';
+    for (const yaml of [restricted, publicFirst]) {
+      assert.ok(!maskConsoleText(yaml, 'standard').value.includes('synthetic-private-value'));
+      const encoded = Buffer.from(yaml, 'utf8').toString('base64');
+      assert.equal(maskConsoleJson({ encodedTemplateYaml: encoded }, 'standard').value, MASK);
+      assert.equal(maskedYaml(encoded, { fingerprintKey: KEY }), null);
+    }
   });
 
   it('masks the value of a name/value pair in any case and order of its properties', () => {

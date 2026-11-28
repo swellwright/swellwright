@@ -253,8 +253,12 @@ const COLLECTION_METADATA: ReadonlySet<string> = new Set([
 
 /** How many values one call may visit, aliases and embedded documents included: past it the whole value is masked. */
 const MAX_VISITS = 2_000_000;
+/** Shared containers can expand far beyond their input size. Bound repeat work without lowering the limit for trees. */
+const MAX_REPEAT_VISITS = 4096;
 
-class MaskBudgetError extends Error {}
+class UnsafeMaskStructure extends Error {}
+
+type ContainerMode = 'ordinary' | 'people' | 'all' | 'collection' | 'record';
 
 /**
  * A YAML text larger than this is not read as a document; it gets the whole-text rule of `maskTextFailClosed`. The
@@ -409,6 +413,9 @@ class Masker {
   }
 
   private visits = 0;
+  private repeatVisits = 0;
+  private repeatDepth = 0;
+  private readonly seen = new WeakMap<object, ContainerMode>();
   /** The objects on the way from the top to the value being read: one met again is a cycle (a YAML alias of itself). */
   private readonly path: object[] = [];
 
@@ -416,22 +423,49 @@ class Masker {
   private visit(): void {
     this.visits += 1;
     if (this.visits > MAX_VISITS) {
-      throw new MaskBudgetError();
+      throw new UnsafeMaskStructure();
+    }
+    if (this.repeatDepth > 0) {
+      this.visitRepeated();
     }
   }
 
-  /** Reads a container once on the current path; a container that contains itself is masked, not followed. */
-  private inside<R>(value: object, read: () => R): R | string {
+  private visitRepeated(): void {
+    this.repeatVisits += 1;
+    if (this.repeatVisits > MAX_REPEAT_VISITS) {
+      throw new UnsafeMaskStructure();
+    }
+  }
+
+  /** Refuses aliases that can expose a value masked in another context; a cycle is masked rather than followed. */
+  private inside<R>(value: object, mode: ContainerMode, read: () => R): R | string {
+    const previous = this.seen.get(value);
+    if (previous !== undefined && previous !== mode) {
+      throw new UnsafeMaskStructure();
+    }
     // A stack, not a set: the path is at most `MAX_DEPTH` long.
     if (this.path.includes(value)) {
       return this.mask(null);
+    }
+    if (previous === undefined) {
+      this.seen.set(value, mode);
+    } else {
+      this.visitRepeated();
+      this.repeatDepth += 1;
     }
     this.path.push(value);
     try {
       return read();
     } finally {
       this.path.pop();
+      if (previous !== undefined) {
+        this.repeatDepth -= 1;
+      }
     }
+  }
+
+  private peopleMode(key: string | undefined): 'people' | 'ordinary' {
+    return this.people && key !== undefined && PEOPLE_KEYS.has(norm(key)) ? 'people' : 'ordinary';
   }
 
   /** Replaces every scalar inside a value that is secret as a whole; the shape (how many items) stays visible. */
@@ -441,10 +475,10 @@ class Masker {
       return this.mask(null);
     }
     if (Array.isArray(value)) {
-      return this.inside(value, () => value.map((item) => this.maskAll(item, depth + 1)));
+      return this.inside(value, 'all', () => value.map((item) => this.maskAll(item, depth + 1)));
     }
     if (value !== null && typeof value === 'object') {
-      return this.inside(value, () =>
+      return this.inside(value, 'all', () =>
         this.named(
           Object.entries(value).map(([key, item]) => [key, this.maskAll(item, depth + 1)] as const),
         ),
@@ -477,7 +511,7 @@ class Masker {
           }
         }
       } catch (error) {
-        if (error instanceof MaskBudgetError) {
+        if (error instanceof UnsafeMaskStructure) {
           throw error;
         }
         // Not JSON after all: the rules below still apply.
@@ -529,7 +563,7 @@ class Masker {
       }
       return Buffer.from(written, 'utf8').toString('base64');
     } catch (error) {
-      if (error instanceof MaskBudgetError) {
+      if (error instanceof UnsafeMaskStructure) {
         throw error;
       }
       return this.mask(value);
@@ -635,13 +669,14 @@ class Masker {
       return this.stringValue(value, depth);
     }
     if (Array.isArray(value)) {
-      return this.inside(value, () =>
+      return this.inside(value, this.peopleMode(key), () =>
         value.map((item) => this.walk(item, depth + 1, undefined, key)),
       );
     }
     if (value !== null && typeof value === 'object') {
-      return this.inside(value, () =>
-        this.object(value as Record<string, unknown>, depth, arrayKey),
+      const mode = this.peopleMode(arrayKey);
+      return this.inside(value, mode, () =>
+        this.object(value as Record<string, unknown>, depth, mode === 'people'),
       );
     }
     return value;
@@ -663,10 +698,10 @@ class Masker {
         ? this.record(entry as Record<string, unknown>, depth + 1)
         : this.collection(entry, depth + 1);
     if (Array.isArray(value)) {
-      return this.inside(value, () => value.map(item));
+      return this.inside(value, 'collection', () => value.map(item));
     }
     if (value !== null && typeof value === 'object') {
-      return this.inside(value, () =>
+      return this.inside(value, 'collection', () =>
         this.named(Object.entries(value).map(([key, entry]) => [key, item(entry)] as const)),
       );
     }
@@ -676,7 +711,7 @@ class Masker {
   /** One record of a collection of secrets: its metadata stays, everything else is masked whole. */
   private record(source: Readonly<Record<string, unknown>>, depth: number): unknown {
     this.visit();
-    return this.inside(source, () =>
+    return this.inside(source, 'record', () =>
       this.named(
         Object.entries(source).map(([key, entry]): [string, unknown] => {
           // The names the caller's profile hides (the console's profile for people hides `uuid`) are hidden here too:
@@ -702,9 +737,8 @@ class Masker {
   private object(
     source: Readonly<Record<string, unknown>>,
     depth: number,
-    arrayKey: string | undefined,
+    inPeople: boolean,
   ): Record<string, unknown> {
-    const inPeople = this.people && arrayKey !== undefined && PEOPLE_KEYS.has(norm(arrayKey));
     // `{ "name": "Authorization", "value": "..." }` and `{ "key": "x-api-key", "value": "..." }` pairs, in any case and
     // order of their properties: the value is secret when ANY of the naming properties names a secret.
     const hasValue = Object.keys(source).some((candidate) => norm(candidate) === 'value');
@@ -768,8 +802,8 @@ export function maskSecrets<T>(value: T, options: MaskOptions = {}): Masked<T> {
     const masked = masker.walk(value, 0, undefined, undefined) as T;
     return { value: masked, count: masker.count };
   } catch (error) {
-    if (error instanceof MaskBudgetError) {
-      // Too much to read (aliases that multiply, a structure without end): nothing of it is shown.
+    if (error instanceof UnsafeMaskStructure) {
+      // An alias changes masking context or the structure takes too much work: nothing of it is shown.
       return { value: MASK as T, count: masker.count + 1 };
     }
     throw error;
@@ -783,7 +817,7 @@ export function maskText(value: string, options: MaskOptions = {}): Masked<strin
     const masked = masker.text(value);
     return { value: masked, count: masker.count };
   } catch (error) {
-    if (error instanceof MaskBudgetError) {
+    if (error instanceof UnsafeMaskStructure) {
       return { value: MASK, count: masker.count + 1 };
     }
     throw error;
@@ -801,7 +835,7 @@ export function maskTextFailClosed(value: string, options: MaskOptions = {}): Ma
     const masked = masker.failClosed(value);
     return { value: masked, count: masker.count };
   } catch (error) {
-    if (error instanceof MaskBudgetError) {
+    if (error instanceof UnsafeMaskStructure) {
       return { value: MASK, count: masker.count + 1 };
     }
     throw error;

@@ -37,12 +37,15 @@ const ALLOWED_HEADERS = /^(content-type|content-length|retry-after|x-ratelimit-[
 // eslint-disable-next-line no-control-regex -- finding control characters is the point of it
 const CONTROL = /[\u0000-\u001f\u007f-\u009f]/gu;
 
-export function allowedHeaders(headers: Readonly<Record<string, string>>): Record<string, string> {
+export function allowedHeaders(
+  headers: Readonly<Record<string, string>>,
+  scrub: (value: string) => string = (value) => value,
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     const key = name.toLowerCase();
     if (ALLOWED_HEADERS.test(key)) {
-      out[key] = value.replace(CONTROL, ' ').slice(0, 200);
+      out[key] = scrub(value).replace(CONTROL, ' ').slice(0, 200);
     }
   }
   return out;
@@ -135,15 +138,11 @@ export class ConsoleClient {
   async send(prepared: PreparedConsoleRequest): Promise<ConsoleResult> {
     const { operation } = prepared;
     const raw = await this.http.getRaw(operation.operationId, prepared.pathAndQuery);
-    const headers = Object.fromEntries(
-      Object.entries(allowedHeaders(raw.headers)).map(([name, value]) => [
-        name,
-        this.scrub(value).text,
-      ]),
-    );
+    const headers = allowedHeaders(raw.headers, (value) => this.scrub(value).text);
     // The raw type decides how the answer is read; what is shown or put in an error is the scrubbed one.
-    const rawType = raw.headers['content-type']?.split(';')[0]?.trim().toLowerCase() ?? null;
-    const contentType = rawType === null ? null : this.scrub(rawType).text;
+    const rawType = raw.headers['content-type'] ?? null;
+    const mediaType = (header: string): string => (header.split(';')[0] ?? '').trim().toLowerCase();
+    const contentType = rawType === null ? null : mediaType(this.scrub(rawType).text);
     const common = {
       status: raw.status,
       durationMs: raw.durationMs,
@@ -155,7 +154,7 @@ export class ConsoleClient {
     if (raw.body.length === 0) {
       return { ...common, bodyFormat: 'empty', body: '', truncated: false, maskedCount: 0 };
     }
-    if (rawType !== null && !TEXT_TYPES.test(rawType)) {
+    if (rawType !== null && !TEXT_TYPES.test(mediaType(rawType))) {
       throw new PanelUnsupportedResponseError(operation.operationId, contentType);
     }
     let decoded: string;

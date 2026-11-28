@@ -134,7 +134,11 @@ describe('the bound on a regular expression', () => {
 });
 
 describe('the pattern of a script parameter', () => {
-  const parameter = (pattern: string): ScriptParameter => ({
+  const parameter = (
+    pattern: string,
+  ): Extract<ScriptParameter, { type: 'string' }> & {
+    pattern: string;
+  } => ({
     name: 'p',
     label: 'P',
     type: 'string',
@@ -156,6 +160,26 @@ describe('the pattern of a script parameter', () => {
     assert.ok(performance.now() - started < 100);
     assert.ok(!check.ok);
     assert.match(check.issues[0]?.message ?? '', /refused and is not run/u);
+  });
+
+  it('rejects patterns with unbalanced groups before anchoring them', () => {
+    const invalid = parameter('left)(right');
+    // A definition previously accepted by the schema is still readable, but it cannot be written or run.
+    assert.equal(ScriptParametersSchema.safeParse([invalid]).success, true);
+    assert.match(parameterPatternIssue(invalid.pattern) ?? '', /not a valid/u);
+    assert.equal(parameterWriteIssues([invalid]).length, 1);
+    assert.equal(checkParameterValues([invalid], { p: 'leftright' }).ok, false);
+    // These parentheses are data, not groups.
+    for (const pattern of ['[()]+', '\\(abc\\)', '(?<word>[a-z]+)']) {
+      assert.equal(parameterPatternIssue(pattern), undefined);
+    }
+  });
+
+  it('refuses a new default when the unchanged legacy pattern cannot run', () => {
+    const stored = { ...parameter(join('(a|', 'a)*')), default: 'a' };
+    assert.deepEqual(parameterWriteIssues([stored], [stored]), []);
+    const updated = { ...stored, default: 'aa' };
+    assert.match(parameterWriteIssues([updated], [stored])[0]?.message ?? '', /repeats a part/u);
   });
 
   it('treats a match stopped at the deadline as a value that does not match', () => {

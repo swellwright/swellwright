@@ -58,6 +58,7 @@ const ParameterName = z.string().regex(PARAMETER_NAME_PATTERN, {
 const ENUM_OPTION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,63}$/u;
 
 export const MAX_STRING_PARAMETER_LENGTH = 1000;
+const MAX_PARAMETER_PATTERN_LENGTH = 200;
 
 const ParameterCommon = {
   name: ParameterName,
@@ -73,7 +74,7 @@ export const StringParameterSchema = z
     pattern: z
       .string()
       .min(1)
-      .max(200)
+      .max(MAX_PARAMETER_PATTERN_LENGTH)
       .optional()
       .describe(
         'A regular expression (JavaScript syntax) the whole value must match. Without one any text up to `maxLength` is accepted: it reaches the script quoted, never as shell code.',
@@ -153,27 +154,64 @@ export function parameterEnvName(name: string): string {
   return `SW_PARAM_${name.toUpperCase()}`;
 }
 
-/**
- * Why the pattern of a string parameter is refused: it does not compile, or matching a value of up to
- * `MAX_STRING_PARAMETER_LENGTH` characters could backtrack for a long time (the check runs in the API process).
- */
-export function parameterPatternIssue(pattern: string): string | undefined {
-  return parameterPatternSyntaxIssue(pattern) ?? regexBudgetIssue(`^(?:${pattern})$`);
+/** Parentheses belonging to the pattern must not close or replace the application's anchoring group. */
+function hasBalancedGroups(pattern: string): boolean {
+  let depth = 0;
+  let inClass = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '\\') {
+      index += 1;
+    } else if (inClass) {
+      inClass = char !== ']';
+    } else if (char === '[') {
+      inClass = true;
+    } else if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth -= 1;
+      if (depth < 0) {
+        return false;
+      }
+    }
+  }
+  return depth === 0 && !inClass;
 }
 
-/**
- * Whether the pattern of a string parameter is a regular expression at all: the rule a stored definition has always
- * been checked against. The schema reads stored scripts with this rule only, so a script saved before the bound on
- * matching keeps its parameters (an editor shows them and can correct them); the bound applies when a definition is
- * written (`parameterWriteIssues`) and when a value is checked against the pattern.
- */
-export function parameterPatternSyntaxIssue(pattern: string): string | undefined {
-  try {
-    new RegExp(`^(?:${pattern})$`, 'u');
-  } catch {
-    return 'The pattern is not a valid regular expression.';
+/** The only native compiler. The syntax-only legacy path never exposes its expression to a matcher. */
+function parameterExpression(pattern: string, legacySyntaxOnly = false): RegExp | undefined {
+  if (
+    pattern.length > MAX_PARAMETER_PATTERN_LENGTH ||
+    (!legacySyntaxOnly && !hasBalancedGroups(pattern))
+  ) {
+    return undefined;
   }
-  return undefined;
+  try {
+    return new RegExp(`^(?:${pattern})$`, 'u');
+  } catch {
+    return undefined;
+  }
+}
+
+const INVALID_PARAMETER_PATTERN = 'The pattern is not a valid regular expression.';
+
+/** Stored definitions use their historical syntax check; they must still be readable for repair. */
+export function parameterPatternSyntaxIssue(pattern: string): string | undefined {
+  return parameterExpression(pattern, true) === undefined ? INVALID_PARAMETER_PATTERN : undefined;
+}
+
+/** The checked expression, or why its syntax or estimated matching work was refused. */
+function boundedParameterExpression(pattern: string): RegExp | string {
+  const expression = parameterExpression(pattern);
+  if (expression === undefined) {
+    return INVALID_PARAMETER_PATTERN;
+  }
+  return regexBudgetIssue(expression.source) ?? expression;
+}
+
+export function parameterPatternIssue(pattern: string): string | undefined {
+  const checked = boundedParameterExpression(pattern);
+  return typeof checked === 'string' ? checked : undefined;
 }
 
 /**
@@ -196,23 +234,18 @@ export function parameterWriteIssues(
     const before = stored.find((candidate) => candidate.name === parameter.name);
     const samePattern = before?.type === 'string' && before.pattern === parameter.pattern;
     const sameDefault = samePattern && before.default === parameter.default;
-    if (!samePattern) {
-      const issue = parameterPatternIssue(parameter.pattern);
-      if (issue !== undefined) {
-        issues.push({ name: parameter.name, message: issue });
-        continue;
-      }
-    }
-    if (
-      parameter.default === undefined ||
-      sameDefault ||
-      parameter.default.length > parameter.maxLength ||
-      parameterPatternIssue(parameter.pattern) !== undefined
-    ) {
+    if (samePattern && (sameDefault || parameter.default === undefined)) {
       continue;
     }
-    const regex = compileParameterPattern(parameter.pattern);
-    const result = regex === undefined ? false : patternTest(regex, parameter.default);
+    const checked = boundedParameterExpression(parameter.pattern);
+    if (typeof checked === 'string') {
+      issues.push({ name: parameter.name, message: checked });
+      continue;
+    }
+    if (parameter.default === undefined || parameter.default.length > parameter.maxLength) {
+      continue;
+    }
+    const result = patternTest(checked, parameter.default);
     if (result === 'timeout') {
       issues.push({
         name: parameter.name,
@@ -251,10 +284,8 @@ export function matchesParameterPattern(pattern: string, value: string): boolean
  * a pattern that is refused, also one stored before the bound on matching existed: no value matches it then.
  */
 export function compileParameterPattern(pattern: string): RegExp | undefined {
-  if (parameterPatternIssue(pattern) !== undefined) {
-    return undefined;
-  }
-  return new RegExp(`^(?:${pattern})$`, 'u');
+  const checked = boundedParameterExpression(pattern);
+  return typeof checked === 'string' ? undefined : checked;
 }
 
 export interface ParameterIssue {
@@ -393,21 +424,22 @@ export function checkParameterValues(
           issues.push({ name, message: 'The value must not contain a NUL character.' });
         } else if (value.length > parameter.maxLength) {
           issues.push({ name, message: `At most ${String(parameter.maxLength)} characters.` });
-        } else if (
-          parameter.pattern !== undefined &&
-          parameterPatternIssue(parameter.pattern) !== undefined
-        ) {
-          // A pattern stored before the bound on matching that the bound refuses: it is not run.
-          issues.push({
-            name,
-            message: `The pattern of this parameter is refused and is not run: ${parameterPatternIssue(parameter.pattern) ?? ''} Change the script before running it.`,
-          });
-        } else if (
-          parameter.pattern !== undefined &&
-          !matchesParameterPattern(parameter.pattern, value)
-        ) {
-          issues.push({ name, message: 'The value does not have the expected form.' });
         } else {
+          if (parameter.pattern !== undefined) {
+            const checked = boundedParameterExpression(parameter.pattern);
+            if (typeof checked === 'string') {
+              // A stored pattern that is now refused is not run.
+              issues.push({
+                name,
+                message: `The pattern of this parameter is refused and is not run: ${checked} Change the script before running it.`,
+              });
+              break;
+            }
+            if (patternTest(checked, value) !== true) {
+              issues.push({ name, message: 'The value does not have the expected form.' });
+              break;
+            }
+          }
           values[name] = value;
           env[parameterEnvName(name)] = value;
         }

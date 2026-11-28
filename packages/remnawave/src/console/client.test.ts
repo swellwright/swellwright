@@ -5,6 +5,7 @@ import {
   PanelAuthError,
   PanelRateLimitedError,
   PanelResponseTooLargeError,
+  PanelTimeoutError,
   PanelUnavailableError,
   PanelUnsupportedResponseError,
   PanelUrlError,
@@ -18,6 +19,7 @@ import {
   fakePersonalTexts,
   must,
 } from '../test-support/index.js';
+import { TransportError, type Transport } from '../transport.js';
 import { consoleCatalogue } from './catalogue.js';
 import { ConsoleClient, cutToBytes, allowedHeaders } from './client.js';
 import { type ConsoleRequestInput, prepareConsoleRequest } from './request.js';
@@ -437,6 +439,35 @@ describe('the client of the API console', () => {
     }
   });
 
+  it('scrubs headers before normalizing the media type or cutting a header value', async () => {
+    const token = 'MixedCaseSyntheticCredential';
+    const prefix = 'x'.repeat(190);
+    const client = open(undefined, {
+      token,
+      transport: {
+        get: () =>
+          Promise.resolve({
+            status: 200,
+            headers: {
+              'content-type': `TEXT/${token}`,
+              'x-ratelimit-reset': `${prefix}${token}`,
+            },
+            body: Buffer.from('ok'),
+          }),
+        close() {
+          // The in-memory transport has nothing to close.
+        },
+      },
+    });
+    try {
+      const result = await client.send(prepare('SystemController_getRemnawaveHealth'));
+      assert.equal(result.contentType, 'text/[masked]');
+      assert.equal(result.headers['x-ratelimit-reset'], `${prefix}[masked]`);
+    } finally {
+      client.close();
+    }
+  });
+
   it('shows a page that came in place of JSON as text, and an empty answer as empty', async () => {
     const client = open();
     try {
@@ -516,17 +547,26 @@ describe('the client of the API console', () => {
     }
   });
 
-  it('maps the failures of the network as every read does, and a timeout is not retried', async () => {
-    const client = open(1024 * 1024, { timeoutMs: 100 });
+  it('does not retry a transport timeout but retries a reset before reporting it', async () => {
+    const attempts: string[] = [];
+    const transport: Transport = {
+      get({ url }) {
+        attempts.push(url.pathname);
+        const kind = url.pathname === '/api/nodes' ? 'timeout' : 'reset';
+        return Promise.reject(new TransportError(kind, 'Synthetic transport failure.'));
+      },
+      close() {
+        // The in-memory transport has nothing to close.
+      },
+    };
+    // The real HTTP timeout is tested by the panel client. Here the transport decides the failure,
+    // not a race between a reset and a response timer on a loaded runner.
+    const client = open(undefined, { transport, maxAttempts: 3 });
     try {
-      panel.inject('/api/nodes', { kind: 'hang' });
-      await assert.rejects(
-        client.send(prepare('NodesController_getNodes')),
-        /did not answer within/u,
-      );
-      assert.equal(panel.requests.length, 1);
-      panel.inject('/api/hosts', { kind: 'drop' });
+      await assert.rejects(client.send(prepare('NodesController_getNodes')), PanelTimeoutError);
+      assert.deepEqual(attempts.splice(0), ['/api/nodes']);
       await assert.rejects(client.send(prepare('HostsController_getHosts')), PanelUnavailableError);
+      assert.deepEqual(attempts, ['/api/hosts', '/api/hosts', '/api/hosts']);
     } finally {
       client.close();
     }
