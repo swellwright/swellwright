@@ -8,6 +8,7 @@ import {
   type ImpactReport,
   ImpactReportSchema,
   type JsonPatchOperation,
+  UNREADABLE_DOCUMENT,
 } from '@swellwright/contracts';
 
 import {
@@ -444,6 +445,44 @@ describe('masked values', () => {
       'the value of the proposal is not in the answer',
     );
     assert.ok(!JSON.stringify(report.changes).includes(LITERAL));
+  });
+
+  it('knows the mask of an unreadable document as a mask: the form says masked, and replacing it is a secret change', () => {
+    // A profile whose only mask is the one a string that could not be read becomes.
+    const unmask = (value: unknown): unknown =>
+      JSON.parse(JSON.stringify(value).replace(/\[masked:[0-9a-f]{8}\]/gu, 'plain-value'));
+    const onlyMarker: PanelModel = {
+      ...model,
+      profiles: model.profiles.map((p) =>
+        p.uuid === fleet.profileOne.uuid
+          ? {
+              ...p,
+              config: {
+                ...(unmask(p.config) as object),
+                remarks: UNREADABLE_DOCUMENT,
+              },
+            }
+          : p,
+      ),
+    };
+    const form = editableForm(onlyMarker, 'configProfile', fleet.profileOne.uuid);
+    assert.equal(form.masked, true);
+    // No fingerprint mask is left: the marker is the only mask of the form.
+    assert.doesNotMatch(JSON.stringify(form.editable), /\[masked(?::[0-9a-f]{8})?\]/u);
+    // Kept as it was: no change. Replaced: a change of a secret, named by its path.
+    const kept = structuredClone(form.editable['config']) as Record<string, unknown>;
+    assert.equal(
+      calculate(onlyMarker, 'configProfile', fleet.profileOne.uuid, { config: kept }).changed,
+      false,
+    );
+    const replaced = { ...kept, remarks: LITERAL };
+    const report = calculate(onlyMarker, 'configProfile', fleet.profileOne.uuid, {
+      config: replaced,
+    });
+    const note = report.notes.find((n) => n.code === 'secret_changed');
+    assert.match(String(note?.params['paths']), /remarks/u);
+    assert.ok(report.risk.reasons.some((r) => r.code === 'secret_changed'));
+    assert.ok(!JSON.stringify(report).includes(LITERAL));
   });
 
   it('does not echo any value of a proposal, whatever kind of object it is for', () => {

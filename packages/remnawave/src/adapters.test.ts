@@ -240,6 +240,33 @@ describe('the adapters', () => {
     );
   });
 
+  it('keeps typed header maps valid when the masking budget is spent', () => {
+    const headers = Object.fromEntries(
+      Array.from({ length: 80 }, (_unused, index) => [
+        `X-Test-${String(index)}`,
+        'x'.repeat(60_000),
+      ]),
+    );
+    const squad = must(
+      read(PANEL_ENDPOINTS.externalSquads, {
+        total: 1,
+        externalSquads: fixtures.externalSquads,
+      }).response.externalSquads[0],
+    );
+    const settings = read(
+      PANEL_ENDPOINTS.subscriptionSettings,
+      fixtures.subscriptionSettings,
+    ).response;
+    const external = PanelExternalSquadViewSchema.parse(
+      adaptExternalSquad({ ...squad, responseHeadersAdd: headers }, context),
+    );
+    const subscription = PanelSubscriptionSettingsViewSchema.parse(
+      adaptSubscriptionSettings({ ...settings, customResponseHeaders: headers }, context),
+    );
+    assert.deepEqual(external.responseHeadersAdd, {});
+    assert.deepEqual(subscription.customResponseHeaders, {});
+  });
+
   const token = () =>
     must(read(PANEL_ENDPOINTS.apiTokens, { tokens: fixtures.apiTokens }).response.tokens[0]);
 

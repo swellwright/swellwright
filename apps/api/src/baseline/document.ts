@@ -5,6 +5,7 @@ import {
   type BaselineDocument,
   BaselineDocumentSchema,
   type BaselineIssue,
+  baselineWriteIssues,
   type ValidateBaselineResult,
 } from '@swellwright/contracts';
 import { LineCounter, parseDocument } from 'yaml';
@@ -57,6 +58,10 @@ interface Located {
 }
 
 /**
+ * The parser of a document that is WRITTEN (created, changed, validated, a built-in one): it applies the rules for
+ * writing (`baselineWriteIssues`) on top of the schema. A stored version is read with the schema alone
+ * (`BaselinesService.documentOf`), so a version saved under older rules stays readable and runnable.
+ *
  * Parses YAML (JSON is YAML) and checks the document against the schema, the catalogue and the comparator rules. Every
  * problem comes with the line and column it was found at, so that an editor can underline it. Aliases are refused: a
  * baseline has no use for them and a few of them can expand to a very large document.
@@ -100,21 +105,35 @@ export function parseBaselineSource(source: string): SourceResult {
       ],
     };
   }
-  const result = BaselineDocumentSchema.safeParse(value);
-  if (!result.success) {
-    const locate = (path: readonly PropertyKey[]): Located => {
-      // The node of the path, or of the closest parent that exists in the text.
-      for (let length = path.length; length >= 0; length -= 1) {
-        const node = doc.getIn(path.slice(0, length) as (string | number)[], true) as
-          { range?: [number, number, number] | null } | undefined;
-        const start = node?.range?.[0];
-        if (start !== undefined) {
-          const where = lineCounter.linePos(start);
-          return { line: where.line, column: where.col };
-        }
+  const locate = (path: readonly PropertyKey[]): Located => {
+    // The node of the path, or of the closest parent that exists in the text.
+    for (let length = path.length; length >= 0; length -= 1) {
+      const node = doc.getIn(path.slice(0, length) as (string | number)[], true) as
+        { range?: [number, number, number] | null } | undefined;
+      const start = node?.range?.[0];
+      if (start !== undefined) {
+        const where = lineCounter.linePos(start);
+        return { line: where.line, column: where.col };
       }
-      return { line: null, column: null };
-    };
+    }
+    return { line: null, column: null };
+  };
+  const result = BaselineDocumentSchema.safeParse(value);
+  if (result.success) {
+    // A document written now also meets the rules for writing (a stored version is read with the schema alone).
+    const strict = baselineWriteIssues(result.data);
+    if (strict.length > 0) {
+      return {
+        ok: false,
+        issues: strict.slice(0, 50).map((issue) => ({
+          path: pathText(issue.path),
+          message: issue.message,
+          ...locate(issue.path),
+        })),
+      };
+    }
+  }
+  if (!result.success) {
     return {
       ok: false,
       issues: result.error.issues.slice(0, 50).map((issue: Issue) => ({

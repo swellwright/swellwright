@@ -7,9 +7,15 @@ import {
   durationSeconds,
   type ObservedValue,
   observationKind,
+  REGEX_INPUT_LIMIT,
+  regexIssue,
 } from '@swellwright/contracts';
 
+import { testWithDeadline } from '../common/regex-deadline.js';
 import type { ParsedObservation } from './parse.js';
+
+/** How a `matches` pattern is run: a match, no match, or stopped at its deadline. */
+export type PatternTest = (regex: RegExp, text: string) => boolean | 'timeout';
 
 /** The outcome of one check, before it is stored. */
 export interface CheckOutcome {
@@ -56,6 +62,11 @@ function compareVersions(left: readonly number[], right: readonly number[]): num
 }
 
 const regexCache = new Map<string, RegExp | null>();
+/**
+ * The compiled pattern of a `matches`, or null when it is refused: it does not compile, or matching it could backtrack
+ * for long (`regexIssue`). A stored baseline version was validated under the rules of its day, so the bound is asked
+ * again here, before anything runs on the event loop.
+ */
 function regexOf(source: string): RegExp | null {
   const cached = regexCache.get(source);
   if (cached !== undefined) {
@@ -63,7 +74,7 @@ function regexOf(source: string): RegExp | null {
   }
   let compiled: RegExp | null;
   try {
-    compiled = new RegExp(source, 'mu');
+    compiled = regexIssue(source) === undefined ? new RegExp(source, 'mu') : null;
   } catch {
     compiled = null;
   }
@@ -92,6 +103,8 @@ interface Verdict {
   readonly ok: boolean;
   /** Why not, in a clause that follows "Observed X, " (for example "expected X"). */
   readonly expected: string;
+  /** A pattern was stopped at its deadline: the comparison could not be made. */
+  readonly timedOut?: true;
 }
 
 /** Does `observed` meet `comparator` with `argument`. The document was validated, so the types are right. */
@@ -99,6 +112,8 @@ export function compare(
   comparator: Comparator,
   observed: ObservedValue,
   argument: unknown,
+  /** Runs the pattern of `matches` (tests replace it); the default stops it at a deadline. */
+  test: PatternTest = testWithDeadline,
 ): Verdict {
   switch (comparator) {
     case 'equals':
@@ -118,9 +133,14 @@ export function compare(
     }
     case 'matches': {
       const regex = regexOf(argument as string);
+      const result =
+        typeof observed === 'string' && observed.length <= REGEX_INPUT_LIMIT && regex !== null
+          ? test(regex, observed)
+          : false;
       return {
-        ok: typeof observed === 'string' && regex?.test(observed) === true,
+        ok: result === true,
         expected: `expected to match ${show(argument)}`,
+        ...(result === 'timeout' ? { timedOut: true } : {}),
       };
     }
     case 'atLeast':
@@ -180,6 +200,7 @@ const NOT_OBSERVED_NEEDS_ROOT =
 export function evaluateCheck(
   check: BaselineCheck,
   observation: ParsedObservation | undefined,
+  test: PatternTest = testWithDeadline,
 ): CheckOutcome {
   if (observation === undefined) {
     return {
@@ -230,6 +251,16 @@ export function evaluateCheck(
       message: `${def.title} is not present on the server.`,
     };
   }
+  const fieldDef = def?.fields.find((field) => field.name === check.observe.field);
+  if (value === null && fieldDef?.optional === true) {
+    // A field that the server may be unable to look at: null is "could not look" (no root, an unreadable file), which
+    // is not "nothing there". Not even `absent` can pass on it: an unknown is never a pass (ADR 0045).
+    return {
+      status: 'error',
+      observed: null,
+      message: `The server could not observe "${check.observe.field}" completely.`,
+    };
+  }
   if (value === null && comparator !== 'absent' && comparator !== 'present') {
     // `false`, 0 and an empty list are values. null is "the script did not say" (the tool is missing, it needs root).
     return {
@@ -238,7 +269,32 @@ export function evaluateCheck(
       message: `The server did not report "${check.observe.field}" (the tool may be missing or need root).`,
     };
   }
-  const verdict = compare(comparator, value, argument);
+  if (comparator === 'matches') {
+    if (typeof value === 'string' && value.length > REGEX_INPUT_LIMIT) {
+      return {
+        status: 'error',
+        observed: null,
+        message: `The observed text exceeds the ${String(REGEX_INPUT_LIMIT)} character limit for pattern matching.`,
+      };
+    }
+    if (regexOf(argument as string) === null) {
+      // The pattern is not run (it does not compile, or it could take too long): the check cannot say.
+      return {
+        status: 'error',
+        observed,
+        message: `The pattern ${show(argument)} is refused: ${regexIssue(argument as string) ?? 'it is not valid'}`,
+      };
+    }
+  }
+  const verdict = compare(comparator, value, argument, test);
+  if (verdict.timedOut === true) {
+    // No value in the message: the text the pattern was stopped on is not repeated anywhere.
+    return {
+      status: 'error',
+      observed: null,
+      message: `The pattern ${show(argument)} was too slow (stopped at its deadline, or the time for patterns was spent) and decided nothing.`,
+    };
+  }
   if (verdict.ok) {
     return { status: 'pass', observed, message: null };
   }

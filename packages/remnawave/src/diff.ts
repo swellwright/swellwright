@@ -1,4 +1,5 @@
 import {
+  MASK_PATTERN_SOURCE,
   PANEL_SNAPSHOT_OBJECT_KINDS,
   type PanelDiff,
   type PanelDiffCounts,
@@ -88,7 +89,8 @@ const PEOPLE_KEYS: ReadonlySet<string> = new Set([
 const norm = (key: string): string => key.toLowerCase().replace(/[^a-z0-9]/gu, '');
 
 const FINGERPRINT = /\[masked:[0-9a-f]{8}\]/gu;
-const MASKED = /\[masked(?::[0-9a-f]{8})?\]/u;
+/** Every form of a mask, the whole-document one included (one definition, in `@swellwright/contracts`). */
+const MASKED = new RegExp(MASK_PATTERN_SOURCE, 'u');
 const UUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/giu;
 const WHOLE_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
