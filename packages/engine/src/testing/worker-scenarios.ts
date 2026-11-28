@@ -6,6 +6,7 @@
 
 import assert from 'node:assert/strict';
 import { afterEach, describe, it } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 import type { JsonValue } from '../plan.js';
 import { StepRegistry } from '../registry.js';
 import {
@@ -17,7 +18,14 @@ import {
   type StepContext,
 } from '../step.js';
 import { LockLostError, type RunStore } from '../store.js';
-import { CRASH_POINTS, ShutdownError, Worker, WorkerCrash, type CrashPoint } from '../worker.js';
+import {
+  CRASH_POINTS,
+  ShutdownError,
+  Worker,
+  WorkerCrash,
+  type CrashPoint,
+  type WorkerOptions,
+} from '../worker.js';
 import { FakeClock, node, plan, runId, server, type PlanStep } from './fixtures.js';
 import type { StoreUnderTest } from './store-contract.js';
 
@@ -99,6 +107,37 @@ function gate(): { promise: Promise<void>; open: () => void } {
   return { promise, open };
 }
 
+/** Controls only the shutdown deadlines of one worker, not the timers of the store it is waiting for. */
+class StopDeadlines {
+  private readonly pending = new Set<{ ms: number; expire: () => void }>();
+
+  worker(options: WorkerOptions<null>): Worker<null> {
+    const pending = this.pending;
+    return new (class extends Worker<null> {
+      protected override scheduleStopDeadline(expire: () => void, ms: number): () => void {
+        const deadline = { ms, expire };
+        pending.add(deadline);
+        return () => {
+          pending.delete(deadline);
+        };
+      }
+    })(options);
+  }
+
+  delays(): number[] {
+    return Array.from(this.pending, ({ ms }) => ms);
+  }
+
+  async expire(ms: number): Promise<void> {
+    assert.deepEqual(this.delays(), [ms], 'exactly one shutdown deadline is pending');
+    const [deadline] = this.pending;
+    assert.ok(deadline);
+    deadline.expire();
+    // The race and stop's continuation must run before the test observes the next phase.
+    await setImmediate();
+  }
+}
+
 /**
  * The store as a worker sees it, with one method held at its call until `release` is called: the moment at which a `stop` that
  * arrives finds that call still pending. `entered` settles when the worker has made the call.
@@ -106,6 +145,7 @@ function gate(): { promise: Promise<void>; open: () => void } {
 function held(
   store: RunStore,
   method: 'getSteps' | 'beginStep' | 'checkpointStep',
+  beforeCall?: () => Promise<void>,
 ): { readonly store: RunStore; readonly entered: Promise<void>; readonly release: () => void } {
   const entered = gate();
   const release = gate();
@@ -122,6 +162,9 @@ function held(
       return async (...args: unknown[]): Promise<unknown> => {
         entered.open();
         await release.promise;
+        if (beforeCall !== undefined) {
+          await beforeCall();
+        }
         return bound(...args);
       };
     },
@@ -157,8 +200,9 @@ export function runWorkerScenarios(
       const worker = (
         id: string,
         extra: Partial<ConstructorParameters<typeof Worker<null>>[0]> = {},
-      ): Worker<null> =>
-        new Worker<null>({
+        deadlines?: StopDeadlines,
+      ): Worker<null> => {
+        const options: WorkerOptions<null> = {
           store,
           registry,
           ports: null,
@@ -168,7 +212,9 @@ export function runWorkerScenarios(
           waitBackoffMs: BACKOFF,
           heartbeat: false,
           ...extra,
-        });
+        };
+        return deadlines === undefined ? new Worker(options) : deadlines.worker(options);
+      };
       const submit = async (n: number, planSteps: readonly PlanStep[] = steps): Promise<string> => {
         const run = await store.createRun({
           id: runId(n),
@@ -1139,14 +1185,29 @@ export function runWorkerScenarios(
         );
         const id = await t.submit(1);
         t.clock.advance(1);
-        const a = t.worker('a', { onError: (error) => errors.push(error) });
+        const deadlines = new StopDeadlines();
+        const a = t.worker('a', { onError: (error) => errors.push(error) }, deadlines);
         const running = a.runOnce();
-        await started.promise;
-        await a.stop({ timeoutMs: 20 });
+        await Promise.race([started.promise, running]);
+        const stopping = a.stop({ timeoutMs: 20 });
+        let stopped = false;
+        const completed = stopping.then(() => {
+          stopped = true;
+        });
+        try {
+          await deadlines.expire(20);
+          assert.equal(
+            stopped,
+            true,
+            'an unresponsive step without a pending store call does not delay stop',
+          );
+        } finally {
+          never.open();
+          await Promise.allSettled([running, completed]);
+        }
 
         // `stop` came back while the step is still in hand. When the step returns, the worker is halted: its ports are not
         // touched again (`verify` and `undo` may use what the application closes), and nothing is written.
-        never.open();
         assert.deepEqual(await running, { kind: 'stopped', runId: id });
         assert.deepEqual(touched, []);
         assert.deepEqual(
@@ -1155,47 +1216,104 @@ export function runWorkerScenarios(
         );
         assert.ok(!(await types(t.store, id)).includes('step.succeed'));
         assert.deepEqual(errors, []);
-        assert.throws(() => {
-          a.start();
-        }, /halted/u);
+        try {
+          assert.throws(() => {
+            a.start();
+          }, /halted/u);
+        } finally {
+          await a.stop();
+        }
       });
 
-      it('waits, after the timeout, for a store call that was already on its way, and then refuses every new one', async () => {
-        const t = await setup([{}, {}]);
-        const id = await t.submit(1);
-        t.clock.advance(1);
-        const writing = held(t.store, 'checkpointStep');
-        const errors: unknown[] = [];
-        const a = t.worker('a', { store: writing.store, onError: (error) => errors.push(error) });
-        const running = a.runOnce();
-        const refused = assert.rejects(running, /halted/u);
-        await writing.entered;
+      it(
+        'waits, after the timeout, for a store call that was already on its way, and then refuses every new one',
+        { timeout: 15_000 },
+        async () => {
+          const t = await setup([{}, {}]);
+          const id = await t.submit(1);
+          t.clock.advance(1);
+          // Like a database driver, the store can use its own timer while completing a call.
+          const writing = held(
+            t.store,
+            'checkpointStep',
+            () =>
+              new Promise((resolve) => {
+                setTimeout(resolve, 1);
+              }),
+          );
+          const deadlines = new StopDeadlines();
+          const errors: unknown[] = [];
+          const a = t.worker(
+            'a',
+            { store: writing.store, onError: (error) => errors.push(error) },
+            deadlines,
+          );
+          const running = a.runOnce();
+          await Promise.race([writing.entered, running]);
 
-        // The step is done and its checkpoint is being written. The timeout runs out first (the worker is halted), and the
-        // write lands while `stop` is still waiting for it: it is not left to land after the caller closed the database.
-        const stopping = a.stop({ timeoutMs: 80 });
-        setTimeout(writing.release, 120);
-        await stopping;
-        assert.equal((await t.store.getSteps(id))[0]?.state, 'succeeded');
-        await refused;
-        assert.deepEqual(errors, []);
-      });
+          let stopped = false;
+          const stopping = a.stop({ timeoutMs: 80 }).then(() => {
+            stopped = true;
+          });
+          try {
+            await deadlines.expire(80);
+            assert.deepEqual(deadlines.delays(), [80], 'drain gets its own deadline');
+            assert.equal(stopped, false, 'stop is still waiting for the checkpoint');
+            // Leave the drain deadline pending while the store finishes with its real timers.
+            writing.release();
+            await stopping;
+            assert.deepEqual(
+              (await t.store.getSteps(id)).map((step) => step.state),
+              ['succeeded', 'pending'],
+            );
+            assert.deepEqual(
+              deadlines.delays(),
+              [],
+              'finishing the checkpoint clears the deadline',
+            );
+            await assert.rejects(running, /halted/u);
+            assert.deepEqual(errors, []);
+          } finally {
+            writing.release();
+            await Promise.allSettled([running, stopping]);
+          }
+        },
+      );
 
-      it('does not wait for ever for a store call that does not come back: the second wait is bounded', async () => {
-        const t = await setup([{}, {}]);
-        await t.submit(1);
-        t.clock.advance(1);
-        const writing = held(t.store, 'checkpointStep');
-        const a = t.worker('a', { store: writing.store });
-        const refused = assert.rejects(a.runOnce(), /halted/u);
-        await writing.entered;
+      for (const [timeoutMs, drainMs] of [
+        [20, 20],
+        [12_000, 5_000],
+      ] as const) {
+        it(`stops waiting for a pending checkpoint after a separate ${String(drainMs)} ms drain with timeoutMs=${String(timeoutMs)}`, async () => {
+          const t = await setup([{}, {}]);
+          const id = await t.submit(1);
+          t.clock.advance(1);
+          const writing = held(t.store, 'checkpointStep');
+          const deadlines = new StopDeadlines();
+          const a = t.worker('a', { store: writing.store }, deadlines);
+          const running = a.runOnce();
+          await Promise.race([writing.entered, running]);
 
-        const began = Date.now();
-        await a.stop({ timeoutMs: 20 });
-        assert.ok(Date.now() - began < 1_500, 'stop came back without the call that never did');
-        writing.release();
-        await refused;
-      });
+          let stopped = false;
+          const stopping = a.stop({ timeoutMs }).then(() => {
+            stopped = true;
+          });
+          try {
+            await deadlines.expire(timeoutMs);
+            assert.equal(stopped, false, 'the first deadline alone does not finish stop');
+            await deadlines.expire(drainMs);
+            assert.equal(stopped, true, 'the drain deadline finishes stop');
+            await stopping;
+            assert.equal((await t.store.getSteps(id))[0]?.state, 'running');
+            assert.deepEqual(deadlines.delays(), []);
+            writing.release();
+            await assert.rejects(running, /halted/u);
+          } finally {
+            writing.release();
+            await Promise.allSettled([running, stopping]);
+          }
+        });
+      }
 
       it('claims nothing after it was told to stop, and works again after `start`', async () => {
         const t = await setup([{}]);
