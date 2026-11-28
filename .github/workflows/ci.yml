@@ -70,6 +70,9 @@ jobs:
       - name: Format
         run: pnpm run format
       - name: Lint
+        # Typed ESLint keeps all workspace TypeScript projects in memory.
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm run lint
       - name: Typecheck
         run: pnpm run typecheck
