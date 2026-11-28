@@ -8,6 +8,7 @@ import { after, before, describe, it } from 'node:test';
 import { OBSERVATION_KINDS } from '@swellwright/contracts';
 
 import { findShell } from '../servers/ssh-test-support.js';
+import { evaluateCheck } from './evaluate.js';
 import { parseObservations } from './parse.js';
 import type { PlannedObservation } from './plan.js';
 import { loadObserveScript } from './script.js';
@@ -165,12 +166,13 @@ describe('the observation script, read as text', () => {
     assert.deepEqual([...functions].sort(), [...kinds].sort());
   });
 
-  it('reports every field of the catalogue, and only fields it has', () => {
+  it('reports every non-derived field of the catalogue, and only fields it has', () => {
+    const derived = new Set(['time.sync.skewSeconds', 'iptables.chain.text']);
     for (const def of OBSERVATION_KINDS) {
       const body = functionBody(`obs_${def.kind.replaceAll('.', '_')}`);
       for (const field of def.fields) {
-        if (def.kind === 'time.sync' && field.name === 'skewSeconds') {
-          // The one field that is made by the server of Swellwright, which knows its own clock.
+        if (derived.has(`${def.kind}.${field.name}`)) {
+          // The parser derives these fields; their values are covered by the observation tests.
           continue;
         }
         assert.ok(body.includes(field.name), `${def.kind} reports ${field.name}`);
@@ -189,11 +191,14 @@ describe('the observation script, read as text', () => {
     assert.ok(!/docker[^\n]*inspect[^\n]*\.Config\.Env[^\n]*>/u.test(code));
     const envUse = functionBody('obs_docker_container');
     assert.ok(envUse.includes('{{range .Config.Env}}'));
-    // Of every variable only the name is kept, besides the four that are not secret.
-    assert.ok(envUse.includes('NF { print "n " $1 }'));
+    // Every entry comes as one JSON string, so a line break inside a value cannot start a line of its own.
+    assert.ok(envUse.includes('{{range .Config.Env}}{{println (json .)}}{{end}}'));
+    assert.ok(!envUse.includes('{{println .}}'));
+    // Of every variable only the name is kept, and only when it is a variable name; besides the four that are not secret.
+    assert.ok(envUse.includes('if (name !~ /^[A-Za-z_][A-Za-z0-9_.-]*$/) next'));
     assert.ok(
       envUse.includes(
-        '$1 == "SNI_VERIFICATION" || $1 == "NODE_PORT" || $1 == "NODE_ENV" || $1 == "TZ"',
+        'name == "SNI_VERIFICATION" || name == "NODE_PORT" || name == "NODE_ENV" || name == "TZ"',
       ),
     );
   });
@@ -316,6 +321,16 @@ function buildMachine(options: { root: boolean }): Machine {
   const homeDir = posix(join(root, 'home/deploy'));
   const srvDir = posix(join(root, 'srv'));
   const secretEnv = 'SECRET_KEY=hunter2-this-is-the-node-secret-value';
+  // Values with line breaks whose continuation lines look like `NAME=value`: what docker prints for them is one JSON
+  // string per entry (`\n` written as two characters); the old `{{println .}}` printed the breaks themselves.
+  const multilineEnv = [
+    'SSL_CERT=-----BEGIN CERTIFICATE-----',
+    'LEAKED_NAME=value-fragment-from-a-pem',
+    'MIIBfakecertificatebody',
+    '-----END CERTIFICATE-----',
+  ];
+  const multilineFlag = ['NODE_ENV=production', 'INJECTED_FLAG=1'];
+  const jsonEntry = (entry: string): string => JSON.stringify(entry);
   const answers: Record<string, readonly Answer[]> = {
     id: [['-u', options.root ? '0\n' : '1000\n']],
     uname: [['-r', '6.8.0-36-generic\n']],
@@ -401,8 +416,23 @@ function buildMachine(options: { root: boolean }): Machine {
     ],
     docker: [
       [
-        'container inspect --format {{range .Config.Env}}',
-        `PATH=/usr/bin\n${secretEnv}\nSNI_VERIFICATION=true\nTZ=UTC\nNODE_PORT=62050\n`,
+        'container inspect --format {{range .Config.Env}}{{println .}}',
+        `PATH=/usr/bin\n${secretEnv}\n${multilineEnv.join('\n')}\n${multilineFlag.join('\n')}\nSNI_VERIFICATION=true\nTZ=UTC\nNODE_PORT=62050\n`,
+      ],
+      [
+        'container inspect --format {{range .Config.Env}}{{println (json .)}}',
+        [
+          'PATH=/usr/bin',
+          secretEnv,
+          multilineEnv.join('\n'),
+          multilineFlag.join('\n'),
+          'SNI_VERIFICATION=true',
+          'TZ=UTC',
+          'NODE_PORT=62050',
+        ]
+          .map(jsonEntry)
+          .join('\n')
+          .concat('\n'),
       ],
       [
         'container inspect --format {{.State.Status}}',
@@ -450,7 +480,17 @@ function buildMachine(options: { root: boolean }): Machine {
     root,
     bin,
     work,
-    secrets: [secretKey, shadowHash, 'hunter2-this-is-the-node-secret-value'],
+    secrets: [
+      secretKey,
+      shadowHash,
+      'hunter2-this-is-the-node-secret-value',
+      'LEAKED_NAME',
+      'value-fragment-from-a-pem',
+      'MIIBfakecertificatebody',
+      'BEGIN CERTIFICATE',
+      'INJECTED_FLAG',
+      'production',
+    ],
   };
 }
 
@@ -648,9 +688,12 @@ describe('the observation script against stand-in tools', { skip: !available() }
     });
     assert.equal(fields(25)?.['tag'], '3.4.6');
     assert.equal(fields(25)?.['restartPolicy'], 'always');
+    // Names only: no line of a value, even one that looks like `NAME=value`; a multi-line flag gives its name and no value.
     assert.deepEqual(fields(25)?.['envNames'], [
       'PATH',
       'SECRET_KEY',
+      'SSL_CERT',
+      'NODE_ENV',
       'SNI_VERIFICATION',
       'TZ',
       'NODE_PORT',
@@ -703,7 +746,7 @@ describe('the observation script against stand-in tools', { skip: !available() }
     const { stdout } = runScript(asUser, PLAN);
     const parsed = parseObservations(Buffer.from(stdout), planned());
     assert.equal(parsed.uid, 1000);
-    for (const index of [16, 17, 18, 19, 20, 21, 24, 25, 26, 27, 30, 31]) {
+    for (const index of [12, 13, 14, 16, 17, 18, 19, 20, 21, 24, 25, 26, 27, 30, 31]) {
       assert.equal(
         parsed.observations.get(index)?.status,
         'denied',
@@ -765,6 +808,368 @@ describe('the observation script against stand-in tools', { skip: !available() }
     assert.equal(parsed.observations.get(2)?.fields?.['seconds'], 25_355);
     // The forged marker is in the output only behind "| ".
     assert.ok(!stdout.split('\n').some((line) => line.startsWith('@@swb end 3')));
+  });
+
+  it('reports a failed systemctl or ss as a failed observation, never as "nothing failed" or "nothing listens"', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    // systemctl answers the state and then times out listing the failed units; ss fails with and without -H.
+    makeShim(machine.bin, 'systemctl', [
+      ['is-system-running', 'running\n'],
+      ['--failed', '', 124],
+    ]);
+    makeShim(machine.bin, 'ss', []);
+    const plan = '1\tsystemd.failed\n2\tports.public\n3\tport.listener\tport=22\n';
+    const { stdout } = runScript(machine, plan);
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'systemd.failed', params: {} },
+      { index: 2, kind: 'ports.public', params: {} },
+      { index: 3, kind: 'port.listener', params: { port: '22' } },
+    ]);
+    for (const index of [1, 2, 3]) {
+      assert.equal(parsed.observations.get(index)?.status, 'error', `observation ${String(index)}`);
+    }
+    const check = (kind: string, field: string, expect: Record<string, unknown>) =>
+      evaluateCheck(
+        {
+          id: 'a.b',
+          title: 'A check',
+          category: 'system',
+          severity: 'high',
+          observe: { kind, field },
+          expect,
+        },
+        parsed.observations.get(kind === 'systemd.failed' ? 1 : kind === 'ports.public' ? 2 : 3),
+      ).status;
+    assert.equal(check('systemd.failed', 'failedCount', { atMost: 0 }), 'error');
+    assert.equal(check('ports.public', 'ports', { in: ['tcp/22'] }), 'error');
+    assert.equal(check('port.listener', 'publicly', { equals: false }), 'error');
+  });
+
+  it('does not present missing process names as an empty list without root', () => {
+    const machine = buildMachine({ root: false });
+    machines.push(machine);
+    makeShim(machine.bin, 'ss', [['-H -ltnp', 'LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n']]);
+    const parsed = parseObservations(
+      Buffer.from(runScript(machine, '1\tport.listener\tport=443\n').stdout),
+      [{ index: 1, kind: 'port.listener', params: { port: '443' } }],
+    );
+    const observation = parsed.observations.get(1);
+    assert.equal(observation?.status, 'denied');
+    for (const expect of [{ absent: true }, { notContains: 'haproxy' }] as const) {
+      assert.equal(
+        evaluateCheck(
+          {
+            id: 'port.owner',
+            title: 'Port owner',
+            category: 'network',
+            severity: 'high',
+            observe: { kind: 'port.listener', field: 'processes', params: { port: '443' } },
+            expect,
+          },
+          observation,
+        ).status,
+        'error',
+      );
+    }
+  });
+
+  it('distinguishes missing units and chains from tool failures and deadlines', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    const show = '-p LoadState -p ActiveState -p UnitFileState';
+    makeShim(machine.bin, 'systemctl', [
+      [`show ${show} timeout.service`, '', 124],
+      [`show ${show} bus.service`, '', 1],
+      [`show ${show} missing.service`, 'LoadState=not-found\nActiveState=inactive\n', 1],
+    ]);
+    makeShim(machine.bin, 'iptables', [
+      ['-w 5 -S TIMED', '', 124],
+      ['-w 5 -S FAILED', '', 4],
+      ['-w 5 -S MISSING', '', 1],
+      ['-w 5 -S PRESENT', '', 1],
+      ['-w 5 -S', '-P INPUT ACCEPT\n-N PRESENT\n'],
+    ]);
+    const planned = [
+      ...['timeout.service', 'bus.service', 'missing.service'].map((unit, i) => ({
+        index: i + 1,
+        kind: 'service.state',
+        params: { unit },
+      })),
+      ...['TIMED', 'FAILED', 'MISSING', 'PRESENT'].map((chain, i) => ({
+        index: i + 4,
+        kind: 'iptables.chain',
+        params: { chain },
+      })),
+    ];
+    const plan = planned
+      .map(
+        ({ index, kind, params }) =>
+          `${String(index)}\t${kind}\t${Object.entries(params)
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\t')}`,
+      )
+      .join('\n');
+    const { observations } = parseObservations(
+      Buffer.from(runScript(machine, plan).stdout),
+      planned,
+    );
+    for (const index of [1, 4]) assert.equal(observations.get(index)?.status, 'timeout');
+    for (const index of [2, 5, 7]) assert.equal(observations.get(index)?.status, 'error');
+    for (const index of [3, 6]) {
+      assert.equal(observations.get(index)?.status, 'ok');
+      assert.equal(observations.get(index)?.fields?.['exists'], false);
+    }
+  });
+
+  it('does not report zero after an inode, container-list or jail command fails', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    makeShim(machine.bin, 'df', [
+      [
+        '-P -k /',
+        'Filesystem 1024-blocks Used Available Capacity Mounted on\nfs 100 10 90 10% /\n',
+      ],
+      ['-P -i /', '', 1],
+    ]);
+    makeShim(machine.bin, 'docker', [
+      ['version --format {{.Server.Version}}', '26.0\n'],
+      ['compose version --short', '2.0\n'],
+      ['ps -aq', '', 1],
+    ]);
+    makeShim(machine.bin, 'fail2ban-client', [
+      ['status sshd', '', 1],
+      ['status', 'Jail list: sshd\n'],
+    ]);
+    const { stdout } = runScript(
+      machine,
+      '1\tdisk.usage\tpath=/\n2\tdocker.engine\n3\tfail2ban.status\n',
+    );
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'disk.usage', params: { path: '/' } },
+      { index: 2, kind: 'docker.engine', params: {} },
+      { index: 3, kind: 'fail2ban.status', params: {} },
+    ]);
+    assert.deepEqual(
+      [...parsed.observations.values()].map((row) => row.status),
+      ['error', 'error', 'error'],
+    );
+  });
+
+  it('marks clipped public ports incomplete while preserving their count on the wire', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    makeShim(machine.bin, 'ss', [
+      [
+        '-H -ltnp',
+        Array.from(
+          { length: 200 },
+          (_unused, i) => `LISTEN 0 128 0.0.0.0:${String(10000 + i)} 0.0.0.0:*\n`,
+        ).join('') + 'LISTEN 0 128 0.0.0.0:3306 0.0.0.0:*\n',
+      ],
+      ['-H -lunp', ''],
+    ]);
+    const { stdout } = runScript(machine, '1\tports.public\n');
+    assert.match(stdout, /^\| count=201$/mu);
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'ports.public', params: {} },
+    ]);
+    assert.equal(parsed.observations.get(1)?.status, 'error');
+  });
+
+  it('keeps individual firewall results when their aggregate text is too large', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    const ordinary = '-A DOCKER-USER -j RETURN\n'.repeat(17);
+    const tail = '-A DOCKER-USER -p tcp -m conntrack --ctorigdstport 62050 -j DROP\n';
+    makeShim(machine.bin, 'iptables', [
+      ['-w 5 -S DOCKER-USER', `-N DOCKER-USER\n${ordinary}${tail}`],
+      [
+        '-w 5 -S LONG-CHAIN',
+        `-N LONG-CHAIN\n${'-A LONG-CHAIN -j RETURN -m comment --comment fixture\n'.repeat(40)}`,
+      ],
+    ]);
+    const { stdout } = runScript(
+      machine,
+      '1\tiptables.chain\tchain=DOCKER-USER\n2\tiptables.chain\tchain=LONG-CHAIN\n',
+    );
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'iptables.chain', params: { chain: 'DOCKER-USER' } },
+      { index: 2, kind: 'iptables.chain', params: { chain: 'LONG-CHAIN' } },
+    ]);
+    const chain = parsed.observations.get(1);
+    assert.equal(chain?.status, 'ok');
+    assert.ok(chain.fields);
+    assert.equal(chain.fields['ruleCount'], 18);
+    assert.equal(Array.isArray(chain.fields['rules']) && chain.fields['rules'].length, 18);
+    assert.equal(chain.fields['text'], `${ordinary}${tail}`.replaceAll('\n', ';'));
+    const check = {
+      id: 'fixture.chain',
+      title: 'Fixture',
+      category: 'firewall',
+      severity: 'high',
+      observe: { kind: 'iptables.chain', field: 'text', params: { chain: 'DOCKER-USER' } },
+      expect: { matches: '--ctorigdstport 62050 .*-j DROP' },
+    } as const;
+    assert.equal(evaluateCheck(check, chain).status, 'pass');
+    const long = parsed.observations.get(2);
+    assert.equal(long?.status, 'ok');
+    assert.ok(long.fields);
+    assert.equal(long.fields['ruleCount'], 40);
+    assert.equal(Array.isArray(long.fields['rules']) && long.fields['rules'].length, 40);
+    assert.equal(long.fields['text'], null);
+    assert.equal(
+      evaluateCheck(
+        {
+          id: 'fixture.chain',
+          title: 'Fixture',
+          category: 'firewall',
+          severity: 'high',
+          observe: { kind: 'iptables.chain', field: 'text', params: { chain: 'LONG-CHAIN' } },
+          expect: { absent: true },
+        },
+        long,
+      ).status,
+      'error',
+    );
+  });
+
+  it('does not report an HTTP status when curl fails or reports no response', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    makeShim(machine.bin, 'curl', [
+      [
+        '-s -k -o /dev/null -w %{http_code} --connect-timeout 3 --max-time 6 --noproxy * http://127.0.0.1:81/',
+        '000\n',
+      ],
+      [
+        '-s -k -o /dev/null -w %{http_code} --connect-timeout 3 --max-time 6 --noproxy * --resolve example.com:82:127.0.0.1 https://example.com:82/',
+        '200\n',
+        7,
+      ],
+      [
+        '-s -k -o /dev/null -w %{http_code} --connect-timeout 3 --max-time 6 --noproxy * http://127.0.0.1:83/',
+        '404\n',
+      ],
+    ]);
+    const { stdout } = runScript(
+      machine,
+      '1\thttp.local\tport=81\n2\thttp.local\tport=82\tscheme=https\tsni=example.com\n3\thttp.local\tport=83\n',
+    );
+    const parsed = parseObservations(
+      Buffer.from(stdout),
+      [81, 82, 83].map((port, index) => ({
+        index: index + 1,
+        kind: 'http.local',
+        params: { port },
+      })),
+    );
+    assert.deepEqual(
+      [...parsed.observations.values()].map(({ status }) => status),
+      ['error', 'error', 'ok'],
+    );
+    assert.equal(parsed.observations.get(3)?.fields?.['status'], 404);
+  });
+
+  it('keeps disk usage fields when the filesystem reports no inode percentage', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    makeShim(machine.bin, 'df', [
+      [
+        '-P -k /',
+        'Filesystem 1024-blocks Used Available Capacity Mounted on\nfs 10240 1024 9216 10% /\n',
+      ],
+      ['-P -i /', 'Filesystem Inodes IUsed IFree IUse% Mounted on\nfs - - - - /\n'],
+    ]);
+    const { stdout } = runScript(machine, '1\tdisk.usage\tpath=/\n');
+    const disk = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'disk.usage', params: { path: '/' } },
+    ]).observations.get(1);
+    assert.equal(disk?.status, 'ok');
+    assert.deepEqual(disk.fields, {
+      mountpoint: '/',
+      usedPercent: 10,
+      availableMiB: 9,
+      inodeUsedPercent: null,
+    });
+    assert.equal(
+      evaluateCheck(
+        {
+          id: 'fixture.inodes',
+          title: 'Fixture',
+          category: 'system',
+          severity: 'high',
+          observe: { kind: 'disk.usage', field: 'inodeUsedPercent', params: { path: '/' } },
+          expect: { absent: true },
+        },
+        disk,
+      ).status,
+      'error',
+    );
+  });
+
+  it('rejects clipped sudoers and login account lists instead of evaluating a prefix', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    for (let index = 0; index < 51; index += 1) {
+      writeFileSync(join(machine.root, 'etc/sudoers.d', `test-${String(index)}`), '');
+    }
+    const accounts = Array.from(
+      { length: 101 },
+      (_unused, index) => `test-${String(index)}:x:1000:1000::/:/bin/sh`,
+    );
+    makeShim(machine.bin, 'getent', [['passwd', `${accounts.join('\n')}\n`]]);
+    const { stdout } = runScript(machine, '1\tsudoers\n2\tusers.login\n');
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'sudoers', params: {} },
+      { index: 2, kind: 'users.login', params: {} },
+    ]);
+    assert.deepEqual(
+      [...parsed.observations.values()].map(({ status, fields }) => ({ status, fields })),
+      [
+        { status: 'error', fields: null },
+        { status: 'error', fields: null },
+      ],
+    );
+    assert.match(stdout, /^\| count=101$/mu);
+  });
+
+  it('fails the container observation when its variables cannot be read, and tells an empty list from it', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    const row =
+      'running|remnawave/node:3.4.6|sha256:abcdef0123456789|always|none|2026-11-20T10:00:00.123456789Z\n';
+    const plan = '1\tdocker.container\tname=remnanode\n';
+    const planned1 = [{ index: 1, kind: 'docker.container', params: { name: 'remnanode' } }];
+    const verdict = (parsed: ReturnType<typeof parseObservations>) =>
+      evaluateCheck(
+        {
+          id: 'a.b',
+          title: 'A check',
+          category: 'system',
+          severity: 'high',
+          observe: { kind: 'docker.container', field: 'envNames', params: { name: 'remnanode' } },
+          expect: { notContains: 'DEBUG' },
+        },
+        parsed.observations.get(1),
+      ).status;
+    // The state is read, then the inspection of the variables fails (a timeout, the container removed meanwhile).
+    makeShim(machine.bin, 'docker', [
+      ['container inspect --format {{.State.Status}}', row],
+      ['container inspect --format {{range .Config.Env}}', '', 1],
+    ]);
+    const failed = parseObservations(Buffer.from(runScript(machine, plan).stdout), planned1);
+    assert.equal(failed.observations.get(1)?.status, 'error');
+    assert.equal(verdict(failed), 'error');
+    // A container without variables is a readable, empty list, and the check passes.
+    makeShim(machine.bin, 'docker', [
+      ['container inspect --format {{.State.Status}}', row],
+      ['container inspect --format {{range .Config.Env}}', ''],
+    ]);
+    const empty = parseObservations(Buffer.from(runScript(machine, plan).stdout), planned1);
+    assert.equal(empty.observations.get(1)?.status, 'ok');
+    assert.deepEqual(empty.observations.get(1)?.fields?.['envNames'], []);
+    assert.equal(verdict(empty), 'pass');
   });
 
   it('answers a plan line it cannot read by skipping it, and an unknown kind by 99', () => {

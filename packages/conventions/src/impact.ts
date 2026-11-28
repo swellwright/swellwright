@@ -2,6 +2,7 @@ import {
   type CheckObjectRef,
   type ConventionFinding,
   type ImpactKind,
+  containsMaskText,
   type ImpactMessage,
   type ImpactReport,
   type ImpactRuleId,
@@ -249,7 +250,7 @@ export function editableForm(
   return {
     target: ref,
     editable: form,
-    masked: /\[masked(?::[0-9a-f]{8})?\]/u.test(canonicalJson(form)),
+    masked: containsMaskText(canonicalJson(form)),
   };
 }
 

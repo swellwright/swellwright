@@ -9,6 +9,7 @@ import {
   commandLabel,
   MAX_RUN_SERVERS,
   parameterDefinitionIssues,
+  parameterWriteIssues,
   parameterEnvName,
   type ScriptParameter,
   ScriptParametersSchema,
@@ -161,12 +162,17 @@ describe('parameter definitions', () => {
       [{ ...base, name: 'e', type: 'enum', options: ['a'], default: 'b' }],
       [{ ...base, name: 's', type: 'string', maxLength: 5, pattern: '(' }],
       [{ ...base, name: 's', type: 'string', maxLength: 5, default: 'toolong' }],
-      [{ ...base, name: 's', type: 'string', maxLength: 5, pattern: '[a-z]+', default: '123' }],
     ];
     for (const list of bad) {
       assert.ok(parameterDefinitionIssues(list).length > 0, JSON.stringify(list));
       assert.ok(!ScriptParametersSchema.safeParse(list).success, JSON.stringify(list));
     }
+    // A default that does not match its pattern is a rule for writing (it runs the pattern), not for reading.
+    const mismatch: ScriptParameter[] = [
+      { ...base, name: 's', type: 'string', maxLength: 5, pattern: '[a-z]+', default: '123' },
+    ];
+    assert.ok(parameterWriteIssues(mismatch).length > 0);
+    assert.ok(ScriptParametersSchema.safeParse(mismatch).success);
   });
 
   it('refuse names that could not be an environment variable', () => {

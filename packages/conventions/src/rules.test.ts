@@ -1062,6 +1062,20 @@ describe('panel.token-expiry', () => {
 });
 
 describe('the engine', () => {
+  it('bounds pattern work across subjects in one lint scope and resets for the next lint', () => {
+    const fleet = healthyFleet();
+    const hosts = Array.from({ length: 150 }, (_, index) =>
+      host(index + 1, `x${String(index)}${'x'.repeat(100)}`, null, { address: '' }),
+    );
+    const pack = packOf({}, { match: '(z{64}){64}' });
+    const result = lint({ ...fleet, hosts }, pack);
+    assert.ok(
+      result.failed.some(({ message }) => message === 'Convention pattern work limit exceeded.'),
+    );
+    const next = lint({ ...fleet, hosts: hosts.slice(0, 1) }, pack);
+    assert.deepEqual(next.failed, []);
+  });
+
   it('names findings stably, sorts them most severe first, and counts them', () => {
     const fleet = healthyFleet();
     const model = {

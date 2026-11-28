@@ -16,9 +16,9 @@ import type {
   PanelSubscriptionSettingsView,
   PanelSubscriptionTemplateView,
 } from '@swellwright/contracts';
-import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { stringify as stringifyYaml } from 'yaml';
 
-import { contentHash, maskSecrets, type MaskOptions, maskText } from './mask.js';
+import { contentHash, maskSecrets, type MaskOptions, maskText, readYamlDocuments } from './mask.js';
 import type {
   ApiTokenDtoType,
   BillingNodeDtoType,
@@ -319,11 +319,20 @@ export function adaptInternalSquad(
   });
 }
 
+/** Header maps must keep their contract shape even when the masker refuses an entire input. */
+function maskedHeaders(
+  headers: Record<string, string>,
+  context: AdaptContext,
+): Record<string, string> {
+  const { value } = maskSecrets<unknown>(headers, context);
+  return typeof value === 'string' ? {} : (value as Record<string, string>);
+}
+
 export function adaptExternalSquad(
   dto: ExternalSquadDtoType,
   context: AdaptContext,
 ): PanelExternalSquadView {
-  const headers = maskSecrets(dto.responseHeadersAdd ?? {}, context).value;
+  const headers = maskedHeaders(dto.responseHeadersAdd ?? {}, context);
   const view = {
     uuid: dto.uuid,
     name: dto.name,
@@ -370,12 +379,14 @@ export function maskedYaml(
   }
   try {
     const text = Buffer.from(encoded, 'base64').toString('utf8');
-    const parsed: unknown = parseYaml(text, { schema: 'core', maxAliasCount: 100, strict: true });
-    if (parsed === null || typeof parsed !== 'object') {
+    // Read with bounds and without the parser's log, which quotes the source (see `readYamlDocuments`).
+    const documents = readYamlDocuments(text);
+    const [parsed] = documents ?? [];
+    if (documents?.length !== 1 || parsed === null || typeof parsed !== 'object') {
       return null;
     }
-    const masked = maskSecrets(parsed, context).value;
-    return stringifyYaml(masked, { lineWidth: 0 });
+    const masked = maskSecrets<unknown>(parsed, context).value;
+    return typeof masked === 'string' ? null : stringifyYaml(masked, { lineWidth: 0 });
   } catch {
     return null;
   }
@@ -430,7 +441,7 @@ export function adaptSubscriptionSettings(
     isShowCustomRemarks: dto.isShowCustomRemarks ?? false,
     randomizeHosts: dto.randomizeHosts ?? false,
     customRemarks: dto.customRemarks ?? {},
-    customResponseHeaders: maskSecrets(dto.customResponseHeaders ?? {}, context).value,
+    customResponseHeaders: maskedHeaders(dto.customResponseHeaders ?? {}, context),
     responseRules: maskSecrets(dto.responseRules ?? null, context).value,
     hwidSettings: {
       enabled: dto.hwidSettings?.enabled ?? false,

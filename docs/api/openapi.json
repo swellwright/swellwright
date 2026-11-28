@@ -12837,7 +12837,7 @@
             "const": "string"
           },
           "pattern": {
-            "description": "A regular expression (JavaScript syntax) the whole value must match. Without one any text up to `maxLength` is accepted: it reaches the script quoted, never as shell code.",
+            "description": "A bounded subset of JavaScript regular expressions the whole value must match. Lookaround and back references are not supported. Without a pattern any text up to `maxLength` is accepted: it reaches the script quoted, never as shell code.",
             "type": "string",
             "minLength": 1,
             "maxLength": 200

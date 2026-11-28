@@ -4,10 +4,13 @@ import { describe, it } from 'node:test';
 import {
   BASELINE_CATEGORIES,
   BaselineDocumentSchema,
+  baselineWriteIssues,
   COMPARATORS,
   durationSeconds,
   ExpectationSchema,
+  isObservationPath,
   observationCatalogue,
+  OBSERVATION_PATH_PATTERN,
   observationKind,
   OBSERVATION_KINDS,
   observationParamIssues,
@@ -27,9 +30,12 @@ const check = (overrides: Record<string, unknown> = {}): Record<string, unknown>
 
 const document = (...checks: Record<string, unknown>[]): unknown => ({ schema: 1, checks });
 
+/** The issues of a document as it is written now: the schema and the rules for writing. */
 const issuesOf = (value: unknown): string[] => {
   const result = BaselineDocumentSchema.safeParse(value);
-  return result.success ? [] : result.error.issues.map((issue) => issue.message);
+  return result.success
+    ? baselineWriteIssues(result.data).map((issue) => issue.message)
+    : result.error.issues.map((issue) => issue.message);
 };
 
 describe('the catalogue of observations', () => {
@@ -163,6 +169,65 @@ describe('the comparators', () => {
     assert.ok(regexIssue(['(.*', ')*x'].join('')) !== undefined);
     assert.ok(regexIssue('(a)\\1') !== undefined);
     assert.ok(regexIssue('a'.repeat(201)) !== undefined);
+    // Overlapping alternation under a repeat, and open-ended repeats that compete for the same characters.
+    assert.ok(regexIssue(['(a|', 'a)*b'].join('')) !== undefined);
+    assert.ok(regexIssue(['.*', '.*', '.*x'].join('')) !== undefined);
+    // What the shipped baselines use stays allowed.
+    assert.equal(regexIssue('--ctorigdstport 62050 .*-j DROP'), undefined);
+    assert.equal(regexIssue('(^|;)b(;|$)'), undefined);
+    assert.equal(regexIssue('^\\d+\\.\\d+$'), undefined);
+  });
+});
+
+describe('the path of an observation', () => {
+  const pathDef = observationKind('file.stat');
+  const accepts = (path: string): boolean =>
+    pathDef !== undefined && observationParamIssues(pathDef, { path }).length === 0;
+
+  it('accepts the same language as before: names separated by one slash, a trailing slash allowed', () => {
+    for (const path of ['/', '/etc', '/etc/', '/etc/ssh/sshd_config', '/a/b=c,d:e@f+g-h.i/']) {
+      assert.equal(isObservationPath(path), true, path);
+      assert.equal(accepts(path), true, path);
+    }
+    for (const path of ['', 'etc', '//', '/etc//x', '/a b', "/a'b", '/a;b', '/$x', '/a\nb']) {
+      assert.equal(isObservationPath(path), false, JSON.stringify(path));
+      assert.equal(accepts(path), false, JSON.stringify(path));
+    }
+    // The other rules stay: no `..`, at most 200 characters.
+    assert.equal(accepts('/etc/../shadow'), false);
+    assert.equal(accepts(`/${'a'.repeat(199)}`), true);
+    assert.equal(accepts(`/${'a'.repeat(200)}`), false);
+  });
+
+  it('agrees with the published pattern on generated paths', () => {
+    const pattern = new RegExp(OBSERVATION_PATH_PATTERN, 'u');
+    const alphabet = ['/', 'a', '.', '-', ' ', ';'];
+    let seed = 7;
+    const next = (): number => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed;
+    };
+    for (let round = 0; round < 3000; round += 1) {
+      const length = next() % 12;
+      let path = '';
+      for (let index = 0; index < length; index += 1) {
+        path += alphabet[next() % alphabet.length] ?? '';
+      }
+      assert.equal(isObservationPath(path), pattern.test(path), JSON.stringify(path));
+    }
+  });
+
+  it('decides a long malformed path at once (the old pattern took seconds)', () => {
+    // A name as long as the limit allows, then a character the pattern refuses: the old pattern tried every split.
+    const hostile = [`/${'a'.repeat(198)} `, `/${'a/'.repeat(99)}a `, `/${'a'.repeat(150)}//x`];
+    const pattern = new RegExp(OBSERVATION_PATH_PATTERN, 'u');
+    const started = performance.now();
+    for (const path of hostile) {
+      assert.equal(accepts(path), false);
+      assert.equal(pattern.test(path), false);
+    }
+    assert.ok(performance.now() - started < 200, 'validating took too long');
+    assert.equal(accepts(`/${'a/'.repeat(99)}a`), true);
   });
 });
 
@@ -248,6 +313,38 @@ describe('a baseline document', () => {
     assert.deepEqual(on('ports.public', 'ports', { absent: true }), []);
     // a pattern that could run away is refused
     assert.ok(on('sshd.effective', 'allowusers', { matches: '(a+)+$' }).length > 0);
+  });
+
+  it('reads a stored document with a pattern the rules for writing now refuse, and refuses to write it', () => {
+    const stored = document(
+      check({
+        id: 'users.pattern',
+        observe: { kind: 'sshd.effective', field: 'allowusers' },
+        expect: { matches: ['(a|', 'a)*b'].join('') },
+      }),
+      check(),
+    );
+    // Reading (what a stored version is decoded with) accepts it...
+    const read = BaselineDocumentSchema.parse(stored);
+    // ...writing it now does not, with a sentence that says why and where.
+    const issues = baselineWriteIssues(read);
+    assert.equal(issues.length, 1);
+    const [issue] = issues;
+    assert.ok(issue);
+    assert.deepEqual(issue.path, ['checks', 0, 'expect', 'matches']);
+    assert.match(issue.message, /repeats a part/u);
+    // A pattern that is not even a regular expression is refused by the schema, as it always was.
+    assert.equal(
+      BaselineDocumentSchema.safeParse(
+        document(
+          check({
+            observe: { kind: 'sshd.effective', field: 'allowusers' },
+            expect: { matches: '(' },
+          }),
+        ),
+      ).success,
+      false,
+    );
   });
 
   it('is bounded in size', () => {

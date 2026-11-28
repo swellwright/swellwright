@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import {
   type CreateScriptRequest,
+  type ParameterIssue,
+  parameterWriteIssues,
   type ScriptList,
   ScriptParametersSchema,
   type ScriptSummary,
@@ -17,6 +19,7 @@ import {
   type UpdateScriptRequest,
 } from '@swellwright/contracts';
 import { type Database, Prisma } from '@swellwright/db';
+import { ZodError } from 'zod';
 
 import { AuditService } from '../audit/audit.service.js';
 import { type RequestMeta, requireDatabase } from '../auth/context.js';
@@ -35,7 +38,22 @@ export const sha256Hex = (text: string): string =>
 /** Line endings are made LF when a script is saved: it runs on Linux, and a pasted CRLF would break `sh`. */
 export const normalizeBody = (text: string): string => text.replaceAll('\r\n', '\n');
 
-/** The parameters as stored; a record that does not fit the schema any more is shown as having none. */
+/** Parameter definitions the rules for writing refuse, as the 400 a schema issue gives (path `parameters.<name>`). */
+function invalidDefinitions(issues: readonly ParameterIssue[]): ZodError {
+  return new ZodError(
+    issues.map((issue) => ({
+      code: 'custom' as const,
+      path: issue.name === null ? ['parameters'] : ['parameters', issue.name],
+      message: issue.message,
+    })),
+  );
+}
+
+/**
+ * The parameters as stored, read with the schema (which keeps the rules a stored definition has always met, so a
+ * pattern refused only by the newer bound on matching is still listed); a record that does not fit even that is shown
+ * as having none.
+ */
 function parametersOf(
   row: Pick<ScriptRow, 'name' | 'parameters'>,
   logger: Logger,
@@ -174,6 +192,10 @@ export class ScriptsService implements OnApplicationBootstrap {
   }
 
   async create(actor: Actor, request: CreateScriptRequest, meta: RequestMeta): Promise<ScriptView> {
+    const refused = parameterWriteIssues(request.parameters);
+    if (refused.length > 0) {
+      throw invalidDefinitions(refused);
+    }
     const body = normalizeBody(request.body);
     const bodySha256 = sha256Hex(body);
     try {
@@ -249,6 +271,13 @@ export class ScriptsService implements OnApplicationBootstrap {
     if (request.sudo !== undefined && request.sudo !== current.sudo) {
       data.sudo = request.sudo;
       changed.push('sudo');
+    }
+    if (request.parameters !== undefined) {
+      // A pattern that is stored already may stay (an old script must keep its definitions); a new one meets the rule.
+      const refused = parameterWriteIssues(request.parameters, parametersOf(current, this.logger));
+      if (refused.length > 0) {
+        throw invalidDefinitions(refused);
+      }
     }
     if (
       request.parameters !== undefined &&

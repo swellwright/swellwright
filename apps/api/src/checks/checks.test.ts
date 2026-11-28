@@ -1005,6 +1005,19 @@ describe('the impact calculator over the API', { skip: !databaseUrl }, () => {
     assert.equal(patch.status, 400);
     assert.equal(errorOf(patch).code, 'validation_failed');
     assert.match(errorOf(patch).message, /patch cannot be applied/u);
+    // A small request whose copies double a subtree again and again is a 400, not a process out of memory.
+    const doubling = [
+      { op: 'add', path: '/grow', value: [1, 2, 3, 4] },
+      ...Array.from({ length: 80 }, () => ({ op: 'copy', from: '/grow', path: '/grow/-' })),
+    ];
+    const growing = await booted.owner.post('/panel/impact', {
+      kind: 'configProfile',
+      uuid: profileOne,
+      change: doubling,
+    });
+    assert.equal(growing.status, 400);
+    assert.equal(errorOf(growing).code, 'validation_failed');
+    assert.match(errorOf(growing).message, /limit/u);
     for (const bad of [
       { kind: 'user', uuid: profileOne, change: {} },
       { kind: 'host', uuid: 'not-a-uuid', change: {} },
