@@ -183,6 +183,23 @@ describe('reading a baseline from text', () => {
 describe('the built-in baselines', () => {
   const builtin = loadBuiltinBaselines();
 
+  it('requires an active, enabled node startup unit instead of Docker autonomous restart', () => {
+    const checks = builtin.find((entry) => entry.name === 'node-selfsteal')?.parsed.document.checks;
+    const check = (id: string) => checks?.find((entry) => entry.id === `node.${id}`);
+    assert.deepEqual(check('container-restart-policy')?.expect, { equals: 'no' });
+    for (const [field, value] of [
+      ['active', 'active'],
+      ['enabled', 'enabled'],
+    ] as const) {
+      assert.deepEqual(check(`startup-${field}`)?.observe, {
+        kind: 'service.state',
+        params: { unit: 'sw-node.service' },
+        field,
+      });
+      assert.deepEqual(check(`startup-${field}`)?.expect, { equals: value });
+    }
+  });
+
   it('are the generic one and the node one, valid, with the ids and titles of a reader', () => {
     assert.deepEqual(
       builtin.map((entry) => entry.name),

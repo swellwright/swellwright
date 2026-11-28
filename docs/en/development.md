@@ -70,8 +70,17 @@ layout and accessibility still need the UI level below.
 `pnpm run check` includes tests, but database and POSIX suites deliberately skip if
 their prerequisites are absent. Report the skip counts; do not call that a full acceptance.
 For database work also run `pnpm run db:schema:check`. For installer changes run
-`pnpm run artifacts:test`, `sh -n`, `dash -n` and shellcheck as in CI. DCO is checked by
+`pnpm run artifacts:test`, `sh -n`, `dash -n` and shellcheck as in CI. A changed `install.sh`
+needs a new version: `pnpm run artifacts:build` records it in `releases.json`, and
+`artifacts:check` fails when a recorded version has other bytes, also compared with
+`origin/main` (or `SW_ARTIFACT_BASE_REF`; CI uses the target branch). DCO is checked by
 `bash scripts/check-dco.sh <base> HEAD` for the actual commit range.
+Use a disposable Linux host to validate real firewall and SSH behavior. A non-interactive
+`ssh` step cannot close root or password login; confirm a fresh named-administrator login
+and `sudo id -u` returning `0` from a second window before and after applying the change.
+The enabled rollback timer starts its deadline again after a reboot. Verify that path
+on the disposable host. The separate **Released artifact integrity** workflow uses the
+trusted base verifier and becomes available after it lands on the target branch.
 The `api-compat` CI job currently reports oasdiff changes; it is not a blocking gate.
 The broader tools listed in the design testing document are targets, not all installed gates.
 

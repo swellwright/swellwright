@@ -109,8 +109,9 @@ t_precedence_environment_then_file_then_saved() {
     assert_rc 0
     assert_called "hostnamectl set-hostname env.example.com"
     assert_contains "$R/etc/hosts" "192.0.2.99 env.example.com env"
-    # The file beats the saved port (the step above rewrote the saved configuration: put the old port back).
-    printf "NODE_PORT='1111'\nNODE_DOMAIN='saved.example.com'\n" >"$R/etc/swellwright-node-installer.conf"
+    # A host-only step does not persist a port override. Without a configured node,
+    # the firewall can still use the port specified in the env file.
+    assert_line "$R/etc/swellwright-node-installer.conf" "NODE_PORT='1111'"
     run_inst firewall NODE_DOMAIN=ignored.example.com PANEL_ALLOW_IP=192.0.2.20 SW_ENV_FILE="$T/p.env"
     assert_rc 0
     assert_called "ufw allow from 192.0.2.20 to any port 2222 proto tcp"
@@ -119,7 +120,7 @@ t_precedence_environment_then_file_then_saved() {
 t_saved_configuration_fills_gaps_and_holds_no_secret() {
     run_inst node $NODE_ARGS NODE_DOMAIN=node1.example.com
     assert_rc 1
-    have docker
+    node_acl_ready
     run_inst node $NODE_ARGS
     assert_rc 0
     assert_file "$R/etc/swellwright-node-installer.conf"
@@ -211,7 +212,7 @@ t_prompt_eof_stops_instead_of_looping() {
 }
 
 t_secret_prompt_is_not_logged() {
-    have docker
+    node_acl_ready
     printf '\n%s\n' "$SECRET" >"$T/in"
     run_inst node SW_NONINTERACTIVE=0 SW_TTY_IN="$T/in" SW_TTY_OUT="$T/tty" NODE_DOMAIN=node1.example.com PANEL_ALLOW_IP=192.0.2.20
     assert_rc 0

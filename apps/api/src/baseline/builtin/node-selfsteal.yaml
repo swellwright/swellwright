@@ -286,6 +286,22 @@ checks:
     remediationHint: Run the node installer step "apiacl" (sh install.sh apiacl).
 
   # ---- the node container ----
+  - id: node.startup-active
+    title: The guarded node startup service is active
+    category: services
+    severity: high
+    observe: { kind: service.state, params: { unit: sw-node.service }, field: active }
+    expect: { equals: active }
+    remediationHint: Run the installer step "node" and check the sw-node.service journal.
+
+  - id: node.startup-enabled
+    title: The guarded node startup service is enabled
+    category: services
+    severity: high
+    observe: { kind: service.state, params: { unit: sw-node.service }, field: enabled }
+    expect: { equals: enabled }
+    remediationHint: Run the installer step "node" to register guarded startup with Docker.
+
   - id: node.container-running
     title: The node container is running
     category: node
@@ -295,12 +311,12 @@ checks:
     remediationHint: Run the node installer step "node" (sh install.sh node) and read the container log.
 
   - id: node.container-restart-policy
-    title: The node container starts again after a reboot
+    title: Docker does not restart the node outside guarded startup
     category: node
-    severity: medium
+    severity: high
     observe: { kind: docker.container, params: { name: remnanode }, field: restartPolicy }
-    expect: { in: [always, unless-stopped] }
-    remediationHint: Run the node installer step "node" (sh install.sh node); the compose file sets restart policy.
+    expect: { equals: "no" }
+    remediationHint: Run the installer step "node" to migrate to guarded startup; do not enable Docker restart.
 
   - id: node.container-stable
     title: The node container has run for at least a minute
