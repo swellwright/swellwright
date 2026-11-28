@@ -215,11 +215,21 @@ obs_service_state() {
   have systemctl || return 1
   _u=${P_unit:-}
   [ -n "$_u" ] || return 1
-  _show=$(bounded 5 systemctl show -p LoadState -p ActiveState -p UnitFileState "$_u")
+  _rc=0
+  _show=$(bounded 5 systemctl show -p LoadState -p ActiveState -p UnitFileState "$_u") || _rc=$?
+  case $_rc in 0 | 1) ;; *) return "$_rc" ;; esac
   _load=$(printf '%s\n' "$_show" | sed -n 's/^LoadState=//p')
+  if [ "$_load" = not-found ]; then
+    kv exists no
+  else
+    [ "$_rc" = 0 ] || return "$_rc"
+    case $_load in
+      loaded | masked | stub | merged | bad-setting | error) kv exists yes ;;
+      *) return 1 ;;
+    esac
+  fi
   _act=$(printf '%s\n' "$_show" | sed -n 's/^ActiveState=//p')
   _enb=$(printf '%s\n' "$_show" | sed -n 's/^UnitFileState=//p')
-  if [ "$_load" = loaded ]; then kv exists yes; else kv exists no; fi
   kv active "${_act:-unknown}"
   kv enabled "${_enb:-unknown}"
 }
@@ -241,6 +251,7 @@ addr_of() { printf '%s' "${1%:*}" | sed -e 's/^\[//' -e 's/\]$//'; }
 is_loopback() { case $1 in 127.* | ::1) return 0 ;; *) return 1 ;; esac; }
 
 obs_port_listener() {
+  need_root || return 11
   have ss || return 1
   _port=${P_port:-}
   [ -n "$_port" ] || return 1
@@ -302,12 +313,20 @@ obs_ufw_status() {
 obs_iptables_chain() {
   need_root || return 11
   _chain=${P_chain:-DOCKER-USER}
-  if ! have iptables; then
-    kv exists no
-    return 0
-  fi
-  _out=$(bounded 10 iptables -w 5 -S "$_chain")
-  if [ -z "$_out" ]; then
+  have iptables || return 1
+  if _out=$(bounded 10 iptables -w 5 -S "$_chain"); then
+    [ -n "$_out" ] || return 1
+  else
+    _rc=$?
+    [ "$_rc" = 1 ] || return "$_rc"
+    # Code 1 can mean other errors too. Confirm absence against a successful list.
+    _chains=$(bounded 10 iptables -w 5 -S) || return $?
+    [ -n "$_chains" ] || return 1
+    if printf '%s\n' "$_chains" | awk -v chain="$_chain" '
+      ($1 == "-N" || $1 == "-P") && $2 == chain { found = 1 }
+      END { exit !found }'; then
+      return 1
+    fi
     kv exists no
     return 0
   fi
@@ -319,7 +338,7 @@ obs_iptables_chain() {
   else
     kv ruleCount "$(printf '%s\n' "$_rules" | wc -l | tr -d ' ')"
     printf '%s\n' "$_rules" | while IFS= read -r _r; do kv rules "$_r"; done
-    kv text "$(printf '%s\n' "$_rules" | tr '\n' ';' | cut -b1-2000)"
+    kv text "$(printf '%s\n' "$_rules" | tr '\n' ';')"
   fi
 }
 

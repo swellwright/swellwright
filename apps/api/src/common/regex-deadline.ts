@@ -5,9 +5,7 @@ import {
   Worker,
 } from 'node:worker_threads';
 
-import { configureParameterPatternTest } from '@swellwright/contracts';
-
-// A regular expression that a person wrote (a baseline's `matches`, the pattern of a script parameter) runs under a
+// A baseline's `matches` expression runs under a
 // deadline. The engine of the language backtracks, and an estimate of a pattern's cost (`regexBudgetIssue`) is a first
 // filter, not a guarantee: a pattern it misjudges must not hold the API's event loop. A match in the engine cannot be
 // interrupted from the same thread, so it runs on one worker thread, and the API waits for the answer synchronously
@@ -22,7 +20,7 @@ import { configureParameterPatternTest } from '@swellwright/contracts';
 // callers report as an error, never as a pass.
 //
 // `node:vm` with its `timeout` option stops a match as well, but it starts a watchdog thread for every call (about
-// 0.14 ms each on Windows, ten times the cost of the worker round trip); a check run and a script run make few calls,
+// 0.14 ms each on Windows, ten times the cost of the worker round trip); each check run makes few calls,
 // but a fleet run makes many.
 
 /** The deadline of one match. */
@@ -168,17 +166,10 @@ export function testWithDeadline(
   if (processBudgetSpent()) {
     return 'timeout';
   }
-  const started = performance.now();
-  const charge = (): number => {
-    const spent = performance.now() - started;
-    if (budget !== undefined) {
-      budget.remainingMs -= spent;
-    }
-    return spent;
-  };
   if (runner === undefined) {
+    const starting = performance.now();
     // A start that failed a moment ago is not tried again at once: every call would block for the start time.
-    if (startFailedAt !== undefined && started - startFailedAt < START_BACKOFF_MS) {
+    if (startFailedAt !== undefined && starting - startFailedAt < START_BACKOFF_MS) {
       return 'timeout';
     }
     // Starting blocks too: it is bounded by what the budgets allow and charged to them when it fails.
@@ -186,18 +177,26 @@ export function testWithDeadline(
     runner = start(allowance);
     if (runner === undefined) {
       startFailedAt = performance.now();
-      stalls.push({ at: Date.now(), ms: charge() });
+      const spent = startFailedAt - starting;
+      if (budget !== undefined) {
+        budget.remainingMs -= spent;
+      }
+      stalls.push({ at: Date.now(), ms: spent });
       return 'timeout';
     }
     startFailedAt = undefined;
   }
   const current = runner;
+  const started = performance.now();
   const limit = budget === undefined ? ms : Math.max(1, Math.min(ms, budget.remainingMs));
   const id = nextId;
   nextId = nextId >= 0x3fffffff ? 1 : nextId + 1;
   current.port.postMessage({ id, source: regex.source, flags: regex.flags, text });
-  const answer = answerOf(current, id, performance.now() + limit);
-  const spent = charge();
+  const answer = answerOf(current, id, started + limit);
+  const spent = performance.now() - started;
+  if (budget !== undefined) {
+    budget.remainingMs -= spent;
+  }
   if (answer === undefined) {
     stop(current);
     remember(slow, key, true, MAX_SLOW);
@@ -209,9 +208,20 @@ export function testWithDeadline(
   return result;
 }
 
-/** Makes the worker's program one that never starts (tests of a failed start), or puts the real one back. */
-export function useWorkerThatNeverStartsForTests(never: boolean): void {
-  workerSource = never ? 'setInterval(() => {}, 1000);' : WORKER_SOURCE;
+/** Lets deadline tests control whether a worker acknowledges startup and answers requests. */
+export function useWorkerModeForTests(mode: 'normal' | 'never-ready' | 'never-answers'): void {
+  workerSource =
+    mode === 'normal'
+      ? WORKER_SOURCE
+      : mode === 'never-ready'
+        ? 'setInterval(() => {}, 1000);'
+        : `
+          const { workerData } = require('node:worker_threads');
+          const cell = new Int32Array(workerData.flag);
+          workerData.port.on('message', () => {});
+          Atomics.store(cell, 1, 1);
+          Atomics.notify(cell, 1);
+        `;
   if (runner !== undefined) {
     stop(runner);
   }
@@ -275,7 +285,3 @@ export function resetDeadlineMemory(): void {
   stalls.length = 0;
   startFailedAt = undefined;
 }
-
-// The patterns of script parameters (checked by `@swellwright/contracts` when a script is saved and when a run is
-// asked for) run under the same deadline in the API process. Importing this module sets it.
-configureParameterPatternTest((regex, value) => testWithDeadline(regex, value));

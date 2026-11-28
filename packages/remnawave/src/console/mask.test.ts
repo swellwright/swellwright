@@ -573,6 +573,40 @@ describe('masking for the API console', () => {
     });
   });
 
+  it('does not return unreadable compact documents or disguised mapping keys as plain text', () => {
+    for (const input of [
+      '{"password":"first","password":""}',
+      '{"password":"unfinished"',
+      '["unfinished"',
+      '"mixed key": [unfinished',
+      String.raw`"p\x61ssword": [unfinished`,
+      'pass\u200bword: [unfinished',
+      'pass\u200bword:synthetic-value',
+    ]) {
+      assert.deepEqual(maskConsoleJson({ note: input }, 'standard').value, {
+        note: UNREADABLE_DOCUMENT,
+      });
+      assert.equal(maskConsoleText(input, 'standard').value, UNREADABLE_DOCUMENT);
+    }
+    const result = maskConsoleJson({ note: '{"password":"value","port":443}' }, 'standard');
+    assert.deepEqual(result.value, { note: `{"password":"${MASK}","port":443}` });
+    for (const input of [
+      String.raw`"p\x61ssword": synthetic-value [`,
+      'pass\u200bword: synthetic-value [',
+    ]) {
+      assert.ok(
+        !text(maskConsoleJson({ note: input }, 'standard').value).includes('synthetic-value'),
+      );
+    }
+  });
+
+  it('drops YAML comments from embedded string documents even if no field was masked', () => {
+    assert.deepEqual(
+      maskConsoleJson({ config: 'port: 443\n# synthetic comment\n' }, 'standard').value,
+      { config: 'port: 443\n' },
+    );
+  });
+
   it('does not let an alias of a scalar show a secret under another name', () => {
     const scalar = maskConsoleText('password: &p example-only-secret\nmessage: *p\n', 'standard');
     assert.equal(scalar.value, UNREADABLE_DOCUMENT);

@@ -15,6 +15,7 @@ export * from './plugins.js';
 export * from './regex-budget.js';
 export * from './roles.js';
 export * from './routes.js';
+export * from './safe-pattern.js';
 export * from './servers.js';
 export * from './sessions.js';
 export * from './system.js';

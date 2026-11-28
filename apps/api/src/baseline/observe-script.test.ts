@@ -745,7 +745,7 @@ describe('the observation script against stand-in tools', { skip: !available() }
     const { stdout } = runScript(asUser, PLAN);
     const parsed = parseObservations(Buffer.from(stdout), planned());
     assert.equal(parsed.uid, 1000);
-    for (const index of [16, 17, 18, 19, 20, 21, 24, 25, 26, 27, 30, 31]) {
+    for (const index of [12, 13, 14, 16, 17, 18, 19, 20, 21, 24, 25, 26, 27, 30, 31]) {
       assert.equal(
         parsed.observations.get(index)?.status,
         'denied',
@@ -843,6 +843,82 @@ describe('the observation script against stand-in tools', { skip: !available() }
     assert.equal(check('systemd.failed', 'failedCount', { atMost: 0 }), 'error');
     assert.equal(check('ports.public', 'ports', { in: ['tcp/22'] }), 'error');
     assert.equal(check('port.listener', 'publicly', { equals: false }), 'error');
+  });
+
+  it('does not present missing process names as an empty list without root', () => {
+    const machine = buildMachine({ root: false });
+    machines.push(machine);
+    makeShim(machine.bin, 'ss', [['-H -ltnp', 'LISTEN 0 128 0.0.0.0:443 0.0.0.0:*\n']]);
+    const parsed = parseObservations(
+      Buffer.from(runScript(machine, '1\tport.listener\tport=443\n').stdout),
+      [{ index: 1, kind: 'port.listener', params: { port: '443' } }],
+    );
+    const observation = parsed.observations.get(1);
+    assert.equal(observation?.status, 'denied');
+    for (const expect of [{ absent: true }, { notContains: 'haproxy' }] as const) {
+      assert.equal(
+        evaluateCheck(
+          {
+            id: 'port.owner',
+            title: 'Port owner',
+            category: 'network',
+            severity: 'high',
+            observe: { kind: 'port.listener', field: 'processes', params: { port: '443' } },
+            expect,
+          },
+          observation,
+        ).status,
+        'error',
+      );
+    }
+  });
+
+  it('distinguishes missing units and chains from tool failures and deadlines', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    const show = '-p LoadState -p ActiveState -p UnitFileState';
+    makeShim(machine.bin, 'systemctl', [
+      [`show ${show} timeout.service`, '', 124],
+      [`show ${show} bus.service`, '', 1],
+      [`show ${show} missing.service`, 'LoadState=not-found\nActiveState=inactive\n', 1],
+    ]);
+    makeShim(machine.bin, 'iptables', [
+      ['-w 5 -S TIMED', '', 124],
+      ['-w 5 -S FAILED', '', 4],
+      ['-w 5 -S MISSING', '', 1],
+      ['-w 5 -S PRESENT', '', 1],
+      ['-w 5 -S', '-P INPUT ACCEPT\n-N PRESENT\n'],
+    ]);
+    const planned = [
+      ...['timeout.service', 'bus.service', 'missing.service'].map((unit, i) => ({
+        index: i + 1,
+        kind: 'service.state',
+        params: { unit },
+      })),
+      ...['TIMED', 'FAILED', 'MISSING', 'PRESENT'].map((chain, i) => ({
+        index: i + 4,
+        kind: 'iptables.chain',
+        params: { chain },
+      })),
+    ];
+    const plan = planned
+      .map(
+        ({ index, kind, params }) =>
+          `${String(index)}\t${kind}\t${Object.entries(params)
+            .map(([key, value]) => `${key}=${value}`)
+            .join('\t')}`,
+      )
+      .join('\n');
+    const { observations } = parseObservations(
+      Buffer.from(runScript(machine, plan).stdout),
+      planned,
+    );
+    for (const index of [1, 4]) assert.equal(observations.get(index)?.status, 'timeout');
+    for (const index of [2, 5, 7]) assert.equal(observations.get(index)?.status, 'error');
+    for (const index of [3, 6]) {
+      assert.equal(observations.get(index)?.status, 'ok');
+      assert.equal(observations.get(index)?.fields?.['exists'], false);
+    }
   });
 
   it('fails the container observation when its variables cannot be read, and tells an empty list from it', () => {

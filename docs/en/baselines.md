@@ -42,6 +42,8 @@ checks:
 
 A pattern runs in the API process, so one that could make the engine backtrack for long is refused: a repetition of a part that has choices of its own (`(a|b)*` where the branches can begin alike, `(a+)+`, `(a?)*`), or several open-ended repetitions that can take the same characters as what follows them (`.*.*x`, `.*a.*b`). A repetition that the next character decides is fine: `^\d+\.\d+$`, `PermitRootLogin\s+no`, `--ctorigdstport 62050 .*-j DROP`. The pattern of a version saved before this rule is checked again when it runs, and a refused one makes the check `error`. Whatever the check says, a pattern also runs under a deadline of 50 ms: a match that takes longer is stopped and the check is `error`. All the patterns of one run share 300 ms, and a pattern that was stopped once is not run again; the checks past that are `error` as well.
 
+Lookbehind is not supported. If the text passed to `matches` exceeds 1,000 characters, the check reports `error` without matching a truncated prefix. A denied or failed observation (for example, reading listener processes without root or querying an unavailable firewall tool) is also `error`, not evidence that the resource is absent.
+
 The editor checks the whole document as you type and underlines what is wrong: an unknown kind or field, a parameter the kind does not take, a comparator that does not fit the type of the field (`atMost` on a list).
 
 ### What a result can be

@@ -468,6 +468,38 @@ describe('the client of the API console', () => {
     }
   });
 
+  it('scrubs a credential inside a decoded YAML template at every byte alignment', async () => {
+    const client = open();
+    try {
+      for (const prefix of ['', 'x', 'xx']) {
+        const value = {
+          encodedTemplateYaml: Buffer.from(`name: ${prefix}${panel.token}\nport: 443\n`).toString(
+            'base64',
+          ),
+        };
+        panel.inject(
+          '/api/system/health',
+          {
+            kind: 'raw',
+            contentType: 'application/json',
+            body: JSON.stringify(value),
+          },
+          1,
+        );
+        const result = await client.send(prepare('SystemController_getRemnawaveHealth'));
+        const body = JSON.parse(result.body) as { encodedTemplateYaml: string };
+        const decoded = Buffer.from(body.encodedTemplateYaml, 'base64').toString('utf8');
+        assert.ok(
+          !decoded.includes(panel.token),
+          `credential retained after ${String(prefix.length)} prefix bytes`,
+        );
+        assert.match(decoded, /port: 443/u);
+      }
+    } finally {
+      client.close();
+    }
+  });
+
   it('shows a page that came in place of JSON as text, and an empty answer as empty', async () => {
     const client = open();
     try {

@@ -3,7 +3,6 @@ import { describe, it } from 'node:test';
 
 import {
   checkParameterValues,
-  configureParameterPatternTest,
   parameterDefinitionIssues,
   parameterWriteIssues,
   ScriptParametersSchema,
@@ -16,6 +15,28 @@ import { REGEX_INPUT_LIMIT, regexBudgetIssue } from './regex-budget.js';
 const join = (...parts: string[]): string => parts.join('');
 
 describe('the bound on a regular expression', () => {
+  it('rejects an unfinished regex construct without scanning it again', (t) => {
+    const unfinished = ['(?<', String.raw`\p{`, String.raw`\k<`];
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- preserves the receiver via call()
+    const indexOf = String.prototype.indexOf;
+    let scans = 0;
+    t.mock.method(
+      String.prototype,
+      'indexOf',
+      function (this: string, needle: string, from?: number): number {
+        if (unfinished.includes(this)) {
+          scans += 1;
+          assert.ok(scans <= 3, 'the reader reset its position and scanned again');
+        }
+        return indexOf.call(this, needle, from);
+      },
+    );
+    for (const pattern of unfinished) assert.ok(regexBudgetIssue(pattern) !== undefined);
+  });
+
+  it('refuses lookbehind', () => {
+    assert.match(regexBudgetIssue('(?<=prefix)suffix') ?? '', /lookbehind/iu);
+  });
   it('refuses a repetition of a part that has choices of its own', () => {
     for (const source of [
       join('(a|', 'a)*b'),
@@ -147,6 +168,14 @@ describe('the pattern of a script parameter', () => {
     pattern,
   });
 
+  it('does not match script patterns that use back references or lookbehind', () => {
+    for (const pattern of [String.raw`(a)\1`, String.raw`(?<letter>a)\k<letter>`, 'a(?<=a)']) {
+      assert.ok(parameterPatternIssue(pattern) !== undefined);
+      assert.ok(parameterWriteIssues([parameter(pattern)]).length > 0);
+      assert.equal(checkParameterValues([parameter(pattern)], { p: 'aa' }).ok, false);
+    }
+  });
+
   it('is refused when matching a value could take long', () => {
     const slow = join('(a|', 'a)*');
     assert.ok(parameterPatternIssue(slow) !== undefined);
@@ -182,19 +211,7 @@ describe('the pattern of a script parameter', () => {
     assert.match(parameterWriteIssues([updated], [stored])[0]?.message ?? '', /repeats a part/u);
   });
 
-  it('treats a match stopped at the deadline as a value that does not match', () => {
-    configureParameterPatternTest(() => 'timeout');
-    try {
-      assert.equal(
-        checkParameterValues([parameter('[a-z0-9@.-]+\\.service')], { p: 'nginx.service' }).ok,
-        false,
-      );
-    } finally {
-      configureParameterPatternTest((regex, value) => regex.test(value));
-    }
-  });
-
-  it('reads stored definitions without running a pattern; a write checks the default under the runner', () => {
+  it('reads stored definitions without matching and validates a changed default', () => {
     const withDefault: ScriptParameter = {
       name: 'p',
       label: 'P',
@@ -204,28 +221,11 @@ describe('the pattern of a script parameter', () => {
       pattern: '[a-z]+',
       default: 'abc',
     };
-    let calls = 0;
-    // As when the process's budget for patterns is spent: every run of a pattern answers `timeout`.
-    configureParameterPatternTest(() => {
-      calls += 1;
-      return 'timeout';
-    });
-    try {
-      // Reading: the schema never runs the pattern, so the definition is read whatever the runner says.
-      assert.equal(ScriptParametersSchema.safeParse([withDefault]).success, true);
-      assert.deepEqual(parameterDefinitionIssues([withDefault]), []);
-      assert.equal(calls, 0, 'a read ran a pattern');
-      // An unrelated save: the stored pattern and default are not checked again.
-      assert.deepEqual(parameterWriteIssues([withDefault], [withDefault]), []);
-      assert.equal(calls, 0);
-      // A new default is checked, and a check that could not be decided is refused with a sentence that says so.
-      const changed = parameterWriteIssues([{ ...withDefault, default: 'xyz' }], [withDefault]);
-      assert.equal(calls, 1);
-      assert.match(changed[0]?.message ?? '', /could not be checked against the pattern in time/u);
-    } finally {
-      configureParameterPatternTest((regex, value) => regex.test(value));
-    }
-    // With a runner that answers, a default that does not match is refused on a write.
+    const stored = { ...withDefault, default: '123' };
+    assert.equal(ScriptParametersSchema.safeParse([stored]).success, true);
+    assert.deepEqual(parameterDefinitionIssues([stored]), []);
+    assert.deepEqual(parameterWriteIssues([stored], [stored]), []);
+    assert.deepEqual(parameterWriteIssues([withDefault], [stored]), []);
     assert.match(
       parameterWriteIssues([{ ...withDefault, default: '123' }])[0]?.message ?? '',
       /does not match/u,
@@ -244,5 +244,15 @@ describe('the pattern of a script parameter', () => {
       p: 'nginx.service',
     });
     assert.equal(check.ok, true);
+  });
+
+  it('uses whole-value Unicode matching and rejects malformed Unicode syntax', () => {
+    const smile = parameter(String.raw`\uD83D\uDE00+`);
+    assert.equal(checkParameterValues([smile], { p: '😀😀' }).ok, true);
+    assert.equal(checkParameterValues([smile], { p: 'x😀' }).ok, false);
+    assert.equal(checkParameterValues([parameter('x{1000}')], { p: 'x'.repeat(1000) }).ok, true);
+    for (const pattern of ['a{', 'a]', String.raw`\-`, String.raw`\00`]) {
+      assert.ok(parameterPatternIssue(pattern) !== undefined);
+    }
   });
 });

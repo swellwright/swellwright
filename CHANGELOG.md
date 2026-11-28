@@ -68,6 +68,7 @@ All notable changes are documented here. The format follows [Keep a Changelog](h
 - Brand assets (animated banner, workflow and overview diagrams, logo, social preview), English and Russian README, support policy, release-notes categories; a single-tone cyan mark (`LogoMark`, `packages/ui`) used everywhere, replacing the earlier two-tone, filled badge style.
 
 ### Fixed
+- Harden embedded document masking and scrub credentials inside decoded YAML templates. Use a bounded non-backtracking matcher for script parameters instead of the native regex engine. Baseline checks distinguish missing data from denied, timed-out or failed observations, reject lookbehind and over-limit match input, and account for worker startup separately from match time.
 - Make masking work limits testable without wall-clock assertions, and wait for the permission test's baseline run before reusing the same server fixture.
 - Bound repeated traversal of shared containers separately from ordinary masking and fail closed when a YAML alias crosses masking contexts. The API console scrubs header values before trimming them or normalizing the media type. Script parameter patterns cannot escape the whole-value anchors; a new default must use a pattern that can be checked.
 - Security closures from the full review of 2026-11-25 (ADR 0041, 0045 and 0046 have notes of 2026-11-26):

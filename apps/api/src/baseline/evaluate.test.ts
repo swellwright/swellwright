@@ -193,6 +193,20 @@ describe('the status of a check', () => {
     );
   });
 
+  it('reports regex input over the defensive limit as unobserved, not a mismatch', () => {
+    let matches = 0;
+    const test = (): boolean => {
+      matches += 1;
+      return true;
+    };
+    const check = make('iptables.chain', 'text', { matches: '^x+$' }, 'high');
+    assert.equal(evaluateCheck(check, observed({ text: 'x'.repeat(1000) }), test).status, 'pass');
+    const result = evaluateCheck(check, observed({ text: 'x'.repeat(1001) }), test);
+    assert.equal(result.status, 'error');
+    assert.equal(result.observed, null);
+    assert.equal(matches, 1);
+  });
+
   it('does not run a stored pattern that could backtrack for long, and says why', () => {
     // Saved under older rules: a version of a baseline is immutable, so the evaluator asks again. The patterns are built
     // from parts so that no analyser takes them for patterns this test runs.

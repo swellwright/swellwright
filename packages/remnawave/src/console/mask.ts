@@ -66,14 +66,19 @@ export const CONSOLE_PERSONAL_KEYS: readonly string[] = [
 
 export type ConsoleMaskProfile = 'standard' | 'personal';
 
-function optionsFor(profile: ConsoleMaskProfile, key: MaskOptions['fingerprintKey']): MaskOptions {
+function optionsFor(
+  profile: ConsoleMaskProfile,
+  key: MaskOptions['fingerprintKey'],
+  scrubDecodedYaml?: MaskOptions['scrubDecodedYaml'],
+): MaskOptions {
   return profile === 'personal'
     ? {
         fingerprintKey: key,
         extraSecretKeys: [...CONSOLE_ACCESS_KEYS, ...CONSOLE_PERSONAL_KEYS],
         people: 'off',
+        scrubDecodedYaml,
       }
-    : { fingerprintKey: key, extraSecretKeys: CONSOLE_ACCESS_KEYS };
+    : { fingerprintKey: key, extraSecretKeys: CONSOLE_ACCESS_KEYS, scrubDecodedYaml };
 }
 
 /** Masks a parsed JSON answer. The input is not changed. */
@@ -81,8 +86,9 @@ export function maskConsoleJson(
   value: unknown,
   profile: ConsoleMaskProfile,
   fingerprintKey?: MaskOptions['fingerprintKey'],
+  scrubDecodedYaml?: MaskOptions['scrubDecodedYaml'],
 ): Masked<unknown> {
-  return maskSecrets(value, optionsFor(profile, fingerprintKey));
+  return maskSecrets(value, optionsFor(profile, fingerprintKey, scrubDecodedYaml));
 }
 
 const isContainer = (value: unknown): value is object =>
@@ -99,8 +105,9 @@ export function maskConsoleText(
   value: string,
   profile: ConsoleMaskProfile,
   fingerprintKey?: MaskOptions['fingerprintKey'],
+  scrubDecodedYaml?: MaskOptions['scrubDecodedYaml'],
 ): Masked<string> {
-  const options = optionsFor(profile, fingerprintKey);
+  const options = optionsFor(profile, fingerprintKey, scrubDecodedYaml);
   const documents = readYamlDocuments(value);
   if (documents?.some(isContainer) === true) {
     let count = 0;

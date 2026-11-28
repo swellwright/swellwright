@@ -1,19 +1,16 @@
 import assert from 'node:assert/strict';
 import { beforeEach, describe, it } from 'node:test';
 
-import {
-  type BaselineCheck,
-  checkParameterValues,
-  type ScriptParameter,
-} from '@swellwright/contracts';
+import type { BaselineCheck } from '@swellwright/contracts';
 
 import { evaluateCheck } from '../baseline/evaluate.js';
 import {
   deadlineBudget,
   REGEX_DEADLINE_MS,
   resetDeadlineMemory,
+  RUN_BUDGET_MS,
   testWithDeadline,
-  useWorkerThatNeverStartsForTests,
+  useWorkerModeForTests,
 } from './regex-deadline.js';
 
 // The slow patterns are built from parts, so that no analyser takes them for patterns this test runs in its process;
@@ -28,45 +25,55 @@ describe('a pattern under a deadline', () => {
     resetDeadlineMemory();
   });
 
-  it('does not let deadlines add up: 300 distinct slow patterns in one run end within about a second', async () => {
-    const gaps: number[] = [];
-    let last = performance.now();
-    const timer = setInterval(() => {
-      const now = performance.now();
-      gaps.push(now - last);
-      last = now;
-    }, 10);
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    const budget = deadlineBudget();
-    const test = (regex: RegExp, text: string): boolean | 'timeout' =>
-      testWithDeadline(regex, text, REGEX_DEADLINE_MS, budget);
-    const started = performance.now();
-    const statuses = Array.from({ length: 300 }, (_unused, index) => {
-      const check: BaselineCheck = {
-        id: `slow.n${String(index)}`,
-        title: 'A slow check',
-        category: 'system',
-        severity: 'high',
-        observe: { kind: 'sshd.effective', field: 'allowusers' },
-        expect: { matches: slowPattern(index).source },
-      };
-      return evaluateCheck(
-        check,
-        { index: 1, kind: 'sshd.effective', status: 'ok', fields: { allowusers: hostile } },
-        test,
-      ).status;
-    });
-    const took = performance.now() - started;
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    clearInterval(timer);
-    assert.ok(statuses.every((status) => status === 'error'));
-    assert.ok(took < 1_200, `the run blocked for ${took.toFixed(0)} ms`);
-    assert.ok(
-      Math.max(...gaps) < 1_300,
-      `the timer stalled for ${Math.max(...gaps).toFixed(0)} ms`,
+  it('starts at most one run budget of unanswered comparisons', (t) => {
+    useWorkerModeForTests('never-answers');
+    let time = 0;
+    const waits: number[] = [];
+    t.mock.method(performance, 'now', () => time);
+    t.mock.method(
+      Atomics,
+      'wait',
+      (_cell: Int32Array, index: number, _expected: number, limit: number) => {
+        if (index === 1) return 'ok';
+        waits.push(limit);
+        time += limit;
+        return 'timed-out';
+      },
     );
-    // An ordinary pattern is unaffected afterwards (a new run has a new budget).
-    assert.equal(testWithDeadline(/^[1-6]$/mu, '5', REGEX_DEADLINE_MS, deadlineBudget()), true);
+    try {
+      const budget = deadlineBudget();
+      const test = (regex: RegExp, text: string): boolean | 'timeout' =>
+        testWithDeadline(regex, text, REGEX_DEADLINE_MS, budget);
+      const statuses = Array.from({ length: 300 }, (_unused, index) => {
+        const check: BaselineCheck = {
+          id: `slow.n${String(index)}`,
+          title: 'An unanswered check',
+          category: 'system',
+          severity: 'high',
+          observe: { kind: 'sshd.effective', field: 'allowusers' },
+          expect: { matches: `^user${String(index)}$` },
+        };
+        return evaluateCheck(
+          check,
+          { index: 1, kind: 'sshd.effective', status: 'ok', fields: { allowusers: 'user' } },
+          test,
+        ).status;
+      });
+      assert.ok(statuses.every((status) => status === 'error'));
+      assert.deepEqual(
+        waits,
+        Array<unknown>(RUN_BUDGET_MS / REGEX_DEADLINE_MS).fill(REGEX_DEADLINE_MS),
+      );
+      assert.equal(budget.remainingMs, 0);
+      // A new run with a different pattern can still submit a comparison.
+      assert.equal(
+        testWithDeadline(/^new$/u, 'new', REGEX_DEADLINE_MS, deadlineBudget()),
+        'timeout',
+      );
+      assert.equal(waits.length, RUN_BUDGET_MS / REGEX_DEADLINE_MS + 1);
+    } finally {
+      useWorkerModeForTests('normal');
+    }
   });
 
   it('never takes a late wake-up of one request for the answer to the next (thousands of back-to-back calls)', () => {
@@ -82,7 +89,7 @@ describe('a pattern under a deadline', () => {
   });
 
   it('charges a failed start to the budgets and does not try again at once', () => {
-    useWorkerThatNeverStartsForTests(true);
+    useWorkerModeForTests('never-ready');
     try {
       const budget = deadlineBudget();
       let started = performance.now();
@@ -95,10 +102,33 @@ describe('a pattern under a deadline', () => {
       assert.equal(testWithDeadline(/^c$/u, 'c', REGEX_DEADLINE_MS, deadlineBudget()), 'timeout');
       assert.ok(performance.now() - started < 20, 'a start was tried again at once');
     } finally {
-      useWorkerThatNeverStartsForTests(false);
+      useWorkerModeForTests('normal');
       resetDeadlineMemory();
     }
     assert.equal(testWithDeadline(/^a$/u, 'a'), true);
+  });
+
+  it('does not spend the match budget on a successful cold start', (t) => {
+    useWorkerModeForTests('normal');
+    let ticks = 0;
+    let starts = 0;
+    t.mock.method(performance, 'now', () => ticks++);
+    const wait = Atomics.wait;
+    t.mock.method(
+      Atomics,
+      'wait',
+      (cell: Int32Array, index: number, expected: number, timeout?: number) => {
+        if (index === 1) {
+          starts += 1;
+          ticks += 100;
+        }
+        return wait(cell, index, expected, timeout);
+      },
+    );
+    const budget = deadlineBudget();
+    assert.equal(testWithDeadline(/^first$/u, 'first', REGEX_DEADLINE_MS, budget), true);
+    assert.equal(starts, 1);
+    assert.ok(budget.remainingMs > 250, 'the synthetic startup delay used the match budget');
   });
 
   it('answers a pattern that was stopped once at once afterwards', () => {
@@ -186,19 +216,5 @@ describe('a pattern under a deadline', () => {
     }
     const took = performance.now() - started;
     assert.ok(took < 1_000, `10,000 calls took ${took.toFixed(0)} ms`);
-  });
-
-  it('refuses a script parameter value whose pattern is stopped (the API sets the deadline for contracts)', () => {
-    // `(a|aa)+` is refused by the estimate already; a pattern the estimate passes is checked through the same runner.
-    const parameter: ScriptParameter = {
-      name: 'p',
-      label: 'P',
-      type: 'string',
-      required: true,
-      maxLength: 1000,
-      pattern: '[a-z]+\\.service',
-    };
-    assert.equal(checkParameterValues([parameter], { p: 'nginx.service' }).ok, true);
-    assert.equal(checkParameterValues([parameter], { p: 'nginx' }).ok, false);
   });
 });

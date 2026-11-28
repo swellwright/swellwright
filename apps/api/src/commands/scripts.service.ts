@@ -23,8 +23,6 @@ import { ZodError } from 'zod';
 
 import { AuditService } from '../audit/audit.service.js';
 import { type RequestMeta, requireDatabase } from '../auth/context.js';
-// Sets the deadline under which the patterns of script parameters run in this process.
-import '../common/regex-deadline.js';
 import { type Actor } from '../servers/servers.service.js';
 import { DATABASE } from '../tokens.js';
 import { loadBuiltinScripts } from './builtin-scripts.js';

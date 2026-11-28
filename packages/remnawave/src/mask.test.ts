@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { canonicalJson, contentHash, MASK, maskSecrets, maskText } from './mask.js';
+import {
+  canonicalJson,
+  contentHash,
+  MASK,
+  maskSecrets,
+  maskText,
+  UNREADABLE_DOCUMENT,
+} from './mask.js';
 
 const KEY = 'a-test-key-for-fingerprints';
 /** The character a URL with credentials has before its host, and PEM lines: kept out of the literals. */
@@ -185,7 +192,7 @@ describe('masking secrets', () => {
     assert.ok(out.includes('visible'));
     assert.equal(count, 2);
     // A string that only looks like JSON is left alone.
-    assert.equal(maskSecrets({ x: '{ not json' }).value.x, '{ not json');
+    assert.equal(maskSecrets({ x: '{ not json' }).value.x, UNREADABLE_DOCUMENT);
     // A document without a secret is returned as it was (not rewritten).
     const plain = '{ "a" : 1 }';
     assert.equal(maskSecrets({ x: plain }).value.x, plain);

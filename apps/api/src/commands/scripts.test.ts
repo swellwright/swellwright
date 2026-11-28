@@ -3,13 +3,8 @@ import 'reflect-metadata';
 import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
-import {
-  configureParameterPatternTest,
-  ScriptListSchema,
-  ScriptViewSchema,
-} from '@swellwright/contracts';
+import { ScriptListSchema, ScriptViewSchema } from '@swellwright/contracts';
 
-import { testWithDeadline } from '../common/regex-deadline.js';
 import { databaseUrl, errorCode } from '../test-support.js';
 import { Harness, eventsOf } from './commands-test-support.js';
 
@@ -193,7 +188,7 @@ describe('the script library', { skip: !databaseUrl }, () => {
     await client.script.delete({ where: { id: row.id } });
   });
 
-  it('reads a stored script without running a pattern, even when the time for patterns is spent', async () => {
+  it('keeps a stored default on unrelated edits but checks a replacement', async () => {
     const client = h.instance.isolated.database.client;
     const parameters = [
       {
@@ -220,12 +215,6 @@ describe('the script library', { skip: !databaseUrl }, () => {
         bodySha256: '0'.repeat(64),
       },
     });
-    // As when the process's budget for patterns is spent: every run of a pattern answers `timeout`, and is counted.
-    let calls = 0;
-    configureParameterPatternTest(() => {
-      calls += 1;
-      return 'timeout';
-    });
     try {
       const shown = ScriptViewSchema.parse((await h.observer.get(`/scripts/${row.id}`)).body);
       assert.deepEqual(
@@ -236,27 +225,22 @@ describe('the script library', { skip: !databaseUrl }, () => {
       assert.equal(listed.scripts.find((script) => script.id === row.id)?.parameters.length, 2);
       // An unrelated save keeps every definition.
       const saved = await h.operator.call('PATCH', `/scripts/${row.id}`, {
-        description: 'Saved while the time for patterns is spent.',
+        description: 'Saved without replacing the default.',
         parameters: shown.parameters,
       });
       assert.equal(saved.status, 200, JSON.stringify(saved.body));
       assert.equal(ScriptViewSchema.parse(saved.body).parameters.length, 2);
-      assert.equal(calls, 0, 'reading or saving unchanged definitions ran a pattern');
-      // A new default cannot be checked now: it is refused, saying so, and nothing is lost.
+      // A new default that does not match is refused, and nothing is lost.
       const changed = await h.operator.call('PATCH', `/scripts/${row.id}`, {
-        parameters: [{ ...parameters[0], default: 'sshd.service' }, parameters[1]],
+        parameters: [{ ...parameters[0], default: 'not a service' }, parameters[1]],
       });
       assert.equal(changed.status, 400, JSON.stringify(changed.body));
-      assert.match(
-        JSON.stringify(changed.body),
-        /could not be checked against the pattern in time/u,
-      );
+      assert.match(JSON.stringify(changed.body), /does not match the pattern/u);
       assert.equal(
         ScriptViewSchema.parse((await h.observer.get(`/scripts/${row.id}`)).body).parameters.length,
         2,
       );
     } finally {
-      configureParameterPatternTest((regex, value) => testWithDeadline(regex, value));
       await client.script.delete({ where: { id: row.id } });
     }
   });

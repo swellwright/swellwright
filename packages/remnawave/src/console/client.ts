@@ -168,8 +168,6 @@ export class ConsoleClient {
     }
     const profile: ConsoleMaskProfile =
       operation.availability === 'user_data' ? 'personal' : 'standard';
-    const scrubbed = this.scrub(decoded);
-    decoded = scrubbed.text;
     let parsed: { readonly value: unknown } | undefined;
     try {
       parsed = { value: JSON.parse(decoded) as unknown };
@@ -178,17 +176,18 @@ export class ConsoleClient {
     }
     let shown: string;
     let maskedCount: number;
+    const scrubYaml = (yaml: string) => this.scrub(yaml);
     if (parsed === undefined) {
-      const masked = maskConsoleText(decoded, profile, this.maskKey);
+      const masked = maskConsoleText(decoded, profile, this.maskKey, scrubYaml);
       shown = masked.value;
       maskedCount = masked.count;
     } else {
-      const masked = maskConsoleJson(parsed.value, profile, this.maskKey);
+      const masked = maskConsoleJson(parsed.value, profile, this.maskKey, scrubYaml);
       shown = JSON.stringify(masked.value, null, 2);
       maskedCount = masked.count;
     }
-    // Once more after decoding: an escape in the answer (`s...` in JSON, `\x73...` in YAML) writes the token only
-    // when it is decoded, and the decoded strings and names are what is shown.
+    // Scrub after reading so raw replacements cannot corrupt JSON or base64. Escapes may become a token only
+    // on decoding, and the decoded strings and names are what is shown.
     const rescrubbed = this.scrub(shown);
     const cut = cutToBytes(rescrubbed.text, this.maxBodyBytes);
     return {
@@ -196,7 +195,7 @@ export class ConsoleClient {
       bodyFormat: parsed === undefined ? 'text' : 'json',
       body: cut.text,
       truncated: cut.truncated,
-      maskedCount: maskedCount + scrubbed.count + rescrubbed.count,
+      maskedCount: maskedCount + rescrubbed.count,
     };
   }
 }

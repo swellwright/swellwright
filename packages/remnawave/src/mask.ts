@@ -22,8 +22,7 @@ import {
 
 export const MASK = '[masked]';
 const MAX_DEPTH = 64;
-/** A string that looks like JSON is read as JSON up to this size, so a secret inside a stringified document is found. */
-const MAX_EMBEDDED_JSON = 1_048_576;
+const MAX_ENCODED_YAML_CHARS = 2_097_152;
 
 export interface MaskOptions {
   /**
@@ -45,6 +44,8 @@ export interface MaskOptions {
    * `extraSecretKeys` do the masking there.
    */
   readonly people?: 'xray' | 'off' | undefined;
+  /** Redacts known credentials from a decoded base64 YAML field before it is encoded again. */
+  readonly scrubDecodedYaml?: ((text: string) => { text: string; count: number }) | undefined;
 }
 
 export interface Masked<T> {
@@ -199,11 +200,28 @@ const NAME_KEYS: ReadonlySet<string> = new Set([
  */
 export function isTrivialText(text: string): boolean {
   const trimmed = text.trim();
-  if (/[\r\n\u0085\u2028\u2029]/u.test(trimmed)) {
+  if (startsFlowDocument(trimmed) || /[\r\n\u0085\u2028\u2029]|["'][\t \p{Cf}]*:/u.test(trimmed)) {
     return false;
+  }
+  const mapped = /^([\p{L}\p{N}\p{Cf}_.\\\t -]+):(\s|$)?/u.exec(trimmed);
+  if (mapped?.[1] !== undefined) {
+    const key = norm(mapped[1]);
+    // YAML needs a delimiter after a plain key, but a credential label is still suspicious without one.
+    if (
+      mapped[2] !== undefined ||
+      key === 'auth' ||
+      key === 'decryption' ||
+      isSecretName(key) ||
+      isSecretCollectionName(key)
+    ) {
+      return false;
+    }
   }
   return !/(?:^|[\s{,"'])[\p{L}\p{N}_.-]+["']?[ \t]*(?::(?:\s|$)|=(?![=\s]*$))/u.test(trimmed);
 }
+
+const startsFlowDocument = (trimmed: string): boolean =>
+  trimmed.startsWith('{') || trimmed.startsWith('[');
 
 const isSecretName = (key: string): boolean => {
   const n = norm(key);
@@ -386,11 +404,13 @@ class Masker {
   private readonly key: Uint8Array | string | undefined;
   private readonly extra: ReadonlySet<string>;
   private readonly people: boolean;
+  private readonly scrubDecodedYaml: MaskOptions['scrubDecodedYaml'];
 
   constructor(options: MaskOptions) {
     this.key = options.fingerprintKey;
     this.extra = new Set((options.extraSecretKeys ?? []).map(norm));
     this.people = options.people !== 'off';
+    this.scrubDecodedYaml = options.scrubDecodedYaml;
   }
 
   /** A name that says its value is secret: the built-in rules and the extra names of this call. */
@@ -490,33 +510,9 @@ class Masker {
     return this.mask(value);
   }
 
-  /** The value rules for a string: PEM keys, credentials in URLs, JWTs, bearer tokens, embedded JSON. */
-  text(input: string, depth = 0): string {
+  /** The shape-only rules, also used on already-read documents and mapping names. */
+  text(input: string): string {
     let out = input;
-    const trimmed = out.trimStart();
-    if (
-      (trimmed.startsWith('{') || trimmed.startsWith('[')) &&
-      out.length <= MAX_EMBEDDED_JSON &&
-      depth <= MAX_DEPTH
-    ) {
-      try {
-        const parsed: unknown = JSON.parse(out);
-        if (parsed !== null && typeof parsed === 'object') {
-          const before = this.count;
-          const masked = this.walk(parsed, depth + 1, undefined, undefined);
-          // Only rewrite the text when something in it was a secret. A document without any keeps its text, which the
-          // value rules below still read (a name of it can be a URL with credentials).
-          if (this.count > before) {
-            return this.text(JSON.stringify(masked), MAX_DEPTH + 1);
-          }
-        }
-      } catch (error) {
-        if (error instanceof UnsafeMaskStructure) {
-          throw error;
-        }
-        // Not JSON after all: the rules below still apply.
-      }
-    }
     out = out.replace(PEM_PRIVATE, () => this.mask('pem'));
     out = out.replace(
       URL_USERINFO,
@@ -543,20 +539,21 @@ class Masker {
     if (value.trim() === '') {
       return value;
     }
-    if (value.length > MAX_EMBEDDED_JSON * 2 || depth > MAX_DEPTH) {
+    if (value.length > MAX_ENCODED_YAML_CHARS || depth > MAX_DEPTH) {
       return this.mask(value);
     }
     try {
-      const text = Buffer.from(value, 'base64').toString('utf8');
+      const decoded = Buffer.from(value, 'base64').toString('utf8');
+      const before = this.count;
+      const text = this.scrubYaml(decoded);
       const documents = readYamlDocuments(text);
       const [parsed] = documents ?? [];
       if (documents?.length !== 1 || parsed === null || typeof parsed !== 'object') {
         return this.mask(value);
       }
-      const before = this.count;
       const masked = this.walk(parsed, depth + 1, undefined, undefined);
       // The names of a mapping are not values to the walk: the value rules run over the written text as well.
-      const written = this.text(stringifyYaml(masked, { lineWidth: 0 }), MAX_DEPTH + 1);
+      const written = this.scrubYaml(this.text(stringifyYaml(masked, { lineWidth: 0 })));
       if (this.count === before && !text.includes('#')) {
         // Nothing in it is a secret and it has no comment, which is not read and could hold one: the original stays.
         return value;
@@ -568,6 +565,12 @@ class Masker {
       }
       return this.mask(value);
     }
+  }
+
+  private scrubYaml(text: string): string {
+    const scrubbed = this.scrubDecodedYaml?.(text);
+    this.count += scrubbed?.count ?? 0;
+    return scrubbed?.text ?? text;
   }
 
   /**
@@ -594,11 +597,11 @@ class Masker {
    * clean document, masked by its names and written again when something in it was masked (kept, with the value rules,
    * when nothing was); not readable that way, it is masked whole. Depth and work count towards the same limits.
    */
-  private stringValue(value: string, depth: number): string {
+  stringValue(value: string, depth = 0): string {
     // A PEM block is a known shape on several lines (a private key is masked by the value rules, a certificate kept):
     // a text that is trivial apart from its PEM blocks keeps the value rules.
     if (isTrivialText(value) || isTrivialText(value.replace(PEM_BLOCK, ' '))) {
-      return this.text(value, depth);
+      return this.text(value);
     }
     if (depth > MAX_DEPTH) {
       return this.unreadable();
@@ -610,15 +613,14 @@ class Masker {
     }
     const before = this.count;
     const masked = this.walk(document, depth + 1, undefined, undefined);
-    if (this.count === before) {
-      return this.text(value, MAX_DEPTH + 1);
+    if (this.count === before && !value.includes('#')) {
+      return this.text(value);
     }
     const start = value.trimStart();
-    const written =
-      start.startsWith('{') || start.startsWith('[')
-        ? JSON.stringify(masked)
-        : stringifyYaml(masked, { lineWidth: 0 });
-    return this.text(written, MAX_DEPTH + 1);
+    const written = startsFlowDocument(start)
+      ? JSON.stringify(masked)
+      : stringifyYaml(masked, { lineWidth: 0 });
+    return this.text(written);
   }
 
   /**
@@ -632,7 +634,7 @@ class Masker {
     const out: [string, unknown][] = [];
     for (const [key, value] of entries) {
       this.visit();
-      const masked = this.text(key, MAX_DEPTH + 1);
+      const masked = this.text(key);
       let name = masked;
       if (used.has(name)) {
         let index = next.get(masked) ?? 1;
@@ -814,7 +816,9 @@ export function maskSecrets<T>(value: T, options: MaskOptions = {}): Masked<T> {
 export function maskText(value: string, options: MaskOptions = {}): Masked<string> {
   const masker = new Masker(options);
   try {
-    const masked = masker.text(value);
+    const masked = startsFlowDocument(value.trimStart())
+      ? masker.stringValue(value)
+      : masker.text(value);
     return { value: masked, count: masker.count };
   } catch (error) {
     if (error instanceof UnsafeMaskStructure) {

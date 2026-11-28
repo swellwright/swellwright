@@ -16,10 +16,10 @@
 // so the work is the ways times the length of the text. What it cannot tell apart (a Unicode property, a lookaround, a
 // case-insensitive group) counts as "could be any character".
 //
-// The estimate is a first filter with a readable answer, not the guarantee: an estimate can be wrong. Every place that
-// runs a person's pattern also runs it under a deadline (`apps/api/src/common/regex-deadline.ts`).
+// The estimate is a first filter with a readable answer, not the guarantee: baseline matches also run under a
+// deadline (`apps/api/src/common/regex-deadline.ts`). Script parameters use the bounded automaton in safe-pattern.ts.
 
-/** The longest text a bounded pattern is run on. Every caller cuts its input to this before it matches. */
+/** The longest text a bounded pattern is run on. Longer input is refused, not matched against a prefix. */
 export const REGEX_INPUT_LIMIT = 1000;
 
 /** Steps of the engine (ways times the length of the text) at most. */
@@ -257,10 +257,13 @@ class Reader {
         this.pos += 2;
         look = true;
       } else if (rest.startsWith('<=') || rest.startsWith('<!')) {
-        this.pos += 3;
-        look = true;
+        // The estimate works left-to-right; lookbehind matches in reverse.
+        throw new RegexBudgetError('lookbehind');
       } else if (rest.startsWith('<')) {
         const close = this.source.indexOf('>', this.pos);
+        if (close === -1) {
+          throw new RegexBudgetError('unbalanced');
+        }
         this.pos = close + 1;
       } else {
         // Modifiers: `(?i:...)`, `(?-i:...)`, `(?ims-s:...)`.
@@ -311,6 +314,9 @@ class Reader {
       case 'p':
       case 'P': {
         const close = this.source.indexOf('}', this.pos);
+        if (close === -1) {
+          throw new RegexBudgetError('unbalanced');
+        }
         this.pos = close + 1;
         return CharSet.unknown;
       }
@@ -357,7 +363,11 @@ class Reader {
         if (/^[1-9k]$/u.test(c)) {
           // A back reference matches what a group matched: anything.
           if (c === 'k') {
-            this.pos = this.source.indexOf('>', this.pos) + 1;
+            const close = this.source.indexOf('>', this.pos);
+            if (close === -1) {
+              throw new RegexBudgetError('unbalanced');
+            }
+            this.pos = close + 1;
           } else {
             while (/[0-9]/u.test(this.peek() ?? '')) {
               this.pos += 1;
@@ -568,6 +578,9 @@ export function regexBudgetIssue(source: string): string | undefined {
       }
       if (error.message === 'count') {
         return `A count in braces is larger than ${String(MAX_COUNT)}, the longest text a pattern is run on.`;
+      }
+      if (error.message === 'lookbehind') {
+        return 'The pattern must not use lookbehind.';
       }
       return error.message === 'nested'
         ? 'The pattern repeats a part that has choices of its own (like (a|b)*, (a+)+ or (a?)*); write it so that every repetition is decided by the next character.'

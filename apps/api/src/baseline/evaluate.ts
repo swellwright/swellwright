@@ -269,13 +269,22 @@ export function evaluateCheck(
       message: `The server did not report "${check.observe.field}" (the tool may be missing or need root).`,
     };
   }
-  if (comparator === 'matches' && regexOf(argument as string) === null) {
-    // The pattern is not run (it does not compile, or it could take too long): the check cannot say, which is not a miss.
-    return {
-      status: 'error',
-      observed,
-      message: `The pattern ${show(argument)} is refused: ${regexIssue(argument as string) ?? 'it is not valid'}`,
-    };
+  if (comparator === 'matches') {
+    if (typeof value === 'string' && value.length > REGEX_INPUT_LIMIT) {
+      return {
+        status: 'error',
+        observed: null,
+        message: `The observed text exceeds the ${String(REGEX_INPUT_LIMIT)} character limit for pattern matching.`,
+      };
+    }
+    if (regexOf(argument as string) === null) {
+      // The pattern is not run (it does not compile, or it could take too long): the check cannot say.
+      return {
+        status: 'error',
+        observed,
+        message: `The pattern ${show(argument)} is refused: ${regexIssue(argument as string) ?? 'it is not valid'}`,
+      };
+    }
   }
   const verdict = compare(comparator, value, argument, test);
   if (verdict.timedOut === true) {
