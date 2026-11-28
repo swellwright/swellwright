@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { MASK_TOO_LARGE } from '@swellwright/contracts';
 import { Document, Parser } from 'yaml';
 
 import { maskedYaml } from '../adapters.js';
@@ -423,7 +424,7 @@ describe('masking for the API console', () => {
       node = { left: node, right: node };
     }
     const { value, count } = maskConsoleJson({ response: node }, 'standard');
-    assert.equal(value, MASK);
+    assert.equal(value, MASK_TOO_LARGE);
     assert.ok(count > 0);
     // Count work on the repeated leaf, not elapsed time on a shared runner.
     assert.ok(leafReads <= 4096, `read the shared leaf ${String(leafReads)} times`);

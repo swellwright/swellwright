@@ -24,8 +24,8 @@ export interface ObservationFieldDef {
   readonly type: ObservationFieldType;
   readonly description: string;
   /**
-   * A list that the server may not be able to observe at all (it needs root): it is null when the script did not
-   * look and an empty list when it looked and found nothing. Every other list is empty when nothing was found.
+   * A field that may be unavailable even when the other fields were observed. Its null value means unknown.
+   * An optional list is empty when it was observed and nothing was found.
    */
   readonly optional?: true;
 }
@@ -191,7 +191,12 @@ export const OBSERVATION_KINDS: readonly ObservationKindDef[] = [
       F('mountpoint', 'string', 'Where the filesystem is mounted.'),
       F('usedPercent', 'number', 'Space used, in percent.'),
       F('availableMiB', 'number', 'Space available, in MiB.'),
-      F('inodeUsedPercent', 'number', 'Inodes used, in percent (0 when the filesystem has none).'),
+      F(
+        'inodeUsedPercent',
+        'number',
+        'Inodes used, in percent, when reported by the filesystem.',
+        true,
+      ),
     ],
   },
   {
@@ -362,7 +367,8 @@ export const OBSERVATION_KINDS: readonly ObservationKindDef[] = [
       F(
         'text',
         'string',
-        'All the rules in one text, separated by semicolons, cut at 2000 characters.',
+        'The complete rules separated by semicolons, if they fit in 2000 characters.',
+        true,
       ),
     ],
   },
@@ -697,7 +703,7 @@ export const OBSERVATION_KINDS: readonly ObservationKindDef[] = [
           'The host name to ask for (HTTPS SNI and Host header). Without it the request names the address.',
       },
     ],
-    fields: [F('status', 'number', 'The HTTP status code; 0 when nothing answered.')],
+    fields: [F('status', 'number', 'The HTTP status code from a completed HTTP exchange.')],
   },
   {
     kind: 'dns.self',

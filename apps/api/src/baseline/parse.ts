@@ -42,6 +42,7 @@ export interface ParseOptions {
 const MAX_LINES_PER_OBSERVATION = 2000;
 const MAX_LINE_CHARS = 600;
 const MAX_LIST_ENTRIES = 200;
+const MAX_CHAIN_TEXT_CHARS = 2_000;
 
 /** A line of the output that is a marker. A value that looks like one is always behind `| `, so it never is. */
 const MARKER = /^@@swb (\S+)(?: (.*))?$/u;
@@ -150,6 +151,23 @@ function fieldsOf(kind: string, lines: readonly string[]): Record<string, Observ
       field,
       form === undefined || raw === undefined ? raw : raw.filter((entry) => form.test(entry)),
     );
+  }
+  // Older scripts emitted a single text field. New ones send complete individual rules so the aggregate
+  // is not limited to one shell line. Never synthesize it from an incomplete list.
+  if (kind === 'iptables.chain' && fields['text'] === null) {
+    const rules = fields['rules'];
+    if (fields['exists'] === false) {
+      fields['text'] = '';
+    } else if (
+      fields['exists'] === true &&
+      Array.isArray(rules) &&
+      rules.length === fields['ruleCount']
+    ) {
+      const text = rules.length === 0 ? '' : `${rules.join(';')};`;
+      if (text.length <= MAX_CHAIN_TEXT_CHARS) {
+        fields['text'] = text;
+      }
+    }
   }
   return fields;
 }

@@ -167,6 +167,7 @@ obs_disk_usage() {
   kv availableMiB "$(printf '%s\n' "$_available" | awk '{ print int($1 / 1024) }')"
   _df=$(bounded 10 df -P -i "$_p") || return $?
   _inode=$(printf '%s\n' "$_df" | awk 'NR > 1 && NF >= 6 { v = $5; sub(/%$/, "", v) } END { print v }')
+  [ "$_inode" != - ] || return 0
   is_num "$_inode" || return 1
   kv inodeUsedPercent "$_inode"
 }
@@ -358,11 +359,9 @@ obs_iptables_chain() {
   _rules=$(printf '%s\n' "$_out" | grep '^-A ')
   if [ -z "$_rules" ]; then
     kv ruleCount 0
-    kv text ""
   else
     kv ruleCount "$(printf '%s\n' "$_rules" | wc -l | tr -d ' ')"
     kv_list rules 100 "$_rules"
-    kv text "$(printf '%s\n' "$_rules" | head -n 100 | tr '\n' ';')"
   fi
 }
 
@@ -769,12 +768,15 @@ obs_http_local() {
   fi
   if [ -n "${P_sni:-}" ]; then
     _code=$(bounded 10 curl -s -k -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 6 --noproxy '*' \
-      --resolve "$P_sni:$_port:$_addr" "$_scheme://$P_sni:$_port/")
+      --resolve "$P_sni:$_port:$_addr" "$_scheme://$P_sni:$_port/") || return 1
   else
     _code=$(bounded 10 curl -s -k -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 6 --noproxy '*' \
-      "$_scheme://$_addr:$_port/")
+      "$_scheme://$_addr:$_port/") || return 1
   fi
-  kv status "$(num "$_code")"
+  case $_code in
+    [1-5][0-9][0-9]) kv status "$_code" ;;
+    *) return 1 ;;
+  esac
 }
 
 obs_dns_self() {

@@ -1,9 +1,12 @@
+import { channel } from 'node:diagnostics_channel';
 import {
   MessageChannel,
   type MessagePort,
   receiveMessageOnPort,
   Worker,
 } from 'node:worker_threads';
+
+import { Logger } from '@nestjs/common';
 
 // A baseline's `matches` expression runs under a
 // deadline. The engine of the language backtracks, and an estimate of a pattern's cost (`regexBudgetIssue`) is a first
@@ -181,7 +184,7 @@ export function testWithDeadline(
       if (budget !== undefined) {
         budget.remainingMs -= spent;
       }
-      stalls.push({ at: Date.now(), ms: spent });
+      recordStall(spent);
       return 'timeout';
     }
     startFailedAt = undefined;
@@ -200,7 +203,7 @@ export function testWithDeadline(
   if (answer === undefined) {
     stop(current);
     remember(slow, key, true, MAX_SLOW);
-    stalls.push({ at: Date.now(), ms: spent });
+    recordStall(spent);
     return 'timeout';
   }
   const result = answer === 1;
@@ -269,13 +272,27 @@ function remember(map: Map<string, boolean>, key: string, value: boolean, max: n
 const PROCESS_BUDGET_MS = 1_000;
 const PROCESS_WINDOW_MS = 60_000;
 const stalls: { at: number; ms: number }[] = [];
+const exhaustion = channel('swellwright.regex_deadline.process_budget_exhausted');
+const logger = new Logger('RegexDeadline');
+let processExhausted = false;
 
 function processBudgetSpent(): boolean {
   const since = Date.now() - PROCESS_WINDOW_MS;
   while (stalls.length > 0 && (stalls[0]?.at ?? 0) < since) {
     stalls.shift();
   }
-  return stalls.reduce((sum, stall) => sum + stall.ms, 0) >= PROCESS_BUDGET_MS;
+  const spent = stalls.reduce((sum, stall) => sum + stall.ms, 0) >= PROCESS_BUDGET_MS;
+  if (!spent) processExhausted = false;
+  return spent;
+}
+
+function recordStall(ms: number): void {
+  stalls.push({ at: Date.now(), ms });
+  if (processBudgetSpent() && !processExhausted) {
+    processExhausted = true;
+    exhaustion.publish(1);
+    logger.warn('Baseline regex process budget exhausted; new matches may be refused.');
+  }
 }
 
 /** Forgets the patterns and the stalls seen so far (tests). */
@@ -283,5 +300,6 @@ export function resetDeadlineMemory(): void {
   slow.clear();
   answered.clear();
   stalls.length = 0;
+  processExhausted = false;
   startFailedAt = undefined;
 }

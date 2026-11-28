@@ -3,12 +3,14 @@
 
 /** What a text that is not one clean document becomes: none of it is shown. */
 export const UNREADABLE_DOCUMENT = '[masked: unreadable document]';
+/** A masking budget was exceeded: no prefix of the input is shown. */
+export const MASK_TOO_LARGE = '[masked: too large]';
 
 /**
  * Every form of a mask, as the source of a regular expression: `[masked]`, a fingerprint `[masked:1a2b3c4d]` and
- * `[masked: unreadable document]`.
+ * `[masked: unreadable document]`, and `[masked: too large]`.
  */
-export const MASK_PATTERN_SOURCE = String.raw`\[masked(?::[0-9a-f]{8}|: unreadable document)?\]`;
+export const MASK_PATTERN_SOURCE = String.raw`\[masked(?::[0-9a-f]{8}|: unreadable document|: too large)?\]`;
 
 const WHOLE_MASK = new RegExp(`^${MASK_PATTERN_SOURCE}$`, 'u');
 const ANY_MASK = new RegExp(MASK_PATTERN_SOURCE, 'u');

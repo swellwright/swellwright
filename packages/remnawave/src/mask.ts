@@ -1,6 +1,6 @@
 import { createHash, createHmac } from 'node:crypto';
 
-import { UNREADABLE_DOCUMENT } from '@swellwright/contracts';
+import { MASK_TOO_LARGE, UNREADABLE_DOCUMENT } from '@swellwright/contracts';
 
 import {
   type Document,
@@ -181,6 +181,7 @@ const NAME_KEYS: ReadonlySet<string> = new Set([
  * any other text is read as a document or masked whole.
  */
 export function isTrivialText(text: string): boolean {
+  if (PLAIN_WORD.test(text)) return true;
   const trimmed = text.trim();
   if (
     startsFlowDocument(trimmed) ||
@@ -260,13 +261,17 @@ const COLLECTION_METADATA: ReadonlySet<string> = new Set([
 ]);
 
 /** How many values one call may visit, aliases and embedded documents included: past it the whole value is masked. */
-const MAX_VISITS = 200_000;
+const MAX_VISITS = 500_000;
 /** No single fragment gets more scans than a YAML document; repeated text work also shares a call budget. */
 const MAX_TEXT_WORK = 4 * 1024 * 1024;
 /** Shared containers can expand far beyond their input size. Bound repeat work without lowering the limit for trees. */
 const MAX_REPEAT_VISITS = 4096;
 
 class UnsafeMaskStructure extends Error {}
+class MaskBudgetExceeded extends UnsafeMaskStructure {}
+
+const refusalMask = (error: UnsafeMaskStructure): string =>
+  error instanceof MaskBudgetExceeded ? MASK_TOO_LARGE : MASK;
 
 type ContainerMode = 'ordinary' | 'people' | 'all' | 'collection' | 'record';
 
@@ -387,13 +392,15 @@ const PEM_PRIVATE =
 /** A whole PEM block of base64 lines (no header lines): its body cannot hold a `-`, so the match is linear. */
 const PEM_BLOCK = /-----BEGIN [A-Z0-9 ]{1,40}-----[A-Za-z0-9+/=\s]*-----END [A-Z0-9 ]{1,40}-----/gu;
 // Anchored by a literal delimiter. A new :// cannot start inside a previous authority.
-const URL_USERINFO = /(:\/\/)([^/\s@?#"'<>]+)@/gu;
+// The authority ends at a URL delimiter. A greedy run finds its last @, not the first.
+const URL_USERINFO = /(:\/\/)([^/\s?#"'<>]+)@/gu;
 const URL_PARAM = /([?&;])([^/?&;=#\s"'<>]+)=([^&#;\s"'<>]*)/gu;
 // Consume whole runs, then inspect pieces without retrying a greedy match at each word boundary.
 const JWT_RUN = /[A-Za-z0-9_.-]+/gu;
 const AUTHORITY_RUN = /[^/\s?#"'<>]+/gu;
 const BEARER = /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/giu;
 const BASIC = /\b(Basic\s+)[A-Za-z0-9+/_-]+={0,2}/giu;
+const PLAIN_WORD = /^[A-Za-z0-9_-]+$/u;
 
 class Masker {
   count = 0;
@@ -441,7 +448,7 @@ class Masker {
   private visit(): void {
     this.visits += 1;
     if (this.visits > MAX_VISITS) {
-      throw new UnsafeMaskStructure();
+      throw new MaskBudgetExceeded();
     }
     if (this.repeatDepth > 0) {
       this.visitRepeated();
@@ -451,14 +458,14 @@ class Masker {
   private visitRepeated(): void {
     this.repeatVisits += 1;
     if (this.repeatVisits > MAX_REPEAT_VISITS) {
-      throw new UnsafeMaskStructure();
+      throw new MaskBudgetExceeded();
     }
   }
 
   private chargeText(length: number): void {
     this.textWork += length;
     if (this.textWork > MAX_TEXT_WORK) {
-      throw new UnsafeMaskStructure();
+      throw new MaskBudgetExceeded();
     }
   }
 
@@ -466,7 +473,7 @@ class Masker {
   private keys(source: Readonly<Record<string, unknown>>): string[] {
     const keys = Object.keys(source);
     if (2 * keys.length > MAX_VISITS - this.visits) {
-      throw new UnsafeMaskStructure();
+      throw new MaskBudgetExceeded();
     }
     for (const key of keys) {
       this.chargeText(key.length);
@@ -532,10 +539,16 @@ class Masker {
 
   /** The shape-only rules, also used on already-read documents and mapping names. */
   text(input: string): string {
+    this.chargeText(input.length);
+    return this.scanText(input);
+  }
+
+  /** The input has already been charged to the shared text budget. */
+  private scanText(input: string): string {
     if (input.length > MAX_YAML_CHARS) {
       return this.unreadable();
     }
-    this.chargeText(input.length);
+    if (PLAIN_WORD.test(input)) return input;
     let out = input;
     out = out.replace(PEM_PRIVATE, () => this.mask('pem'));
     out = out.replace(AUTHORITY_RUN, (run: string, offset: number, source: string) => {
@@ -671,7 +684,7 @@ class Masker {
     // A PEM block is a known shape on several lines (a private key is masked by the value rules, a certificate kept):
     // a text that is trivial apart from its PEM blocks keeps the value rules.
     if (isTrivialText(value) || isTrivialText(value.replace(PEM_BLOCK, ' '))) {
-      return this.text(value);
+      return this.scanText(value);
     }
     if (depth > MAX_DEPTH) {
       return this.unreadable();
@@ -684,7 +697,7 @@ class Masker {
     const before = this.count;
     const masked = this.walk(document, depth + 1, undefined, undefined);
     if (this.count === before && !value.includes('#')) {
-      return this.text(value);
+      return this.scanText(value);
     }
     const start = value.trimStart();
     const written = startsFlowDocument(start)
@@ -704,7 +717,7 @@ class Masker {
     const out: [string, unknown][] = [];
     for (const [key, value] of entries) {
       this.visit();
-      const masked = this.text(key);
+      const masked = this.scanText(key);
       let name = masked;
       if (used.has(name)) {
         let index = next.get(masked) ?? 1;
@@ -884,7 +897,7 @@ export function maskSecrets<T>(value: T, options: MaskOptions = {}): Masked<T> {
   } catch (error) {
     if (error instanceof UnsafeMaskStructure) {
       // An alias changes masking context or the structure takes too much work: nothing of it is shown.
-      return { value: MASK as T, count: masker.count + 1 };
+      return { value: refusalMask(error) as T, count: masker.count + 1 };
     }
     throw error;
   }
@@ -903,7 +916,7 @@ export function maskText(value: string, options: MaskOptions = {}): Masked<strin
     return { value: masked, count: masker.count };
   } catch (error) {
     if (error instanceof UnsafeMaskStructure) {
-      return { value: MASK, count: masker.count + 1 };
+      return { value: refusalMask(error), count: masker.count + 1 };
     }
     throw error;
   }
@@ -921,7 +934,7 @@ export function maskTextFailClosed(value: string, options: MaskOptions = {}): Ma
     return { value: masked, count: masker.count };
   } catch (error) {
     if (error instanceof UnsafeMaskStructure) {
-      return { value: MASK, count: masker.count + 1 };
+      return { value: refusalMask(error), count: masker.count + 1 };
     }
     throw error;
   }

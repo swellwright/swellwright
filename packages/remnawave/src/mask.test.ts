@@ -19,6 +19,22 @@ const end = (kind: string): string => `-----END ${kind} KEY-----`;
 const text = (value: unknown): string => JSON.stringify(value);
 
 describe('masking secrets', () => {
+  it('removes all userinfo before the last at sign in a URL authority', () => {
+    const url = `http://synthetic:part${AT}tail${AT}example.com/path`;
+    assert.deepEqual(maskText(url), { value: `http://${MASK}${AT}example.com/path`, count: 1 });
+    assert.deepEqual(maskText(`http://example.com/path${AT}label`), {
+      value: `http://example.com/path${AT}label`,
+      count: 0,
+    });
+  });
+
+  it('keeps large ordinary lists within the visit and text limits', () => {
+    const small = Array.from({ length: 60_000 }, (_, id) => ({ id, name: 'fixture' }));
+    const longer = Array.from({ length: 30_000 }, () => ({ note: 'x'.repeat(100) }));
+    assert.deepEqual(maskSecrets(small), { value: small, count: 0 });
+    assert.deepEqual(maskSecrets(longer), { value: longer, count: 0 });
+  });
+
   it('masks URL userinfo exactly once with a fingerprint key', () => {
     const options = { fingerprintKey: 'fixture-key' };
     const bare = maskText(`synthetic:sample${AT}example.com`, options);
@@ -37,7 +53,7 @@ describe('masking secrets', () => {
     const blank = ' '.repeat(60_000);
     assert.equal(
       maskSecrets(Array.from({ length: 80 }, () => ({ encodedTemplateYaml: blank }))).value,
-      MASK,
+      '[masked: too large]',
     );
   });
 
@@ -52,10 +68,10 @@ describe('masking secrets', () => {
   it('does not read the values of an object wider than the masking budget', () => {
     let reads = 0;
     const wide: Record<string, number> = {};
-    for (let index = 0; index < 100_001; index += 1) {
+    for (let index = 0; index < 250_001; index += 1) {
       Object.defineProperty(wide, `k${String(index)}`, { enumerable: true, get: () => ++reads });
     }
-    assert.equal(maskSecrets(wide).value, MASK);
+    assert.equal(maskSecrets(wide).value, '[masked: too large]');
     assert.equal(reads, 0);
   });
 

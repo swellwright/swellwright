@@ -166,12 +166,13 @@ describe('the observation script, read as text', () => {
     assert.deepEqual([...functions].sort(), [...kinds].sort());
   });
 
-  it('reports every field of the catalogue, and only fields it has', () => {
+  it('reports every non-derived field of the catalogue, and only fields it has', () => {
+    const derived = new Set(['time.sync.skewSeconds', 'iptables.chain.text']);
     for (const def of OBSERVATION_KINDS) {
       const body = functionBody(`obs_${def.kind.replaceAll('.', '_')}`);
       for (const field of def.fields) {
-        if (def.kind === 'time.sync' && field.name === 'skewSeconds') {
-          // The one field that is made by the server of Swellwright, which knows its own clock.
+        if (derived.has(`${def.kind}.${field.name}`)) {
+          // The parser derives these fields; their values are covered by the observation tests.
           continue;
         }
         assert.ok(body.includes(field.name), `${def.kind} reports ${field.name}`);
@@ -955,7 +956,7 @@ describe('the observation script against stand-in tools', { skip: !available() }
     );
   });
 
-  it('marks clipped public ports and firewall text incomplete', () => {
+  it('marks clipped public ports incomplete while preserving their count on the wire', () => {
     const machine = buildMachine({ root: true });
     machines.push(machine);
     makeShim(machine.bin, 'ss', [
@@ -968,21 +969,142 @@ describe('the observation script against stand-in tools', { skip: !available() }
       ],
       ['-H -lunp', ''],
     ]);
-    makeShim(machine.bin, 'iptables', [
-      ['-w 5 -S DOCKER-USER', `-N DOCKER-USER\n${'-A DOCKER-USER -j RETURN\n'.repeat(18)}`],
-    ]);
-    const { stdout } = runScript(
-      machine,
-      '1\tports.public\n2\tiptables.chain\tchain=DOCKER-USER\n',
-    );
+    const { stdout } = runScript(machine, '1\tports.public\n');
     assert.match(stdout, /^\| count=201$/mu);
     const parsed = parseObservations(Buffer.from(stdout), [
       { index: 1, kind: 'ports.public', params: {} },
-      { index: 2, kind: 'iptables.chain', params: { chain: 'DOCKER-USER' } },
     ]);
+    assert.equal(parsed.observations.get(1)?.status, 'error');
+  });
+
+  it('keeps individual firewall results when their aggregate text is too large', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    const ordinary = '-A DOCKER-USER -j RETURN\n'.repeat(17);
+    const tail = '-A DOCKER-USER -p tcp -m conntrack --ctorigdstport 62050 -j DROP\n';
+    makeShim(machine.bin, 'iptables', [
+      ['-w 5 -S DOCKER-USER', `-N DOCKER-USER\n${ordinary}${tail}`],
+      [
+        '-w 5 -S LONG-CHAIN',
+        `-N LONG-CHAIN\n${'-A LONG-CHAIN -j RETURN -m comment --comment fixture\n'.repeat(40)}`,
+      ],
+    ]);
+    const { stdout } = runScript(
+      machine,
+      '1\tiptables.chain\tchain=DOCKER-USER\n2\tiptables.chain\tchain=LONG-CHAIN\n',
+    );
+    const parsed = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'iptables.chain', params: { chain: 'DOCKER-USER' } },
+      { index: 2, kind: 'iptables.chain', params: { chain: 'LONG-CHAIN' } },
+    ]);
+    const chain = parsed.observations.get(1);
+    assert.equal(chain?.status, 'ok');
+    assert.ok(chain.fields);
+    assert.equal(chain.fields['ruleCount'], 18);
+    assert.equal(Array.isArray(chain.fields['rules']) && chain.fields['rules'].length, 18);
+    assert.equal(chain.fields['text'], `${ordinary}${tail}`.replaceAll('\n', ';'));
+    const check = {
+      id: 'fixture.chain',
+      title: 'Fixture',
+      category: 'firewall',
+      severity: 'high',
+      observe: { kind: 'iptables.chain', field: 'text', params: { chain: 'DOCKER-USER' } },
+      expect: { matches: '--ctorigdstport 62050 .*-j DROP' },
+    } as const;
+    assert.equal(evaluateCheck(check, chain).status, 'pass');
+    const long = parsed.observations.get(2);
+    assert.equal(long?.status, 'ok');
+    assert.ok(long.fields);
+    assert.equal(long.fields['ruleCount'], 40);
+    assert.equal(Array.isArray(long.fields['rules']) && long.fields['rules'].length, 40);
+    assert.equal(long.fields['text'], null);
+    assert.equal(
+      evaluateCheck(
+        {
+          id: 'fixture.chain',
+          title: 'Fixture',
+          category: 'firewall',
+          severity: 'high',
+          observe: { kind: 'iptables.chain', field: 'text', params: { chain: 'LONG-CHAIN' } },
+          expect: { absent: true },
+        },
+        long,
+      ).status,
+      'error',
+    );
+  });
+
+  it('does not report an HTTP status when curl fails or reports no response', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    makeShim(machine.bin, 'curl', [
+      [
+        '-s -k -o /dev/null -w %{http_code} --connect-timeout 3 --max-time 6 --noproxy * http://127.0.0.1:81/',
+        '000\n',
+      ],
+      [
+        '-s -k -o /dev/null -w %{http_code} --connect-timeout 3 --max-time 6 --noproxy * --resolve example.com:82:127.0.0.1 https://example.com:82/',
+        '200\n',
+        7,
+      ],
+      [
+        '-s -k -o /dev/null -w %{http_code} --connect-timeout 3 --max-time 6 --noproxy * http://127.0.0.1:83/',
+        '404\n',
+      ],
+    ]);
+    const { stdout } = runScript(
+      machine,
+      '1\thttp.local\tport=81\n2\thttp.local\tport=82\tscheme=https\tsni=example.com\n3\thttp.local\tport=83\n',
+    );
+    const parsed = parseObservations(
+      Buffer.from(stdout),
+      [81, 82, 83].map((port, index) => ({
+        index: index + 1,
+        kind: 'http.local',
+        params: { port },
+      })),
+    );
     assert.deepEqual(
-      [...parsed.observations.values()].map((row) => row.status),
-      ['error', 'error'],
+      [...parsed.observations.values()].map(({ status }) => status),
+      ['error', 'error', 'ok'],
+    );
+    assert.equal(parsed.observations.get(3)?.fields?.['status'], 404);
+  });
+
+  it('keeps disk usage fields when the filesystem reports no inode percentage', () => {
+    const machine = buildMachine({ root: true });
+    machines.push(machine);
+    makeShim(machine.bin, 'df', [
+      [
+        '-P -k /',
+        'Filesystem 1024-blocks Used Available Capacity Mounted on\nfs 10240 1024 9216 10% /\n',
+      ],
+      ['-P -i /', 'Filesystem Inodes IUsed IFree IUse% Mounted on\nfs - - - - /\n'],
+    ]);
+    const { stdout } = runScript(machine, '1\tdisk.usage\tpath=/\n');
+    const disk = parseObservations(Buffer.from(stdout), [
+      { index: 1, kind: 'disk.usage', params: { path: '/' } },
+    ]).observations.get(1);
+    assert.equal(disk?.status, 'ok');
+    assert.deepEqual(disk.fields, {
+      mountpoint: '/',
+      usedPercent: 10,
+      availableMiB: 9,
+      inodeUsedPercent: null,
+    });
+    assert.equal(
+      evaluateCheck(
+        {
+          id: 'fixture.inodes',
+          title: 'Fixture',
+          category: 'system',
+          severity: 'high',
+          observe: { kind: 'disk.usage', field: 'inodeUsedPercent', params: { path: '/' } },
+          expect: { absent: true },
+        },
+        disk,
+      ).status,
+      'error',
     );
   });
 

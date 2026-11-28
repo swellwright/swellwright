@@ -258,7 +258,7 @@ export function evaluateCheck(
     return {
       status: 'error',
       observed: null,
-      message: `The server could not observe "${check.observe.field}" (it needs root or a file it cannot read).`,
+      message: `The server could not observe "${check.observe.field}" completely.`,
     };
   }
   if (value === null && comparator !== 'absent' && comparator !== 'present') {

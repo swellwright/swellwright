@@ -812,7 +812,7 @@ class Builder {
 export interface CompiledPattern {
   readonly source: string;
   /** Whether the pattern matches the whole value. Linear in the length of the value. */
-  matches(value: string): boolean;
+  matches(value: string, chargeWork?: (units: number) => void): boolean;
 }
 
 class Automaton implements CompiledPattern {
@@ -824,11 +824,13 @@ class Automaton implements CompiledPattern {
     private readonly maxValueChars: number,
   ) {}
 
-  matches(value: string): boolean {
+  matches(value: string, chargeWork?: (units: number) => void): boolean {
     if (value.length > this.maxValueChars) {
       return false;
     }
     const size = this.states.length;
+    // Include initial epsilon closure as well as the states scanned for each input character.
+    chargeWork?.(size * (value.length + 1));
     let current = new Uint32Array(size);
     let next = new Uint32Array(size);
     let stamp = 1;

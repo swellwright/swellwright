@@ -44,6 +44,8 @@ A pattern runs in the API process, so one that could make the engine backtrack f
 
 Lookbehind is not supported. If the text passed to `matches` exceeds 1,000 characters, the check reports `error` without matching a truncated prefix. A denied, failed or clipped observation is also `error`, not evidence that the resource is absent. For example, `notContains` cannot pass on a partial list of public ports or on incomplete firewall rule text.
 
+Some observations still report other fields when one is unavailable: a filesystem without an inode percentage can report disk usage, and an iptables chain can report its complete rule list and count even when the joined rule text is too long.
+
 The editor checks the whole document as you type and underlines what is wrong: an unknown kind or field, a parameter the kind does not take, a comparator that does not fit the type of the field (`atMost` on a list).
 
 ### What a result can be

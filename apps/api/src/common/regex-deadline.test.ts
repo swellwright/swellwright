@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { channel } from 'node:diagnostics_channel';
 import { beforeEach, describe, it } from 'node:test';
 
 import type { BaselineCheck } from '@swellwright/contracts';
@@ -23,6 +24,51 @@ const hostile = `${'a'.repeat(399)}!`;
 describe('a pattern under a deadline', () => {
   beforeEach(() => {
     resetDeadlineMemory();
+  });
+
+  it('emits one process-budget exhaustion event per saturation period', (t) => {
+    const metric = channel('swellwright.regex_deadline.process_budget_exhausted');
+    const events: unknown[] = [];
+    const collect = (event: unknown): void => {
+      events.push(event);
+    };
+    let duration = 0;
+    let epoch = 0;
+    let waits = 0;
+    t.mock.method(Date, 'now', () => epoch);
+    t.mock.method(performance, 'now', () => duration);
+    t.mock.method(
+      Atomics,
+      'wait',
+      (_cell: Int32Array, index: number, _expected: number, limit: number) => {
+        if (index === 1) return 'ok';
+        waits += 1;
+        duration += limit;
+        return 'timed-out';
+      },
+    );
+    const spend = (group: number): void => {
+      for (let index = 0; index < 25; index += 1) {
+        assert.equal(
+          testWithDeadline(new RegExp(`^${String(group)}:${String(index)}$`, 'u'), 'fixture'),
+          'timeout',
+        );
+      }
+    };
+    useWorkerModeForTests('never-answers');
+    metric.subscribe(collect);
+    try {
+      spend(1);
+      assert.equal(waits, 20);
+      assert.deepEqual(events, [1]);
+      epoch = 60_001;
+      spend(2);
+      assert.equal(waits, 40);
+      assert.deepEqual(events, [1, 1]);
+    } finally {
+      metric.unsubscribe(collect);
+      useWorkerModeForTests('normal');
+    }
   });
 
   it('starts at most one run budget of unanswered comparisons', (t) => {
