@@ -112,21 +112,6 @@ function haltable(
  */
 export const STOP_DRAIN_MS = 5000;
 
-/** Waits for the work for at most `ms`; says whether the time ran out first. */
-async function timedOut(work: Promise<unknown>, ms: number): Promise<boolean> {
-  let timer: NodeJS.Timeout | undefined;
-  const outcome = await Promise.race([
-    work.then(() => false),
-    new Promise<boolean>((resolve) => {
-      timer = setTimeout(() => {
-        resolve(true);
-      }, ms);
-    }),
-  ]);
-  clearTimeout(timer);
-  return outcome;
-}
-
 export interface WorkerOptions<Ports> {
   readonly store: RunStore;
   readonly registry: StepRegistry<Ports>;
@@ -298,14 +283,39 @@ export class Worker<Ports> {
     const finished = Promise.allSettled([...this.jobs, ...(this.loopDone ? [this.loopDone] : [])]);
     if (options.timeoutMs === undefined) {
       await finished;
-    } else if (await timedOut(finished, options.timeoutMs)) {
+    } else if (await this.stopTimedOut(finished, options.timeoutMs)) {
       this.halted = true;
-      await timedOut(
+      await this.stopTimedOut(
         Promise.allSettled([...this.inflight]),
         Math.min(options.timeoutMs, STOP_DRAIN_MS),
       );
     }
     this.loopDone = null;
+  }
+
+  /** Schedules one shutdown deadline; tests can control it without changing the store's timers. */
+  protected scheduleStopDeadline(expire: () => void, ms: number): () => void {
+    const timer = setTimeout(expire, ms);
+    return () => {
+      clearTimeout(timer);
+    };
+  }
+
+  /** Waits for the work for at most `ms`; says whether the time ran out first. */
+  private async stopTimedOut(work: Promise<unknown>, ms: number): Promise<boolean> {
+    let cancel = (): void => undefined;
+    try {
+      return await Promise.race([
+        work.then(() => false),
+        new Promise<boolean>((resolve) => {
+          cancel = this.scheduleStopDeadline(() => {
+            resolve(true);
+          }, ms);
+        }),
+      ]);
+    } finally {
+      cancel();
+    }
   }
 
   /**
