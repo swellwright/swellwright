@@ -5,7 +5,7 @@
 #   sh artifacts/node-installer/test/run-tests.sh [filter[,filter...]]   (the tests whose name contains a filter word; none: all)
 #
 # Runs on the Linux CI runner and in Git Bash. The installer runs under dash when it is there (SW_TEST_SHELL overrides).
-# Environment: SW_TEST_SHELL (the shell that runs the installer), SW_TEST_ALLOW_ROOT=1 (see below).
+# Environment: SW_TEST_SHELL (the shell that runs the installer).
 set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -13,9 +13,9 @@ INSTALLER=$(cd "$HERE/.." && pwd)/install.sh
 REPO=$(cd "$HERE/../../.." && pwd)
 ORIG_PATH=$PATH
 
-# A step that wrote to an absolute path instead of through the fake root would damage the machine when this runs as root.
-if [ "$(id -u)" -eq 0 ] && [ "${SW_TEST_ALLOW_ROOT:-0}" != 1 ]; then
-    echo "Refusing to run the test suite as root (a bug in a step could change the real system). Use SW_TEST_ALLOW_ROOT=1 in a disposable container." >&2
+# The real root path ignores SW_TEST_ROOT. Never run the harness with that effective UID, even in a container.
+if [ "$(id -u)" -eq 0 ]; then
+    echo "Refusing to run the test suite as root. Use an unprivileged account." >&2
     exit 2
 fi
 

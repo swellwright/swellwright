@@ -46,7 +46,9 @@ reject|NODE_IP|node1.example.com
 accept|NODE_PORT|62050
 accept|NODE_PORT|1
 accept|NODE_PORT|65535
-accept|NODE_PORT|443
+reject|NODE_PORT|80|y
+reject|NODE_PORT|443|y
+reject|NODE_PORT|8444|y
 reject|NODE_PORT|0
 reject|NODE_PORT|65536
 reject|NODE_PORT|99999
@@ -135,6 +137,14 @@ accept|NEW_USER_PASSWORD_FILE|/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 accept|NODE_IMAGE_TAG|3.4.6
 accept|NODE_IMAGE_TAG|3.4.6-alpine
 accept|NODE_IMAGE_TAG|v1_2
+reject|NODE_IMAGE_TAG|latest|y
+reject|NODE_IMAGE_TAG|LaTeSt-alpine|y
+reject|NODE_IMAGE_TAG|Nightly-20261128|y
+reject|NODE_IMAGE_TAG|MAIN|y
+reject|NODE_IMAGE_TAG|master|y
+reject|NODE_IMAGE_TAG|DEV|y
+reject|NODE_IMAGE_TAG|edge|y
+accept|NODE_IMAGE_TAG|3.4.6-edge
 reject|NODE_IMAGE_TAG|.hidden
 reject|NODE_IMAGE_TAG|-x
 reject|NODE_IMAGE_TAG|3.4.6:latest
@@ -168,7 +178,7 @@ reject|BASE_UPGRADE|true
 reject|BASE_UPGRADE|YES
 reject|BASE_UPGRADE|
 accept|DOCKER_SOURCE|apt
-accept|DOCKER_SOURCE|script
+reject|DOCKER_SOURCE|script
 reject|DOCKER_SOURCE|snap
 accept|HAPROXY_SOURCE|auto
 accept|HAPROXY_SOURCE|ppa

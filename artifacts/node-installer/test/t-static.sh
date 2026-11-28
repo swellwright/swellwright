@@ -56,6 +56,34 @@ t_help_version_demo_need_no_root() {
     grep -q 'nothing is changed' "$T/out.demo" || fail "demo does not say that nothing is changed"
 }
 
+t_root_mode_ignores_the_test_root_and_source_hooks() {
+    mkstub id <<'EOF'
+[ "$1" = -u ] && echo 0
+EOF
+    have id
+    run_inst version SW_SOURCE_ONLY=1
+    assert_rc 0
+    assert_out "Swellwright node installer"
+    env PATH="$BIN:$ORIG_PATH" SW_TEST_ALLOW_ROOT=1 "$SHELL_UNDER_TEST" "$HERE/run-tests.sh" no-such-test >"$T/out" 2>"$T/err"
+    RC=$?
+    assert_rc 2
+    assert_out "Refusing to run the test suite as root"
+}
+
+t_root_mode_uses_trusted_tmpdir_even_when_the_caller_sets_one() {
+    mkstub id <<'EOF'
+[ "$1" = -u ] && echo 0
+EOF
+    mkstub fold <<'EOF'
+printf 'temporary directory: %s\n' "$TMPDIR"
+EOF
+    have id fold
+    run_inst help TMPDIR="$T/caller-controlled"
+    assert_rc 0
+    assert_out "temporary directory: /run"
+    assert_not_out "caller-controlled"
+}
+
 t_version_matches_manifest() {
     _v=$(sed -n 's/^INSTALLER_VERSION=//p' "$INSTALLER")
     _m=$(sed -n 's/^ *"version": "\(.*\)",$/\1/p' "$HERE/../manifest.json" | head -n1)
@@ -74,6 +102,136 @@ t_manifest_hash_matches_file() {
     grep -qF "\"sha256\": \"$_sum\"" "$HERE/../manifest.json" || fail "the sha256 of install.sh is not the one in manifest.json"
     _size=$(wc -c <"$INSTALLER" | tr -d ' ')
     grep -qF "\"size\": $_size," "$HERE/../manifest.json" || fail "the size of install.sh is not the one in manifest.json"
+}
+
+# A version is bound to its bytes (releases.json): the same version with other bytes is refused by build and by --check, and
+# the hash is the hash of the bytes on disk (a byte that is not UTF-8 is refused, not re-encoded). Runs the tool on a copy.
+t_manifest_tool_binds_a_version_to_its_bytes() {
+    [ -n "$REAL_NODE" ] || skip "node is not installed"
+    _a=$T/arts; mkdir -p "$_a/x"
+    cp "$INSTALLER" "$HERE/../manifest.json" "$HERE/../README.md" "$HERE/../releases.json" "$_a/x/"
+    _tool() { env SW_ARTIFACTS_ROOT="$_a" SW_ARTIFACT_BASE_REF="${_base:-}" "$REAL_NODE" "$REPO/scripts/artifact-manifest.mjs" "$@" >"$T/out" 2>"$T/err"; RC=$?; }
+    _base=
+    _tool --check
+    assert_rc 0
+    # One more byte, same version.
+    printf '# changed\n' >>"$_a/x/install.sh"
+    _tool --check
+    assert_rc 1
+    assert_out "is recorded in releases.json with other bytes"
+    _tool build
+    assert_rc 1
+    assert_out "A released version is never edited"
+    # A new version is recorded, and only grows the record.
+    sed 's/^INSTALLER_VERSION=.*/INSTALLER_VERSION=9.9.9/' "$_a/x/install.sh" >"$_a/x/install.new" && mv "$_a/x/install.new" "$_a/x/install.sh"
+    _tool build
+    assert_rc 0
+    assert_contains "$_a/x/releases.json" '"9.9.9": {'
+    assert_contains "$_a/x/releases.json" '"1.0.2": {'
+    _tool --check
+    assert_rc 0
+    grep -qF "\"sha256\": \"$(sha256sum "$_a/x/install.sh" | cut -d' ' -f1)\"" "$_a/x/manifest.json" || fail "the manifest hash is not the hash of the bytes"
+    # A lower version than one recorded is refused.
+    sed 's/^INSTALLER_VERSION=.*/INSTALLER_VERSION=1.0.3/' "$_a/x/install.sh" >"$_a/x/install.new" && mv "$_a/x/install.new" "$_a/x/install.sh"
+    _tool build
+    assert_rc 1
+    assert_out "is lower than the recorded"
+    # A byte that is not UTF-8.
+    sed 's/^INSTALLER_VERSION=.*/INSTALLER_VERSION=9.9.10/' "$_a/x/install.sh" >"$_a/x/install.new" && mv "$_a/x/install.new" "$_a/x/install.sh"
+    printf '# \377\n' >>"$_a/x/install.sh"
+    _tool build
+    assert_rc 1
+    assert_out "is not valid UTF-8"
+}
+
+# --check compares with a base revision: a version that the base has may not get other bytes, and the record only grows.
+t_manifest_tool_compares_with_the_base_revision() {
+    [ -n "$REAL_NODE" ] || skip "node is not installed"
+    command -v git >/dev/null 2>&1 || skip "git is not installed"
+    _a=$T/arts; mkdir -p "$_a/x"
+    cp "$INSTALLER" "$HERE/../manifest.json" "$HERE/../README.md" "$HERE/../releases.json" "$_a/x/"
+    _g() { git -C "$_a" -c user.name=test -c user.email=test -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@" >/dev/null 2>&1; }
+    _g init -q && _g add -A && _g commit -q -m base || skip "cannot make a temporary git repository"
+    _tool() { env SW_ARTIFACTS_ROOT="$_a" SW_ARTIFACT_BASE_REF=HEAD "$REAL_NODE" "$REPO/scripts/artifact-manifest.mjs" "$@" >"$T/out" 2>"$T/err"; RC=$?; }
+    _tool --check
+    assert_rc 0
+    assert_out "compared with HEAD"
+    # Dropping a recorded version from releases.json is seen.
+    "$REAL_NODE" -e '
+      const fs = require("fs"); const f = process.argv[1];
+      const r = JSON.parse(fs.readFileSync(f, "utf8")); delete r.versions["1.0.0"];
+      fs.writeFileSync(f, JSON.stringify(r, null, 2) + "\n");' "$_a/x/releases.json"
+    _tool --check
+    assert_rc 1
+    assert_out "version 1.0.0 is recorded at HEAD but not here"
+    _g checkout -- x/releases.json
+    # Rebuilding neither skips base validation nor assigns the old number again after a ledger edit.
+    "$REAL_NODE" -e '
+      const fs = require("fs"); const f = process.argv[1];
+      const r = JSON.parse(fs.readFileSync(f, "utf8")); r.versions["1.0.0"].size++;
+      fs.writeFileSync(f, JSON.stringify(r, null, 2) + "\n");' "$_a/x/releases.json"
+    _tool build
+    assert_rc 1
+    assert_out "version 1.0.0 is recorded here with other bytes"
+    _g checkout -- x/releases.json
+    # The version the base has, with other bytes: build refuses to record it again.
+    printf '# changed\n' >>"$_a/x/install.sh"
+    _tool build
+    assert_rc 1
+    assert_out "and is in HEAD"
+    _tool --check
+    assert_rc 1
+    env SW_ARTIFACTS_ROOT="$_a" SW_ARTIFACT_BASE_REF=no-such-revision "$REAL_NODE" "$REPO/scripts/artifact-manifest.mjs" --check >"$T/out" 2>"$T/err"
+    RC=$?
+    assert_rc 1
+    assert_out "is not a revision of this repository"
+    # Deleting the script must not delete the comparison with the base, even if another artifact still exists.
+    mv "$_a/x" "$_a/y"
+    _tool --check
+    assert_rc 1
+    assert_out "x: artifact exists at HEAD but not here"
+}
+
+t_artifact_base_guard_uses_trusted_code_and_fails_on_a_missing_blob() {
+    [ -n "$REAL_NODE" ] || skip "node is not installed"
+    command -v git >/dev/null 2>&1 || skip "git is not installed"
+    _a="$T/candidate"
+    mkdir -p "$_a/artifacts/x" "$_a/scripts"
+    cp "$INSTALLER" "$HERE/../manifest.json" "$HERE/../README.md" "$HERE/../releases.json" "$_a/artifacts/x/"
+    cp "$REPO/scripts/artifact-manifest.mjs" "$_a/scripts/"
+    _g() { git -C "$_a" -c user.name=test -c user.email=test -c commit.gpgsign=false -c core.hooksPath=/dev/null -c core.autocrlf=false "$@"; }
+    _g init -q && _g add -A && _g commit -q -m base || fail "cannot make a temporary git repository"
+    _base=$(_g rev-parse HEAD) || fail "cannot read the base commit"
+    _guard() { env PATH="$(dirname "$REAL_NODE"):$PATH" sh "$REPO/scripts/check-artifact-base.sh" "$_a" "$_base" "$@" >"$T/out" 2>"$T/err"; RC=$?; }
+    _guard "$_base"
+    assert_rc 0
+    printf '# changed without raising the version\n' >>"$_a/artifacts/x/install.sh"
+    "$REAL_NODE" -e '
+        const fs = require("node:fs");
+        const crypto = require("node:crypto");
+        const dir = process.argv[1];
+        const bytes = fs.readFileSync(dir + "/install.sh");
+        const manifest = JSON.parse(fs.readFileSync(dir + "/manifest.json"));
+        const releases = JSON.parse(fs.readFileSync(dir + "/releases.json"));
+        const digest = { sha256: crypto.createHash("sha256").update(bytes).digest("hex"), size: bytes.length };
+        Object.assign(manifest, digest);
+        releases.versions[manifest.version] = digest;
+        fs.writeFileSync(dir + "/manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+        fs.writeFileSync(dir + "/releases.json", JSON.stringify(releases, null, 2) + "\n");
+    ' "$_a/artifacts/x" || fail "cannot prepare candidate metadata"
+    printf 'process.exit(0);\n' >"$_a/scripts/artifact-manifest.mjs"
+    _g add -A && _g commit -q -m candidate || fail "cannot record the test candidate"
+    _candidate=$(_g rev-parse HEAD) || fail "cannot read the candidate commit"
+    _guard "$_candidate"
+    assert_rc 1
+    assert_out "recorded here with other bytes than at"
+    cp "$INSTALLER" "$HERE/../manifest.json" "$HERE/../releases.json" "$_a/artifacts/x/"
+    _blob=$(_g rev-parse "$_base:artifacts/x/releases.json") || fail "cannot read the base ledger object id"
+    _rest=${_blob#??}
+    rm -f "$_a/.git/objects/${_blob%"$_rest"}/$_rest"
+    _guard
+    assert_rc 1
+    assert_out "cannot read artifacts/x/releases.json at"
 }
 
 # Every row of validators.tsv: accept|NAME|value or reject|NAME|value, optionally a fourth column y/n: does the

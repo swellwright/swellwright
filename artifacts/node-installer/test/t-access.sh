@@ -22,10 +22,11 @@ bare_member() {
     have sudo ssh-keygen
 }
 
-# root_phase [NAME=value ...]: the ssh step, root phase, on a stock sshd_config.
+# root_phase [NAME=value ...]: the ssh step, root phase, on a stock sshd_config; the operator names the administrator admin and
+# the key KEY1 (a later NAME=value wins).
 root_phase() {
     printf '%s' "$SSHD_DEFAULT" >"$R/etc/ssh/sshd_config"
-    run_inst ssh SSH_PHASE=root "$@"
+    run_ssh_confirmed root NEW_USER=admin NEW_USER_PUBKEY="$KEY1" "$@"
 }
 
 # refused_root REASON: the step stopped before it changed anything, and said why.
@@ -55,13 +56,23 @@ t_admin_with_a_valid_key_counts() {
 }
 
 t_admin_counts_a_key_with_options_that_leave_a_shell() {
-    add_admin admin 'from="192.0.2.0/24,198.51.100.7",no-agent-forwarding,no-port-forwarding,no-X11-forwarding '"$KEY1"
+    add_admin admin 'no-agent-forwarding,no-port-forwarding,no-X11-forwarding '"$KEY1"
     root_phase
     closed_root
+    # from= still counts the account (the list), but the named key on such a line is not proof of a way in: the installer
+    # does not evaluate from= or expiry-time=.
+    printf 'from="192.0.2.0/24,198.51.100.7",no-agent-forwarding %s\n' "$KEY1" >"$R/home/admin/.ssh/authorized_keys"
+    rm -f "$R/etc/ssh/sshd_config.d/00-sw-hardening.conf"; : >"$STUB_LOG"
+    root_phase
+    assert_out "Administrators who can log in with a key: admin"
+    refused_named "from= and expiry-time= are not read"
+    printf 'expiry-time="20200101" %s\n' "$KEY1" >"$R/home/admin/.ssh/authorized_keys"
+    root_phase
+    refused_named "from= and expiry-time= are not read"
 }
 
 t_admin_counts_restrict_when_pty_gives_the_terminal_back() {
-    add_admin admin "restrict,pty,from=\"192.0.2.1\" $KEY1"
+    add_admin admin "restrict,pty $KEY1"
     root_phase
     closed_root
 }
@@ -324,7 +335,7 @@ t_admin_is_asked_of_sshd_account_by_account() {
     add_admin ops
     sshd_conf
     printf 'port 22\npermitrootlogin yes\npasswordauthentication yes\npubkeyauthentication yes\nusepam yes\nstrictmodes yes\nauthorizedkeysfile .ssh/authorized_keys\nauthenticationmethods any\ndenyusers admin\n' >"$STATE/sshd_T.admin"
-    root_phase
+    root_phase NEW_USER=ops
     closed_root
     assert_out "Administrators who can log in with a key: ops"
     assert_out "not counted: admin: DenyUsers keeps it out"
@@ -421,15 +432,14 @@ t_admin_key_file_that_sshd_does_not_read_is_refused() {
 
 t_admin_password_login_is_closed_only_for_an_account_that_counts() {
     add_admin admin 'command="/usr/local/bin/backup" '"$KEY1"
-    printf '%s' "$SSHD_DEFAULT" >"$R/etc/ssh/sshd_config"
-    run_inst ssh SSH_PHASE=root SSH_DISABLE_ROOT=no SSH_DISABLE_PASSWORD=yes
+    root_phase SSH_DISABLE_ROOT=no SSH_DISABLE_PASSWORD=yes
     assert_rc 1
     assert_out "Refusing to close password login"
     assert_out "1 with a forced command"
     assert_no_file "$R/etc/ssh/sshd_config.d/01-sw-keys-only.conf"
     assert_not_called_like '^systemctl (restart|reload)'
     printf '%s\n' "$KEY1" >"$R/home/admin/.ssh/authorized_keys"
-    run_inst ssh SSH_PHASE=root SSH_DISABLE_ROOT=no SSH_DISABLE_PASSWORD=yes
+    root_phase SSH_DISABLE_ROOT=no SSH_DISABLE_PASSWORD=yes
     assert_rc 0
     assert_contains "$R/etc/ssh/sshd_config.d/01-sw-keys-only.conf" "PasswordAuthentication no"
 }
@@ -475,6 +485,149 @@ t_admin_the_user_phase_says_whether_the_new_account_counts() {
     assert_out "No administrator can log in with a key"
 }
 
+# ---------------------------------------------------------------- the administrator and the key the operator names
+
+# refused_named REASON: another account may count, but the named administrator and key are not shown to work: nothing is
+# written and no rollback is armed.
+refused_named() {
+    assert_rc 1
+    assert_out "Refusing to close root login"
+    assert_out "$1"
+    assert_out "Nothing was changed"
+    assert_no_file "$R/etc/ssh/sshd_config.d/00-sw-hardening.conf"
+    assert_contains "$R/etc/ssh/sshd_config" "#PermitRootLogin prohibit-password"
+    assert_not_called "systemctl enable --now sw-ssh-rollback.timer"
+    assert_not_called_like '^sshd -t'
+    assert_not_called_like '^systemctl (restart|reload)'
+}
+
+t_named_admin_that_is_missing_is_refused() {
+    add_admin admin
+    root_phase NEW_USER=backup
+    refused_named "backup is not an administrator: it is not in the sudo group"
+}
+
+t_named_admin_without_the_named_key_is_refused() {
+    add_admin admin "$KEY2"
+    root_phase
+    refused_named "the key given as NEW_USER_PUBKEY is not in a key file of admin"
+}
+
+t_named_admin_whose_named_key_gives_no_shell_is_refused() {
+    add_admin admin
+    printf '%s\nrestrict %s\n' "$KEY2" "$KEY1" >"$R/home/admin/.ssh/authorized_keys"
+    root_phase
+    refused_named "is not in a key file of admin that sshd reads, as a line that gives a shell"
+}
+
+t_named_admin_with_an_empty_key_file_is_refused_beside_one_that_counts() {
+    add_admin admin
+    add_admin ops
+    : >"$R/home/admin/.ssh/authorized_keys"
+    root_phase
+    refused_named "admin cannot be shown to log in: /home/admin/.ssh/authorized_keys holds no key"
+}
+
+# sshd is asked for a login from where the open SSH sessions come from (read from ss, not from the environment): an
+# administrator that AllowUsers lets in only from elsewhere cannot be the way back in.
+t_named_admin_unreachable_from_the_address_of_the_session_is_refused() {
+    add_admin admin
+    printf 'ESTAB 0 0 192.0.2.10:22 198.51.100.5:50000 users:(("sshd",pid=10,fd=4))\n' >"$STATE/ss_est"
+    sshd_conf allowusers "admin@203.0.113.9"
+    root_phase
+    refused_named "AllowUsers does not let it in from 198.51.100.5"
+    assert_called "sshd -T -C user=admin,host=198.51.100.5,addr=198.51.100.5"
+    sshd_conf denyusers "admin@198.51.100.*"
+    root_phase
+    refused_named "DenyUsers keeps it out from 198.51.100.5"
+    sshd_conf allowusers "admin@198.51.100.*"
+    root_phase
+    closed_root
+}
+
+# Every address an SSH session comes from must work (the session of this run cannot be told from another one, say the
+# certificate sender's): one that does not is a refusal.
+t_named_admin_must_work_from_every_session_address() {
+    add_admin admin
+    printf 'ESTAB 0 0 192.0.2.10:22 198.51.100.5:50000 users:(("sshd",pid=10,fd=4))\nESTAB 0 0 192.0.2.10:22 203.0.113.9:50001 users:(("sshd",pid=11,fd=4))\n' >"$STATE/ss_est"
+    sshd_conf allowusers "admin@203.0.113.9"
+    root_phase
+    refused_named "AllowUsers does not let it in from 198.51.100.5"
+}
+
+# The named key must itself be a key: a valid key beside a broken copy of it in the file proves nothing.
+t_named_admin_with_a_named_key_that_is_not_a_key_is_refused() {
+    add_admin admin
+    printf '%s\nssh-ed25519 AAAAAAAAAAAAAAAA\n' "$KEY2" >"$R/home/admin/.ssh/authorized_keys"
+    root_phase NEW_USER_PUBKEY='ssh-ed25519 AAAAAAAAAAAAAAAA'
+    refused_named "NEW_USER_PUBKEY is not a valid public key"
+}
+
+# A CIDR host part of DenyUsers cannot be read by a pattern of the shell: it is taken as keeping the account out.
+t_named_admin_with_a_cidr_denyusers_entry_is_refused() {
+    add_admin admin
+    printf 'ESTAB 0 0 192.0.2.10:22 192.0.2.5:50000 users:(("sshd",pid=10,fd=4))\n' >"$STATE/ss_est"
+    sshd_conf denyusers "admin@192.0.2.0/24"
+    root_phase
+    refused_named "DenyUsers has an entry admin@192.0.2.0/24 that this check cannot read (CIDR)"
+}
+
+# A Match block that sets PermitRootLogin or password login again would override the drop-ins for some connections: the
+# change is undone and the operator is told to resolve it by hand.
+t_ssh_refuses_when_a_match_block_sets_the_login_methods() {
+    add_admin admin
+    printf '%s' "$SSHD_DEFAULT" >"$R/etc/ssh/sshd_config"
+    printf 'Match User root\n    PermitRootLogin yes\n' >>"$R/etc/ssh/sshd_config"
+    run_ssh_confirmed root NEW_USER=admin NEW_USER_PUBKEY="$KEY1"
+    assert_rc 1
+    assert_out "could set the login methods again (/etc/ssh/sshd_config: PermitRootLogin yes)"
+    assert_no_file "$R/etc/ssh/sshd_config.d/00-sw-hardening.conf"
+    assert_not_called_like '^systemctl restart ssh'
+    assert_called "systemctl stop sw-ssh-rollback.timer"
+    # An Include of another file (or any Include inside a Match block) is not read by the check: refused as well. The stock
+    # Include of sshd_config.d is fine.
+    printf '%sInclude /etc/ssh/sshd_config.d/*.conf\nInclude /etc/ssh/legacy.conf\n' "$SSHD_DEFAULT" >"$R/etc/ssh/sshd_config"
+    run_ssh_confirmed root NEW_USER=admin NEW_USER_PUBKEY="$KEY1"
+    assert_rc 1
+    assert_out "Include /etc/ssh/legacy.conf (an Include this check does not read)"
+    assert_no_file "$R/etc/ssh/sshd_config.d/00-sw-hardening.conf"
+    printf '%sInclude /etc/ssh/sshd_config.d/*.conf\n' "$SSHD_DEFAULT" >"$R/etc/ssh/sshd_config"
+    run_ssh_confirmed root NEW_USER=admin NEW_USER_PUBKEY="$KEY1"
+    assert_rc 0
+}
+
+# ChallengeResponseAuthentication, the old name of KbdInteractiveAuthentication, in a Match block keeps password login open
+# through keyboard-interactive: closing password login is refused.
+t_ssh_refuses_a_match_block_with_the_old_name_of_keyboard_interactive() {
+    add_admin admin
+    printf '%sMatch User admin\n    ChallengeResponseAuthentication yes\n' "$SSHD_DEFAULT" >"$R/etc/ssh/sshd_config"
+    run_ssh_confirmed root SSH_DISABLE_ROOT=no SSH_DISABLE_PASSWORD=yes NEW_USER=admin NEW_USER_PUBKEY="$KEY1"
+    assert_rc 1
+    assert_out "could set the login methods again (/etc/ssh/sshd_config: ChallengeResponseAuthentication yes)"
+    assert_no_file "$R/etc/ssh/sshd_config.d/01-sw-keys-only.conf"
+}
+
+# A cert-authority line trusts certificates signed by that key, not a login with the key itself: it is no proof.
+t_named_admin_whose_named_key_is_only_a_certificate_authority_is_refused() {
+    add_admin admin
+    printf '%s\ncert-authority %s\n' "$KEY2" "$KEY1" >"$R/home/admin/.ssh/authorized_keys"
+    root_phase
+    refused_named "is not in a key file of admin that sshd reads, as a line that gives a shell"
+}
+
+# sshd -T for a root login from where the session comes from must say no as well (a Match on the address could say yes).
+t_ssh_checks_root_login_for_the_address_of_the_session() {
+    add_admin admin
+    printf 'ESTAB 0 0 192.0.2.10:22 198.51.100.5:50000 users:(("sshd",pid=10,fd=4))\n' >"$STATE/ss_est"
+    printf 'port 22\npermitrootlogin prohibit-password\npasswordauthentication yes\npubkeyauthentication yes\nusepam yes\nstrictmodes yes\nauthorizedkeysfile .ssh/authorized_keys\n' >"$STATE/sshd_T.root"
+    : >"$STATE/sshd_ignores_dropins_for_root"
+    root_phase
+    assert_rc 1
+    assert_out "PermitRootLogin is prohibit-password for root from 198.51.100.5"
+    assert_no_file "$R/etc/ssh/sshd_config.d/00-sw-hardening.conf"
+    assert_called "sshd -T -C user=root,host=198.51.100.5,addr=198.51.100.5"
+}
+
 # ---------------------------------------------------------------- verify shows it
 
 t_verify_lists_the_administrators_that_count() {
@@ -516,7 +669,7 @@ write_secret() {
 node_with_secret_file() { run_inst node NODE_DOMAIN=node1.example.com PANEL_ALLOW_IP=192.0.2.20 "$@"; }
 
 t_secret_file_is_read() {
-    have docker
+    node_acl_ready
     write_secret "$T/node.key" "$SECRET"
     node_with_secret_file SECRET_KEY_FILE="$T/node.key"
     assert_rc 0
@@ -527,7 +680,7 @@ t_secret_file_is_read() {
 }
 
 t_secret_file_without_a_final_line_break_and_with_mode_400() {
-    have docker
+    node_acl_ready
     write_secret "$T/node.key" "$SECRET" nolf
     chmod 400 "$T/node.key"; echo 400 >"$T/node.key.mode"
     node_with_secret_file SECRET_KEY_FILE="$T/node.key"
@@ -536,7 +689,7 @@ t_secret_file_without_a_final_line_break_and_with_mode_400() {
 }
 
 t_secret_file_from_an_env_file() {
-    have docker
+    node_acl_ready
     write_secret "$T/node.key" "$SECRET"
     write_env "$T/p.env" <<EOF
 NODE_DOMAIN=node1.example.com
@@ -550,7 +703,7 @@ EOF
 }
 
 t_secret_file_from_the_option() {
-    have docker
+    node_acl_ready
     write_secret "$T/node.key" "$SECRET"
     write_env "$T/p.env" <<'EOF'
 NODE_DOMAIN=node1.example.com

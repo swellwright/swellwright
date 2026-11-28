@@ -211,11 +211,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The history: the manifest check compares the versions and their bytes with the base revision.
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-      - name: Manifest and README tables are up to date
+      - name: Manifest and README tables are up to date, a released version keeps its bytes
+        env:
+          # A pull request is compared with its target branch, a push to main with the commit before it.
+          SW_ARTIFACT_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: node scripts/artifact-manifest.mjs --check
       - name: Tools (dash, shellcheck, HAProxy)
         run: |

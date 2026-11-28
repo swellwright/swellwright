@@ -43,6 +43,15 @@ assert_order() {
     [ "$_la" -lt "$_lb" ] || fail "'$1' must come before '$2'"
 }
 
+# assert_order_like "RE A" "RE B": the first call matching A is recorded before the first call matching B.
+assert_order_like() {
+    _la=$(grep -nE -- "$1" "$STUB_LOG" | head -n1 | cut -d: -f1)
+    _lb=$(grep -nE -- "$2" "$STUB_LOG" | head -n1 | cut -d: -f1)
+    [ -n "$_la" ] || fail "no stub call matches: $1"
+    [ -n "$_lb" ] || fail "no stub call matches: $2"
+    [ "$_la" -lt "$_lb" ] || fail "'$1' must come before '$2'"
+}
+
 # assert_mode_recorded MODE FILE: the installer asked for this mode (install -m MODE, or chmod MODE). Modes cannot be read back
 # on every file system the suite runs on, so the calls are what is checked.
 assert_mode_recorded() {
@@ -61,7 +70,7 @@ assert_no_secret() {
 # mkstub NAME < body: a stub command. Every stub records its call, and fails when the state file `fail` lists a prefix of it.
 mkstub() {
     {
-        printf '#!/bin/sh\nSTUB_LOG=%s; STUB_STATE=%s; STUB_R=%s; STUB_BIN=%s\n' "'$STUB_LOG'" "'$STATE'" "'$R'" "'$BIN'"
+        printf '#!/bin/sh\nSTUB_LOG=%s; STUB_STATE=%s; STUB_R=%s; STUB_BIN=%s; STUB_SHELL=%s\n' "'$STUB_LOG'" "'$STATE'" "'$R'" "'$BIN'" "'$SHELL_UNDER_TEST'"
         cat <<'EOF'
 _n=${0##*/}
 { printf '%s' "$_n"; for _a in "$@"; do printf ' %s' "$_a"; done; printf '\n'; } >>"$STUB_LOG"
@@ -84,11 +93,24 @@ fail_on() { printf '%s\n' "$1" >>"$STATE/fail"; }
 make_stubs() {
     mkdir -p "$STATE/stubs"
     # Commands that only record.
-    for _c in hostnamectl modprobe journalctl chown add-apt-repository rsync python3 sleep flock; do
+    for _c in hostnamectl modprobe journalctl chown add-apt-repository rsync python3 sleep sync systemd-notify; do
         mkstub "$_c" <<'EOF'
 exit 0
 EOF
     done
+    mkstub flock <<'EOF'
+if [ "$*" = "-u 8" ]; then
+    if [ -f "$STUB_STATE/interrupt_before_confirmation" ]; then
+        kill -KILL "$PPID"
+        exit 1
+    fi
+    if [ -f "$STUB_STATE/fire_on_unlock" ]; then
+        rm -f "$STUB_STATE/fire_on_unlock"
+        sh "$STUB_R/var/lib/swellwright-ssh-rollback/rollback.sh" automatic || exit 1
+    fi
+fi
+exit 0
+EOF
     # chmod and install do their work as well, so that the files the installer writes exist.
     _real_chmod=$(command -v chmod); _real_install=$(command -v install)
     mkstub chmod <<EOF
@@ -193,30 +215,158 @@ _u=$(cut -d: -f1 "$STUB_STATE/chpasswd.in" | head -n1)
 echo "$_u" >>"$STUB_STATE/haspw"
 exit 0
 EOF
+    # Tests drive the unit's real helper; the wait stub returns immediately rather than owning a background process.
     mkstub systemctl <<'EOF'
+_node_unit="$STUB_R/etc/systemd/system/sw-node.service"
+_node_helper="$STUB_R/usr/local/sbin/sw-node-lifecycle.sh"
+_acl_helper="$STUB_R/usr/local/sbin/sw-node-api-acl.sh"
+_acl_unit="$STUB_R/etc/systemd/system/sw-node-api-acl.service"
+_active="$STUB_STATE/active_units"
+deactivate() {
+    if [ -f "$_active" ]; then
+        grep -vx "$1" "$_active" >"$_active.new"
+        mv "$_active.new" "$_active"
+    fi
+}
+activate() { deactivate "$1"; echo "$1" >>"$_active"; }
+node_stop() {
+    _stop_rc=0
+    if grep -qxF sw-node.service "$_active" 2>/dev/null &&
+       grep -q '^ExecStop=' "$_node_unit"; then
+        "$STUB_SHELL" "$_node_helper" stop "$STUB_R" || _stop_rc=$?
+    fi
+    deactivate sw-node.service
+    if grep -q '^ExecStopPost=' "$_node_unit"; then
+        "$STUB_SHELL" "$_node_helper" stop "$STUB_R" || _stop_rc=$?
+    fi
+    if ! grep -qxF 'RuntimeDirectoryPreserve=yes' "$_node_unit"; then rm -rf "$STUB_R/run/sw-node"; fi
+    return "$_stop_rc"
+}
+acl_start() {
+    [ ! -e "$STUB_STATE/fail_acl_service" ] || return 1
+    "$STUB_SHELL" "$_acl_helper" "$(sed -n 's/^ExecStart=[^ ]* //p' "$_acl_unit")" || return 1
+    activate sw-node-api-acl.service
+}
+node_start() {
+    [ -f "$_node_unit" ] || return 1
+    if grep -qxF 'Wants=sw-node-api-acl.service' "$_node_unit" &&
+        ! grep -qxF sw-node-api-acl.service "$_active" 2>/dev/null; then
+        acl_start || :
+    fi
+    mkdir -p "$STUB_R/run/sw-node"
+    "$STUB_SHELL" "$_node_helper" start "$STUB_R" || return 1
+    activate sw-node.service
+}
 case "$1" in
     is-active)
+        if [ "$2" = --quiet ]; then set -- is-active "$3"; fi
+        if [ "$2" = docker.service ] && [ ! -f "$STUB_STATE/docker_inactive" ]; then echo active; exit 0; fi
+        if [ "$2" = docker.service ]; then echo inactive; exit 3; fi
         if grep -qx "$2" "$STUB_STATE/active_units" 2>/dev/null; then echo active; exit 0; fi
+        case "$2" in ssh|sshd) [ -f "$STUB_STATE/ssh_down" ] || { echo active; exit 0; } ;; esac
         echo inactive; exit 3 ;;
-    is-enabled) echo enabled; exit 0 ;;
+    show)
+        case "$*" in
+            'show -p LoadState --value docker.service')
+                if [ -x "$STUB_BIN/docker" ]; then echo loaded; else echo not-found; fi ;;
+            'show -p LoadState -p FragmentPath -p DropInPaths -p NeedDaemonReload '*)
+                _target=/etc/systemd/system/${10}
+                if [ -f "$STUB_R$_target" ]; then
+                    printf 'LoadState=loaded\nFragmentPath=%s\n' "$_target"
+                else
+                    printf 'LoadState=not-found\nFragmentPath=\n'
+                fi
+                if [ "${10}" = sw-node.service ] && [ -f "$STUB_STATE/node_unit_override" ]; then
+                    printf 'DropInPaths=/etc/systemd/system/sw-node.service.d/local.conf\n'
+                else echo 'DropInPaths='; fi
+                [ ! -f "$STUB_STATE/node_unit_stale" ] && echo 'NeedDaemonReload=no' || echo 'NeedDaemonReload=yes' ;;
+        esac ;;
+    is-enabled)
+        if [ "$2" = sw-node.service ] && [ ! -f "$STUB_STATE/node_enabled" ]; then echo disabled; exit 1; fi
+        echo enabled; exit 0 ;;
+    disable)
+        if [ "${2:-}" = sw-ssh-rollback.timer ] && [ -f "$STUB_STATE/interrupt_disable" ]; then
+            rm -f "$STUB_STATE/interrupt_disable"
+            kill -KILL "$PPID"
+            exit 1
+        fi ;;
+    stop)
+        if [ "${2:-}" = docker.service ]; then
+            if [ -f "$STUB_STATE/node_enabled" ]; then node_stop || exit 1; fi
+            if grep -qxF 'PartOf=docker.service' "$_acl_unit" 2>/dev/null; then deactivate sw-node-api-acl.service; fi
+            deactivate docker.service
+            exit 0
+        fi
+        if [ "${2:-}" = sw-node.service ]; then node_stop; exit $?; fi
+        # fire_on_stop: the timer has just fired when it is stopped (its rollback service runs before the stop returns).
+        if [ "${2:-}" = sw-ssh-rollback.timer ] && [ -f "$STUB_STATE/fire_on_stop" ]; then
+            rm -f "$STUB_STATE/fire_on_stop"
+            sh "$STUB_R/var/lib/swellwright-ssh-rollback/rollback.sh"
+        fi
+        if [ -f "$STUB_STATE/active_units" ]; then
+            grep -vx "$2" "$STUB_STATE/active_units" >"$STUB_STATE/active_units.new"
+            mv "$STUB_STATE/active_units.new" "$STUB_STATE/active_units"
+        fi ;;
+    enable|start)
+        if [ "$*" = "enable sw-node.service" ]; then
+            : >"$STUB_STATE/node_enabled"
+        elif [ "$*" = "enable sw-node-api-acl.service" ]; then
+            grep -qxF 'WantedBy=docker.service' "$_acl_unit" && : >"$STUB_STATE/acl_wanted_by_docker"
+        elif [ "$*" = "start sw-node-api-acl.service" ]; then
+            if ! grep -qxF sw-node-api-acl.service "$_active" 2>/dev/null; then acl_start || exit 1; fi
+        elif [ "$*" = "start sw-node.service" ]; then
+            node_start || exit 1
+        elif [ "$*" = "start docker.service" ]; then
+            activate docker.service
+            if [ -f "$STUB_STATE/acl_wanted_by_docker" ]; then acl_start || :; fi
+            if [ -f "$STUB_STATE/node_enabled" ]; then node_start || exit 1; fi
+        elif [ "${2:-}" = --now ] && [ "${3:-}" = sw-ssh-rollback.timer ]; then
+            [ -f "$STUB_R/etc/systemd/system/$3" ] || exit 1
+            echo "$3" >>"$STUB_STATE/active_units"
+        elif [ "$1" = start ] && [ "${2:-}" = sw-ssh-rollback.timer ]; then
+            echo "$2" >>"$STUB_STATE/active_units"
+        fi ;;
+    restart)
+        if [ "${2:-}" = sw-node-api-acl.service ] && [ -f "$_acl_helper" ]; then
+            acl_start || exit 1
+        elif [ "${2:-}" = sw-node.service ] ||
+             { [ "${2:-}" = docker.service ] && [ -f "$STUB_STATE/node_enabled" ]; }; then
+            node_stop && node_start || exit 1
+        fi ;;
 esac
 exit 0
 EOF
     mkstub ufw <<'EOF'
 case "$1" in
     status) if [ -f "$STUB_STATE/ufw_status" ]; then cat "$STUB_STATE/ufw_status"; else echo "Status: inactive"; fi ;;
+    show) if [ -f "$STUB_STATE/ufw_added" ]; then cat "$STUB_STATE/ufw_added"; fi ;;
     --force) [ "${2:-}" = enable ] && printf 'Status: active\n\nTo   Action   From\n62050/tcp   ALLOW   192.0.2.20\n' >"$STUB_STATE/ufw_status" ;;
 esac
 exit 0
 EOF
-    # sshd -T [-C user=NAME,...] prints sshd_T.NAME, else sshd_T, else what a stock configuration says.
+    # sshd -T [-C user=NAME,...] prints sshd_T.NAME, else sshd_T, else what a stock configuration says; the drop-ins the ssh step
+    # writes are in effect as on a stock Ubuntu (they win), unless "$STUB_STATE/sshd_ignores_dropins" exists (or, for a login of
+    # root only, sshd_ignores_dropins_for_root: a Match block that wins for it).
     mkstub sshd <<'EOF'
+if [ "${1:-}" = -t ] && [ -f "$STUB_STATE/sshd_reject_candidate" ] &&
+   { [ -f "$STUB_R/etc/ssh/sshd_config.d/00-sw-hardening.conf" ] ||
+     [ -f "$STUB_R/etc/ssh/sshd_config.d/01-sw-keys-only.conf" ]; }; then exit 1; fi
 if [ "${1:-}" = -T ]; then
     _u=
     case "${3:-}" in user=*) _u=${3#user=}; _u=${_u%%,*} ;; esac
-    if [ -n "$_u" ] && [ -f "$STUB_STATE/sshd_T.$_u" ]; then cat "$STUB_STATE/sshd_T.$_u"
-    elif [ -f "$STUB_STATE/sshd_T" ]; then cat "$STUB_STATE/sshd_T"
-    else printf 'port 22\npermitrootlogin yes\npasswordauthentication yes\npubkeyauthentication yes\nusepam yes\nstrictmodes yes\nauthorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2\nauthenticationmethods any\n'; fi
+    _nr=0; _np=0
+    if [ ! -f "$STUB_STATE/sshd_ignores_dropins" ] && { [ "$_u" != root ] || [ ! -f "$STUB_STATE/sshd_ignores_dropins_for_root" ]; }; then
+        grep -qx 'PermitRootLogin no' "$STUB_R/etc/ssh/sshd_config.d/00-sw-hardening.conf" 2>/dev/null && _nr=1
+        grep -qx 'PasswordAuthentication no' "$STUB_R/etc/ssh/sshd_config.d/01-sw-keys-only.conf" 2>/dev/null && _np=1
+    fi
+    {
+        if [ -n "$_u" ] && [ -f "$STUB_STATE/sshd_T.$_u" ]; then cat "$STUB_STATE/sshd_T.$_u"
+        elif [ -f "$STUB_STATE/sshd_T" ]; then cat "$STUB_STATE/sshd_T"
+        else printf 'port 22\npermitrootlogin yes\npasswordauthentication yes\npubkeyauthentication yes\nusepam yes\nstrictmodes yes\nauthorizedkeysfile .ssh/authorized_keys .ssh/authorized_keys2\nauthenticationmethods any\n'; fi
+    } | awk -v nr="$_nr" -v np="$_np" '
+        nr == 1 && $1 == "permitrootlogin" { print "permitrootlogin no"; next }
+        np == 1 && ($1 == "passwordauthentication" || $1 == "kbdinteractiveauthentication") { print $1 " no"; next }
+        { print }'
 fi
 exit 0
 EOF
@@ -239,25 +389,145 @@ fi
 exit 0
 EOF
     mkstub docker <<'EOF'
+[ -z "${SECRET_KEY+x}${NEW_USER_PASSWORD+x}" ] || { echo 'secret parameter inherited by Docker' >&2; exit 1; }
+_id=abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
+[ "$1" != --host ] || shift 2
+inspect_node() {
+    [ -f "$STUB_STATE/container" ] || return 1
+    _port=$(sed -n 's/^NODE_PORT=//p' "$STUB_STATE/container_env" 2>/dev/null)
+    _state=$(cat "$STUB_STATE/node_state" 2>/dev/null || echo running)
+    case "$*" in
+        *State.Status*) printf '%s\n' "$_state" ;;
+        *Config.Image*) cat "$STUB_STATE/container" ;;
+        *SNI_VERIFICATION*) if grep -qxF 'SNI_VERIFICATION=true' "$STUB_STATE/container_env"; then echo true; fi ;;
+        *Config.Env*) if [ -n "$_port" ]; then printf '"%s"\n' "$_port"; fi ;;
+        *HostConfig.NetworkMode*)
+            [ ! -f "$STUB_STATE/foreign_node" ] || { echo 'unrecognized'; return 0; }
+            echo "/remnanode|remnanode|remnanode|$STUB_R/opt/remnanode/docker-compose.yml|$STUB_R/opt/remnanode|False|remnanode_default|false" ;;
+        *HostConfig.PortBindings*|*NetworkSettings.Ports*)
+            if [ -f "$STUB_STATE/node_bindings" ]; then cat "$STUB_STATE/node_bindings"
+            else printf '443/tcp|127.0.0.1|443\n%s/tcp|0.0.0.0|%s\n' "$_port" "$_port"; fi ;;
+        *NetworkSettings.Networks*) echo remnanode_default ;;
+        *HostConfig.RestartPolicy*) cat "$STUB_STATE/restart_policy" 2>/dev/null || echo no ;;
+        *) return 1 ;;
+    esac
+}
 case "$1" in
     --version) echo "Docker version 28.0.0, build stub" ;;
-    compose)
-        case "$2" in version) echo "Docker Compose version v2.40.0" ;; esac ;;
-    ps) [ -f "$STUB_STATE/container" ] && echo "remnanode" ;;
-    inspect)
-        [ -f "$STUB_STATE/container" ] || exit 1
+    info)
+        case "${3:-}" in
+            *LiveRestoreEnabled*) cat "$STUB_STATE/docker_info" 2>/dev/null || echo 'linux false []' ;;
+            *FirewallBackend*) cat "$STUB_STATE/docker_backend" 2>/dev/null || echo iptables ;;
+            *) exit 1 ;;
+        esac ;;
+    network)
         case "$*" in
-            *State.Status*) echo running ;;
-            *Config.Image*) cat "$STUB_STATE/container" ;;
-            *Config.Env*) cat "$STUB_STATE/container_env" 2>/dev/null ;;
+            'network ls '*)
+                if [ -f "$STUB_STATE/container" ] || [ -f "$STUB_STATE/node_network" ]; then echo remnanode_default; fi ;;
+            *' .Containers'*)
+                if [ -f "$STUB_STATE/node_members" ]; then cat "$STUB_STATE/node_members"; fi ;;
+            *) cat "$STUB_STATE/node_network" 2>/dev/null || echo 'bridge|local|false|false|{}|remnanode|default' ;;
+        esac ;;
+    compose)
+        case "$*" in
+            'compose version') echo "Docker Compose version v2.40.0" ;;
+            *' pull remnanode')
+                for _staging in "$STUB_R"/run/.sw-write.*; do [ ! -e "$_staging" ] || exit 1; done ;;
+            *' create --no-build remnanode')
+                sed -n 's/^    image: //p' "$3" >"$STUB_STATE/container"
+                sed -n 's/^      - \(NODE_PORT=.*\|SNI_VERIFICATION=.*\)$/\1/p' "$3" >"$STUB_STATE/container_env"
+                echo created >"$STUB_STATE/node_state"
+                echo no >"$STUB_STATE/restart_policy"
+                ;;
+        esac ;;
+    ps)
+        if [ -f "$STUB_STATE/container" ]; then
+            case "$*" in *'{{.ID}}'*) echo "$_id" ;; *) echo remnanode ;; esac
+        fi
+        case "$*" in *'label=com.docker.compose.project=remnanode'*)
+            if [ -f "$STUB_STATE/node_siblings" ]; then cat "$STUB_STATE/node_siblings"; fi ;;
+        esac ;;
+    inspect) inspect_node "$@" || exit 1 ;;
+    update)
+        [ "$*" = "update --restart=no $_id" ] || exit 1
+        printf 'no\n' >"$STUB_STATE/restart_policy" ;;
+    container)
+        case "$2" in
+            inspect) [ "$5" = "$_id" ] && inspect_node "$@" || exit 1 ;;
+            stop|start|wait)
+                [ "$3" = "$_id" ] || exit 1
+                case "$2" in stop) echo exited >"$STUB_STATE/node_state" ;; start) echo running >"$STUB_STATE/node_state" ;; esac ;;
+            *) exit 1 ;;
         esac ;;
 esac
 exit 0
 EOF
+    # iptables keeps its chains in files: DOCKER-USER in "$STUB_STATE/iptables_rules", any other chain in ipt.CHAIN, each in the
+    # format of `iptables -S` (a -N line first). -S of a chain that does not exist fails, as -N of one that does.
     mkstub iptables <<'EOF'
-case "$1 $2" in
-    "-S DOCKER-USER") cat "$STUB_STATE/iptables_rules" 2>/dev/null ;;
+[ "$1" != -w ] || shift 2
+if [ "$1" = -t ] && [ "$2" = nat ]; then
+    [ ! -f "$STUB_STATE/no_docker_nat" ] || exit 1
+    case "$4" in
+        PREROUTING) printf -- '-P PREROUTING ACCEPT\n-A PREROUTING -m addrtype --dst-type LOCAL -j DOCKER\n' ;;
+        DOCKER) printf -- '-N DOCKER\n' ;;
+        *) exit 1 ;;
+    esac
+    exit 0
+fi
+_cf() { if [ "$1" = DOCKER-USER ]; then echo "$STUB_STATE/iptables_rules"; else echo "$STUB_STATE/ipt.$1"; fi; }
+case "$1" in
+    -S)
+        _f=$(_cf "$2"); [ -f "$_f" ] || exit 1
+        if [ "$2" = DOCKER-USER ] && [ -s "$STUB_STATE/fail_acl_readback" ] &&
+           grep -qF -- "$(cat "$STUB_STATE/fail_acl_readback")" "$_f"; then
+            rm -f "$STUB_STATE/fail_acl_readback"
+            exit 1
+        fi
+        cat "$_f" ;;
+    -N) _f=$(_cf "$2"); [ -f "$_f" ] && exit 1; printf -- '-N %s\n' "$2" >"$_f" ;;
 esac
+exit 0
+EOF
+    # iptables-restore --noflush: applies -N -F -X -A -I -D to the files of the iptables stub, all or nothing (a line that fails,
+    # as -D of a rule that is not there or -X of a chain still jumped to, leaves every file as it was). The input is kept in
+    # restore.in and appended to restore.log.
+    mkstub iptables-restore <<'EOF'
+cat >"$STUB_STATE/restore.in"
+cat "$STUB_STATE/restore.in" >>"$STUB_STATE/restore.log"
+_w=$(mktemp -d) || exit 1
+[ -f "$STUB_STATE/iptables_rules" ] && cp "$STUB_STATE/iptables_rules" "$_w/DOCKER-USER"
+for _c in "$STUB_STATE"/ipt.*; do [ -f "$_c" ] && cp "$_c" "$_w/${_c##*/ipt.}"; done
+_err=0; _l=
+while IFS= read -r _l; do
+    # shellcheck disable=SC2086
+    set -- $_l
+    case "${1:-}" in
+        '*filter'|COMMIT|'') continue ;;
+        -N) if [ -f "$_w/$2" ]; then _err=1; break; fi; printf -- '-N %s\n' "$2" >"$_w/$2" ;;
+        -F) [ -f "$_w/$2" ] || { _err=1; break; }; printf -- '-N %s\n' "$2" >"$_w/$2" ;;
+        -X) [ -f "$_w/$2" ] || { _err=1; break; }
+            if grep -q -- " -j $2\$" "$_w"/*; then _err=1; break; fi
+            rm -f "$_w/$2" ;;
+        -A) [ -f "$_w/$2" ] || { _err=1; break; }; printf '%s\n' "$_l" >>"$_w/$2" ;;
+        -I) _c=$2; _p=$3; shift 3; [ -f "$_w/$_c" ] || { _err=1; break; }
+            # Rule number _p is line _p + 1 (the -N line is first).
+            awk -v p="$_p" -v r="-A $_c $*" 'NR == p + 1 { print r; d = 1 } { print } END { if (!d) print r }' "$_w/$_c" >"$_w/.t" && mv "$_w/.t" "$_w/$_c" ;;
+        -D) _c=$2; _r="-A ${_l#-D }"
+            grep -qxF -- "$_r" "$_w/$_c" 2>/dev/null || { _err=1; break; }
+            awk -v r="$_r" '!d && $0 == r { d = 1; next } { print }' "$_w/$_c" >"$_w/.t" && mv "$_w/.t" "$_w/$_c" ;;
+        *) _err=1; break ;;
+    esac
+done <"$STUB_STATE/restore.in"
+if [ "$_err" = 0 ]; then
+    for _c in "$STUB_STATE"/ipt.*; do [ -f "$_c" ] && rm -f "$_c"; done
+    for _c in "$_w"/*; do
+        [ -f "$_c" ] || continue
+        if [ "${_c##*/}" = DOCKER-USER ]; then cp "$_c" "$STUB_STATE/iptables_rules"; else cp "$_c" "$STUB_STATE/ipt.${_c##*/}"; fi
+    done
+fi
+rm -rf "$_w"
+[ "$_err" = 0 ] || { echo "iptables-restore: line failed: $_l" >&2; exit 1; }
 exit 0
 EOF
     mkstub nginx <<'EOF'
@@ -315,8 +585,12 @@ case "$*" in
 esac
 exit 0
 EOF
+    # ss: the listening sockets are "$STUB_STATE/ss", the established connections (state established) "$STUB_STATE/ss_est".
     mkstub ss <<'EOF'
-cat "$STUB_STATE/ss"
+case "$*" in
+    *established*) cat "$STUB_STATE/ss_est" 2>/dev/null ;;
+    *) cat "$STUB_STATE/ss" ;;
+esac
 exit 0
 EOF
     # openssl: certificates are dummy files; x509 answers from state.
@@ -336,23 +610,50 @@ case "$1" in
 esac
 exit 0
 EOF
-    # gpg: the "keys" are marker texts; the stub prints the fingerprints that belong to the marker.
+    # gpg: a "key file" is lines of markers, one key bundle per line: KEY-DOCKER (Docker's key), KEY-NGINX (two keys of
+    # nginx.org), KEY-BAD (a key nobody pinned). --show-keys prints the primary key (and a subkey) of every marker, --import
+    # adds the markers to the GnuPG home, --export prints the imported markers that hold one of the fingerprints asked for.
     mkstub gpg <<'EOF'
-case "$1" in
+_fprs_of() {
+    case "$1" in
+        KEY-DOCKER) echo 9DC858229FC7DD38854AE2D88D81803C0EBFCD88 ;;
+        KEY-NGINX) echo 8540A6F18833A80E9C1653A42FD21310B49F6B46 573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62 ;;
+        KEY-BAD) echo 0123456789ABCDEF0123456789ABCDEF01234567 ;;
+    esac
+}
+_home=; _mode=; _args=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --homedir) _home=$2; shift ;;
+        --show-keys|--import|--export) _mode=$1 ;;
+        -*) ;;
+        *) _args="$_args $1" ;;
+    esac
+    shift
+done
+if [ -f "$STUB_STATE/gpg_requires_isolated_home" ]; then
+    case "$_home" in
+        "$TMPDIR"/*) [ -d "$_home" ] || exit 2 ;;
+        *) echo "GnuPG default home is absent or unavailable" >&2; exit 2 ;;
+    esac
+fi
+case "$_mode" in
     --show-keys)
-        for _a in "$@"; do _f=$_a; done
-        if grep -q 'KEY-DOCKER' "$_f" 2>/dev/null; then
-            printf 'pub:-:4096:1:8D81803C0EBFCD88:1487788586:::-:::escaESCA::::::23::0:\nfpr:::::::::9DC858229FC7DD38854AE2D88D81803C0EBFCD88:\nuid:-::::1487792064::X::Docker Release::::::::::0:\nsub:-:4096:1:7EA0A9C3F273FCD8:1487788586:::::s::::::23:\nfpr:::::::::D3306A018370199E527AE7997EA0A9C3F273FCD8:\n'
-        elif grep -q 'KEY-NGINX' "$_f" 2>/dev/null; then
-            printf 'pub:-:4096:1:2FD21310B49F6B46:1716988950:::-:::scSC::::::23::0:\nfpr:::::::::8540A6F18833A80E9C1653A42FD21310B49F6B46:\nuid:-::::1::X::nginx signing key::::::::::0:\npub:-:2048:1:ABF5BD827BD9BF62:1313747554:1811172661::-:::scSC::::::23::0:\nfpr:::::::::573BFD6B3D8FBC641079A6ABABF5BD827BD9BF62:\nuid:-::::1::X::nginx signing key::::::::::0:\n'
-        elif grep -q 'KEY-BAD' "$_f" 2>/dev/null; then
-            printf 'pub:-:4096:1:AAAAAAAAAAAAAAAA:1:::-:::scSC::::::23::0:\nfpr:::::::::0123456789ABCDEF0123456789ABCDEF01234567:\n'
-        fi ;;
-    --dearmor)
-        # gpg --dearmor --yes -o OUT IN
-        _in=; _out=
-        while [ $# -gt 0 ]; do case "$1" in -o) _out=$2; shift ;; --dearmor|--yes) ;; *) _in=$1 ;; esac; shift; done
-        cp "$_in" "$_out" ;;
+        for _f in $_args; do :; done
+        [ -f "$_f" ] || exit 2
+        while IFS= read -r _l; do
+            for _p in $(_fprs_of "$_l"); do
+                printf 'pub:-:4096:1:%s:1:::-:::scSC::::::23::0:\nfpr:::::::::%s:\nsub:-:4096:1:0000000000000000:1:::::s::::::23:\nfpr:::::::::FFFFFFFF%s:\n' "$(printf '%s' "$_p" | cut -c25-40)" "$_p" "$(printf '%s' "$_p" | cut -c9-40)"
+            done
+        done <"$_f" ;;
+    --import) for _f in $_args; do cat "$_f" >>"$_home/ring" || exit 2; done ;;
+    --export)
+        [ -f "$_home/ring" ] || exit 0
+        sort -u "$_home/ring" | while IFS= read -r _l; do
+            for _p in $(_fprs_of "$_l"); do
+                case " $_args " in *" $_p "*) printf '%s\n' "$_l"; break ;; esac
+            done
+        done ;;
 esac
 exit 0
 EOF
@@ -363,7 +664,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -o) _o=$2; shift ;;
         -w) _w=$2; shift ;;
-        --connect-timeout|-m|--max-time|--resolve) shift ;;
+        --connect-timeout|-m|--max-time|--resolve|--proto) shift ;;
         -*) ;;
         *) _u=$1 ;;
     esac
@@ -408,9 +709,19 @@ exit 0
 EOF
 }
 
+node_acl_ready() {
+    have docker
+    run_inst apiacl PANEL_ALLOW_IP=192.0.2.20 "${1:-NODE_PORT=62050}"
+    assert_rc 0
+}
+
 # The state of a healthy node: what verify expects to see.
 healthy_state() {
-    printf '%s\n' docker nginx haproxy fail2ban sw-certs-reload.path sw-node-api-acl.service >"$STATE/active_units"
+    node_acl_ready
+    printf '%s\n' docker nginx haproxy fail2ban sw-certs-reload.path sw-node-api-acl.service sw-node.service >"$STATE/active_units"
+    : >"$STATE/node_enabled"
+    mkdir -p "$R/run/sw-node"
+    printf '%s\n' abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234 >"$R/run/sw-node/container"
     printf 'remnawave/node:3.4.6\n' >"$STATE/container"
     printf 'NODE_PORT=62050\nSNI_VERIFICATION=true\n' >"$STATE/container_env"
     printf -- '-N DOCKER-USER\n-A DOCKER-USER -s 192.0.2.20/32 -p tcp -m conntrack --ctorigdstport 62050 --ctdir ORIGINAL -j RETURN\n-A DOCKER-USER -p tcp -m conntrack --ctorigdstport 62050 --ctdir ORIGINAL -j DROP\n' >"$STATE/iptables_rules"
@@ -450,13 +761,15 @@ setup_env() {
     printf 'node1.example.com 192.0.2.10\n' >"$STATE/dns"
     printf '2: eth0    inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0\n' >"$STATE/ip_addr"
     printf 'State Recv-Q Send-Q Local Address:Port Peer Address:Port\n' >"$STATE/ss"
+    printf -- '-P FORWARD DROP\n-A FORWARD -j DOCKER-USER\n' >"$STATE/ipt.FORWARD"
+    printf -- '-N DOCKER-USER\n' >"$STATE/iptables_rules"
     printf 'KEY-DOCKER\n' >"$STATE/key_docker"
     printf 'KEY-NGINX\n' >"$STATE/key_nginx"
     printf '127.0.0.1 localhost\n' >"$R/etc/hosts"
     set_os ubuntu
     make_stubs
-    have hostnamectl modprobe journalctl chown add-apt-repository rsync python3 sleep flock chmod install id getent useradd adduser usermod passwd chpasswd systemctl sshd
-    have iptables openssl gpg curl apt-get hostname pgrep dpkg ip ss sysctl timedatectl rrsync stat ssh-keygen
+    have hostnamectl modprobe journalctl chown add-apt-repository rsync python3 sleep sync flock chmod install id getent useradd adduser usermod passwd chpasswd systemctl systemd-notify sshd
+    have iptables iptables-restore openssl gpg curl apt-get hostname pgrep dpkg ip ss sysctl timedatectl rrsync stat ssh-keygen
     # The login shell of the fake accounts.
     mkdir -p "$R/bin"
     printf '#!/bin/sh\n' >"$R/bin/bash"
@@ -481,6 +794,17 @@ run_inst() {
     env -i PATH="$SUT_PATH" ${SYSTEMROOT:+"SYSTEMROOT=$SYSTEMROOT"} HOME="$T" TMPDIR="$T/tmp" SW_TEST_ROOT="$R" SW_NONINTERACTIVE=1 NO_COLOR=1 TERM=dumb "$@" \
         "$SHELL_UNDER_TEST" "$INSTALLER" "$_act" >"$T/out" 2>"$T/err" </dev/null
     RC=$?
+}
+
+# Model explicit confirmation in an isolated fake terminal. The all phase asks for three account fields
+# first, and does not ask for the name and key again during hardening.
+run_ssh_confirmed() {
+    _rsc_phase=$1; shift
+    case "$_rsc_phase" in
+        all) printf '\n\n\n\n\ny\ny\n' ;;
+        *)   printf '\n\n\n\ny\ny\n' ;;
+    esac >"$T/confirm.in"
+    run_inst ssh SSH_PHASE="$_rsc_phase" SW_NONINTERACTIVE=0 SW_TTY_IN="$T/confirm.in" SW_TTY_OUT="$T/tty" "$@"
 }
 
 # run_inst_args ARG...: the same with command line arguments and no default action.

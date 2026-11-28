@@ -1,12 +1,12 @@
 {
   "manifestVersion": 1,
   "name": "node-installer",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Installs and hardens a Remnawave node: firewall, Docker, HAProxy SNI routing, nginx default site, the node container and the checks.",
   "file": "install.sh",
   "interpreter": "sh",
-  "sha256": "c165bed63d0c1b59f963972e2c54407bd08d6c7db5a97de32045753e8b913462",
-  "size": 126265,
+  "sha256": "9920219f7008c8b1bf639207c3115a1b043987e80507f4931902cf4c8031e345",
+  "size": 202543,
   "minOs": "debian 12 / ubuntu 22.04",
   "steps": [
     {
@@ -153,7 +153,7 @@
     },
     {
       "id": "node",
-      "title": "Remnawave node container",
+      "title": "Remnawave node container (guarded systemd startup; run apiacl first)",
       "readOnly": false,
       "needsRoot": true,
       "inFull": true,
@@ -177,7 +177,8 @@
         "NODE_DOMAIN",
         "NODE_IP",
         "NODE_PORT",
-        "NODE_IMAGE_TAG"
+        "NODE_IMAGE_TAG",
+        "PANEL_ALLOW_IP"
       ],
       "requires": []
     },
@@ -240,7 +241,7 @@
     },
     "NODE_PORT": {
       "group": "node",
-      "description": "TCP port of the node API (panel to node).",
+      "description": "TCP port of the node API (panel to node); not 80, 443 or 8444. Changing an existing managed port is not supported.",
       "required": false,
       "secret": false,
       "pattern": "^([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5])$",
@@ -293,7 +294,7 @@
     },
     "NODE_IMAGE_TAG": {
       "group": "node",
-      "description": "Tag of the remnawave/node image, pinned in the compose file.",
+      "description": "Explicit release tag of the remnawave/node image. Floating tags such as latest and nightly are refused. Tags are not digest pins.",
       "required": false,
       "secret": false,
       "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$",
@@ -322,12 +323,11 @@
     },
     "DOCKER_SOURCE": {
       "group": "node",
-      "description": "apt: Docker's apt repository with its signing key checked against a pinned fingerprint. script: the get.docker.com convenience script.",
+      "description": "Docker's apt repository with a pinned signing key. The convenience script is not supported.",
       "required": false,
       "secret": false,
       "enum": [
-        "apt",
-        "script"
+        "apt"
       ],
       "default": "apt"
     },
@@ -354,7 +354,7 @@
     },
     "SSH_PHASE": {
       "group": "node",
-      "description": "user: create the administrator and its keys. root: close root login, and password login when asked, once an administrator can really log in (the report of the step shows who counts). all: both.",
+      "description": "user: create the administrator and its keys. root: close the requested login methods, only with a terminal and a confirmed fresh administrator login with root access. all: both.",
       "required": false,
       "secret": false,
       "enum": [
@@ -366,7 +366,7 @@
     },
     "NEW_USER": {
       "group": "node",
-      "description": "Administrator account with sudo (not required for SSH_PHASE=root). Not root and not certsync.",
+      "description": "Administrator account with sudo. Before root or password login is closed (SSH_PHASE=root or all) it names the administrator whose key login must work. Not root and not certsync.",
       "required": true,
       "secret": false,
       "pattern": "^[a-z_][a-z0-9_-]{0,31}$",
@@ -375,7 +375,7 @@
     },
     "NEW_USER_PUBKEY": {
       "group": "node",
-      "description": "Public SSH key of the administrator (not required for SSH_PHASE=root).",
+      "description": "Public SSH key of the administrator. Before root or password login is closed it must be a key in the key file of NEW_USER that gives a shell.",
       "required": true,
       "secret": false,
       "pattern": "^(ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp(256|384|521)) [A-Za-z0-9+/]{16,}={0,3}( [A-Za-z0-9@._:+=/ -]{1,128})?$",
