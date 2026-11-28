@@ -13,6 +13,7 @@ import {
   CheckRunDiffSchema,
   CheckRunListSchema,
   type CheckRunView,
+  CheckRunSummarySchema,
   CheckRunViewSchema,
   StartBaselineRunsResultSchema,
 } from '@swellwright/contracts';
@@ -719,13 +720,13 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
       'step_up_required',
     );
     await h.stepUp(h.operator, 'ops');
-    assert.equal(
-      (await h.operator.post(`/servers/${serverId}/baseline-runs`, { baselineId })).status,
-      201,
-    );
+    const started = await h.operator.post(`/servers/${serverId}/baseline-runs`, { baselineId });
+    assert.equal(started.status, 201, JSON.stringify(started.body));
     // The reads need no code.
     await h.lapse();
     assert.equal((await h.operator.get('/baseline-fleet')).status, 200);
+    // A 201 only queued this check. Leave the shared server free for the next test.
+    await waitForRun(CheckRunSummarySchema.parse(started.body).id);
   });
 
   it('opens and runs a stored version whose pattern the rules for writing now refuse, and refuses to write it', async () => {

@@ -68,6 +68,7 @@ All notable changes are documented here. The format follows [Keep a Changelog](h
 - Brand assets (animated banner, workflow and overview diagrams, logo, social preview), English and Russian README, support policy, release-notes categories; a single-tone cyan mark (`LogoMark`, `packages/ui`) used everywhere, replacing the earlier two-tone, filled badge style.
 
 ### Fixed
+- Make masking work limits testable without wall-clock assertions, and wait for the permission test's baseline run before reusing the same server fixture.
 - Bound repeated traversal of shared containers separately from ordinary masking and fail closed when a YAML alias crosses masking contexts. The API console scrubs header values before trimming them or normalizing the media type. Script parameter patterns cannot escape the whole-value anchors; a new default must use a pattern that can be checked.
 - Security closures from the full review of 2026-11-25 (ADR 0041, 0045 and 0046 have notes of 2026-11-26):
   - The path parameter of a baseline observation was checked with a pattern that backtracks exponentially (a name of about 26 characters ending in a refused character took most of a second, a path of 200 for ever), so one `POST /baselines/validate` by a holder of `servers:read` could stop the API. The published pattern is now written so that every repetition ends at a `/` (the same accepted paths: names separated by one slash, a trailing slash allowed, no `//`, no `..`, at most 200 characters), and the API checks a path in one pass without a regular expression.

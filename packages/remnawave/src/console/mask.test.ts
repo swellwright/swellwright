@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
+import { Document, Parser } from 'yaml';
+
 import { maskedYaml } from '../adapters.js';
-import { MASK, maskSecrets, UNREADABLE_DOCUMENT } from '../mask.js';
+import { MASK, maskSecrets, MAX_YAML_CHARS, UNREADABLE_DOCUMENT } from '../mask.js';
 import { maskConsoleJson, maskConsoleText } from './mask.js';
 
 const KEY = 'a-test-key-for-console-fingerprints';
@@ -381,29 +383,26 @@ describe('masking for the API console', () => {
     assert.equal(maskConsoleText('<html><body>Not found</body></html>', 'standard').count, 0);
   });
 
-  it('reads a YAML alias of itself once, in a text answer and in a template body, and answers at once', () => {
-    const cyclic = 'a: &a [*a, *a]\npassword: CYCLE-SECRET\n';
-    let started = performance.now();
+  it('cuts a YAML cycle without discarding the rest of the document', () => {
+    const cyclic = 'a: &a [*a, *a]\npassword: CYCLE-SECRET\nname: public-label\n';
     const asText = maskConsoleText(cyclic, 'standard', KEY);
-    assert.ok(performance.now() - started < 1000, 'the text answer took too long');
     assert.ok(!asText.value.includes('CYCLE-SECRET'));
-    started = performance.now();
+    assert.match(asText.value, /name: public-label/u);
     const asTemplate = maskConsoleJson(
       { response: { encodedTemplateYaml: Buffer.from(cyclic, 'utf8').toString('base64') } },
       'standard',
       KEY,
     );
-    assert.ok(performance.now() - started < 1000, 'the template body took too long');
     const body = (asTemplate.value as { response: { encodedTemplateYaml: string } }).response
       .encodedTemplateYaml;
-    assert.ok(!Buffer.from(body, 'base64').toString('utf8').includes('CYCLE-SECRET'));
+    const decoded = Buffer.from(body, 'base64').toString('utf8');
+    assert.ok(!decoded.includes('CYCLE-SECRET'));
+    assert.match(decoded, /name: public-label/u);
     assert.ok(!text(asTemplate.value).includes('CYCLE-SECRET'));
     // The shared masker itself, as the typed reads and the snapshots call it.
-    started = performance.now();
     const direct = maskSecrets({
       encodedTemplateYaml: Buffer.from(cyclic, 'utf8').toString('base64'),
     });
-    assert.ok(performance.now() - started < 1000, 'maskSecrets took too long');
     assert.ok(
       !Buffer.from(direct.value.encodedTemplateYaml, 'base64')
         .toString('utf8')
@@ -635,17 +634,36 @@ describe('masking for the API console', () => {
   });
 
   it('gives many names that mask alike distinct suffixes in linear time', () => {
+    const entries = 20_000;
+    const base = 'Bearer [masked]';
     const source: Record<string, number> = {};
-    for (let index = 0; index < 20_000; index += 1) {
+    for (let index = 0; index < entries; index += 1) {
       source[`Bearer synthetic-${String(index)}`] = index;
     }
-    const started = performance.now();
-    const { value } = maskConsoleJson(source, 'standard');
-    const took = performance.now() - started;
-    assert.ok(took < 1_000, `20,000 names took ${took.toFixed(0)} ms`);
+    // Count candidate probes, stopping a regression before a quadratic loop can exhaust the test runner.
+    // Only the synchronous masker call sees the wrapper; other test files run in separate processes.
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- forwarded with the original receiver via call()
+    const has = Set.prototype.has;
+    let probes = 0;
+    let value: unknown;
+    Set.prototype.has = function (this: Set<unknown>, name: unknown): boolean {
+      if (typeof name === 'string' && (name === base || name.startsWith(`${base}#`))) {
+        probes += 1;
+        if (probes > 3 * entries) {
+          throw new Error('too many masked-name candidate probes');
+        }
+      }
+      return has.call(this, name);
+    };
+    try {
+      ({ value } = maskConsoleJson(source, 'standard'));
+    } finally {
+      Set.prototype.has = has;
+    }
+    assert.ok(probes >= entries, 'the counter observed the name lookups');
     const names = Object.keys(value as object);
-    assert.equal(names.length, 20_000);
-    assert.equal(new Set(names).size, 20_000);
+    assert.equal(names.length, entries);
+    assert.equal(new Set(names).size, entries);
     assert.ok(names.every((name) => !name.includes('synthetic-')));
     assert.ok(names.includes('Bearer [masked]') && names.includes('Bearer [masked]#19999'));
   });
@@ -704,27 +722,27 @@ describe('masking for the API console', () => {
     });
   });
 
-  it('does not read a YAML text full of anchors and aliases as a document, and reads the largest allowed one fast', () => {
-    const aliases = '- &a x\n- *a\n'.repeat(20_000);
-    let started = performance.now();
-    const many = maskConsoleText(aliases, 'standard');
-    assert.ok(performance.now() - started < 1000, 'the alias-heavy text took too long');
+  it('checks the YAML alias and size limits before invoking the parser', (t) => {
+    const parse = t.mock.method(Parser.prototype, 'parse');
+    const anchors = Array.from(
+      { length: 150 },
+      (_unused, i) => `- &a${String(i)} {name: visible}\n- *a${String(i)}\n`,
+    ).join('');
+    // Unlike scalar aliases, these mapping aliases are readable. Pad to both limits exactly.
+    const allowed = `${anchors}#${' '.repeat(MAX_YAML_CHARS - anchors.length - 2)}\n`;
+    assert.equal(allowed.length, MAX_YAML_CHARS);
     assert.equal(
-      many.value,
+      maskConsoleText(`${anchors}- *a0\n`, 'standard').value,
       UNREADABLE_DOCUMENT,
-      'it is not read as a document, so it is not shown',
+      'too many aliases, but below the size limit',
     );
-    // The most a document may hold: 64 KiB, 300 anchors and aliases together, the rest plain keys.
-    const allowed = [
-      '- &a x\n- *a\n'.repeat(150),
-      ...Array.from({ length: 9000 }, (_unused, index) => `- k${String(index)}\n`),
-    ]
-      .join('')
-      .slice(0, 64 * 1024 - 8)
-      .concat('\n- end\n');
-    started = performance.now();
-    maskConsoleText(allowed, 'standard');
-    assert.ok(performance.now() - started < 300, 'the largest allowed document took too long');
+    assert.equal(maskConsoleText(`${allowed}\n`, 'standard').value, UNREADABLE_DOCUMENT);
+    assert.equal(parse.mock.callCount(), 0, 'oversized input must not reach the parser');
+
+    const read = maskConsoleText(allowed, 'standard');
+    assert.match(read.value, /name: visible/u);
+    assert.ok(!read.value.includes('*a0'), 'the alias was read and the document rewritten');
+    assert.equal(parse.mock.callCount(), 1);
   });
 
   it('never lets the metadata of a record show what the profile hides', () => {
@@ -810,23 +828,23 @@ describe('masking for the API console', () => {
     });
   });
 
-  it('reads a large YAML answer in bounded time, and still refuses a repeated key', () => {
-    const big = Array.from({ length: 50_000 }, (_unused, i) => `k${String(i)}: 1`).join('\n');
-    let started = performance.now();
-    const masked = maskConsoleText(big, 'standard');
-    assert.ok(performance.now() - started < 1000, 'the 50,000-line answer took too long');
-    assert.equal(masked.value, UNREADABLE_DOCUMENT, 'a text over the limit is not shown');
+  it('reads a wide YAML mapping without quadratic duplicate checking and refuses a repeated key', (t) => {
+    const toJS = t.mock.method(Document.prototype, 'toJS');
     const keys = Array.from({ length: 5_000 }, (_unused, i) => `k${String(i)}: 1`);
-    started = performance.now();
     const read = maskConsoleText([...keys, 'password: FIVE-THOUSAND'].join('\n'), 'standard');
-    assert.ok(performance.now() - started < 1000, 'the 5,000-key document took too long');
     assert.ok(!read.value.includes('FIVE-THOUSAND'));
     assert.ok(read.value.includes('k4999: 1'), 'it was read as a document');
+    assert.equal(toJS.mock.callCount(), 1);
+    const document: unknown = toJS.mock.calls[0]?.this;
+    assert.ok(document instanceof Document);
+    // The parser's unique-key check scans all earlier keys of a mapping for each key.
+    assert.equal(document.options.uniqueKeys, false);
     const repeated = maskConsoleText(
       [...keys, 'k7: 2', 'password: REPEATED'].join('\n'),
       'standard',
     );
     assert.equal(repeated.value, UNREADABLE_DOCUMENT, 'a repeated key goes to the whole-text rule');
+    assert.equal(toJS.mock.callCount(), 1, 'duplicate keys are rejected before conversion');
   });
 
   it('never lets the YAML parser write a source line to the log', async () => {
