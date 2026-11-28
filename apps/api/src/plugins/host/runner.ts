@@ -7,10 +7,12 @@
  * The protocol over the IPC channel, JSON messages:
  *   core -> plugin   { type: 'call', id, kind, method, params, config }
  *                    { type: 'reply', id, ok: true, value } | { type: 'reply', id, ok: false, message }
- *   plugin -> core   { type: 'ready', modules: { [kind]: string[] } } | { type: 'failed', message }
+ *   plugin -> core   { type: 'ready', modules: { [kind]: string[] } } | { type: 'failed' }
  *                    { type: 'result', id, value } | { type: 'error', id, message }
- *                    { type: 'core', id, op: 'fetch', url, init } | { type: 'core', id, op: 'secret', field }
- *                    { type: 'core', id, op: 'storage', action, key?, value? }
+ *                    { type: 'core', id, call, op: 'fetch', url, init }
+ *                    { type: 'core', id, call, op: 'secret', field }
+ *                    { type: 'core', id, call, op: 'storage', action, key?, value? }
+ *   `call` is the id of the call the request belongs to: the core answers only while that call is under way.
  */
 import type {
   PluginContext,
@@ -39,12 +41,15 @@ function send(message: unknown): void {
   process.send(message);
 }
 
-/** A request to the core: the one way this process gets anything from outside. */
-function ask(payload: Record<string, unknown>): Promise<unknown> {
+/**
+ * A request to the core: the one way this process gets anything from outside. It names the call it belongs to; the
+ * core answers only while that call is under way.
+ */
+function ask(call: number, payload: Record<string, unknown>): Promise<unknown> {
   return new Promise<unknown>((resolve, reject) => {
     const id = nextAsk++;
     asking.set(id, { resolve, reject });
-    send({ type: 'core', id, ...payload });
+    send({ type: 'core', id, call, ...payload });
   });
 }
 
@@ -67,24 +72,24 @@ function responseOf(
   };
 }
 
-function contextOf(pluginId: string, config: PluginContext['config']): PluginContext {
+function contextOf(pluginId: string, call: number, config: PluginContext['config']): PluginContext {
   const storage: PluginStorage = {
-    get: (key) => ask({ op: 'storage', action: 'get', key }),
+    get: (key) => ask(call, { op: 'storage', action: 'get', key }),
     set: async (key, value) => {
-      await ask({ op: 'storage', action: 'set', key, value });
+      await ask(call, { op: 'storage', action: 'set', key, value });
     },
     delete: async (key) => {
-      await ask({ op: 'storage', action: 'delete', key });
+      await ask(call, { op: 'storage', action: 'delete', key });
     },
-    keys: () => ask({ op: 'storage', action: 'keys' }) as Promise<string[]>,
+    keys: () => ask(call, { op: 'storage', action: 'keys' }) as Promise<string[]>,
   };
   return {
     pluginId,
     config,
-    secret: (field) => ask({ op: 'secret', field }) as Promise<string>,
+    secret: (field) => ask(call, { op: 'secret', field }) as Promise<string>,
     storage,
     fetch: async (url: string, init?: PluginFetchInit) => {
-      const answer = (await ask({ op: 'fetch', url, init: init ?? {} })) as {
+      const answer = (await ask(call, { op: 'fetch', url, init: init ?? {} })) as {
         status: number;
         headers: Record<string, string>;
         body: string;
@@ -138,7 +143,7 @@ async function handleCall(pluginId: string, message: CallMessage): Promise<void>
     return;
   }
   try {
-    const value = await handler(message.params, contextOf(pluginId, message.config));
+    const value = await handler(message.params, contextOf(pluginId, message.id, message.config));
     send({ type: 'result', id: message.id, value: value === undefined ? null : value });
   } catch (error) {
     send({ type: 'error', id: message.id, message: describe(error) });
@@ -146,7 +151,7 @@ async function handleCall(pluginId: string, message: CallMessage): Promise<void>
 }
 
 async function load(pluginId: string, specs: readonly string[]): Promise<void> {
-  const listing: Record<string, string[]> = {};
+  const listing = Object.create(null) as Record<string, string[]>;
   for (const spec of specs) {
     const at = spec.indexOf('=');
     const kind = spec.slice(0, at);
@@ -156,7 +161,7 @@ async function load(pluginId: string, specs: readonly string[]): Promise<void> {
     if (typeof found !== 'object' || found === null) {
       throw new Error(`The module for ${kind} exports no "methods" object.`);
     }
-    const methods: Record<string, Method> = {};
+    const methods = Object.create(null) as Record<string, Method>;
     for (const [name, method] of Object.entries(found)) {
       if (typeof method !== 'function') {
         throw new Error(`"${name}" of ${kind} is not a function.`);
@@ -179,8 +184,8 @@ async function load(pluginId: string, specs: readonly string[]): Promise<void> {
 const [pluginId, ...specs] = process.argv.slice(2);
 try {
   await load(pluginId ?? '', specs);
-} catch (error) {
-  send({ type: 'failed', message: describe(error) });
+} catch {
+  send({ type: 'failed' });
   // Give the message a moment to leave; the core kills the process on `failed` anyway.
   setTimeout(() => process.exit(1), 100);
 }

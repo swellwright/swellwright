@@ -34,6 +34,10 @@ export interface PluginStorage {
   keys(): Promise<string[]>;
 }
 
+/**
+ * What a method is given. Its `secret`, `storage` and `fetch` work only while the call it was given to is under way:
+ * the core does not answer a process outside a call, nor a request of a call that has ended (ADR 0050).
+ */
 export interface PluginContext {
   readonly pluginId: string;
   /**
@@ -73,6 +77,10 @@ export const PLUGIN_LIMITS = {
   concurrentFetches: 4,
   /** Calls a plugin may have in flight. */
   concurrentCalls: 8,
+  /** Requests to the core (network, secret, storage) a plugin process may have answered at once. */
+  concurrentCoreRequests: 8,
+  /** Requests to the core one call may make in all; the core answers a process only during a call. */
+  coreRequestsPerCall: 256,
   storageKeyChars: 128,
   storageValueBytes: 64 * 1024,
   storageKeys: 1000,

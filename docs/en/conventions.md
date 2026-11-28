@@ -179,7 +179,7 @@ Reconciliation is **check only**. A row's fix is a hint of what a later, approve
 
 ## Impact: the dry run
 
-`POST /panel/impact` takes a kind (`configProfile`, `internalSquad`, `host`, `node`, `subscriptionTemplate`), the object's `uuid`, and a **change**: either an object with the fields to change (fields you leave out stay as they are) or a **JSON Patch** (RFC 6902) against the editable form of the object. `GET /panel/impact/target` gives that form (secrets masked), which is what the console's editor starts from. The answer has:
+`POST /panel/impact` takes a kind (`configProfile`, `internalSquad`, `host`, `node`, `subscriptionTemplate`), the object's `uuid`, and a **change**: either an object with the fields to change (fields you leave out stay as they are) or a **JSON Patch** (RFC 6902) against the editable form of the object. `GET /panel/impact/target` gives that form (secrets masked), which is what the console's editor starts from. A patch has a budget: the document it leaves holds at most a million values and its operations together clone or compare at most four million (a `copy` is measured before it is made), so a patch that keeps copying a growing subtree is answered 400 `validation_failed` instead of filling the memory of the API. The answer has:
 
 - the **restarts**: which nodes restart, stop or start, each with the rule that says so;
 - the **rules** that were applied, each labelled **observed** (seen on a real panel), **documented** (the panel's documentation says so) or **assumed** (reasoned, not seen), so that you know how far to trust it;

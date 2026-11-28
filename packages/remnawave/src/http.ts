@@ -343,7 +343,13 @@ export class PanelHttp {
     return undefined;
   }
 
-  /** One exchange with the panel, redirects inside its origin followed; the answer is returned whatever its status. */
+  /**
+   * One exchange with the panel; the answer is returned whatever its status. A typed read follows a redirect only to
+   * the panel's own origin and under its path prefix, with no credentials in the address: the endpoint and its schema
+   * still decide what is read. The API console (`raw`) follows none: its policy (which operation is allowed, which
+   * masking and audit apply) was decided for the path it asked for, and a redirect to another path of the same origin
+   * would be answered under that decision. A redirect is `PanelUnavailableError` with `redirect_refused` there.
+   */
   private async exchange(endpoint: string, start: URL, raw = false): Promise<TransportResponse> {
     let url = start;
     for (let hops = 0; ; hops += 1) {
@@ -374,6 +380,27 @@ export class PanelHttp {
         next = location === undefined ? undefined : new URL(location, url);
       } catch {
         next = undefined;
+      }
+      if (raw) {
+        throw new PanelUnavailableError(
+          endpoint,
+          'redirect_refused',
+          `The panel redirected ${endpoint}. The API console does not follow redirects; the operation it asked for is the one it reads.`,
+          status,
+        );
+      }
+      if (
+        next?.origin === this.target.origin &&
+        (next.username !== '' ||
+          next.password !== '' ||
+          !next.pathname.startsWith(`${this.target.pathPrefix}/`))
+      ) {
+        throw new PanelUnavailableError(
+          endpoint,
+          'redirect_refused',
+          `The panel redirected ${endpoint} outside the address of its API. Only a redirect under the panel's own path is followed.`,
+          status,
+        );
       }
       if (next?.origin !== this.target.origin) {
         throw new PanelUnavailableError(

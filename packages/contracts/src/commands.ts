@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { regexBudgetIssue } from './regex-budget.js';
+import { compilePattern, type CompiledPattern, UnsafePatternError } from './safe-pattern.js';
 import { ServerNameSchema } from './servers.js';
 import { RUN_SECRET_TYPES } from './vault.js';
 
@@ -57,6 +59,7 @@ const ParameterName = z.string().regex(PARAMETER_NAME_PATTERN, {
 const ENUM_OPTION_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@/+-]{0,63}$/u;
 
 export const MAX_STRING_PARAMETER_LENGTH = 1000;
+const MAX_PARAMETER_PATTERN_LENGTH = 200;
 
 const ParameterCommon = {
   name: ParameterName,
@@ -72,10 +75,10 @@ export const StringParameterSchema = z
     pattern: z
       .string()
       .min(1)
-      .max(200)
+      .max(MAX_PARAMETER_PATTERN_LENGTH)
       .optional()
       .describe(
-        'A regular expression (JavaScript syntax) the whole value must match. Without one any text up to `maxLength` is accepted: it reaches the script quoted, never as shell code.',
+        'A bounded subset of JavaScript regular expressions the whole value must match. Lookaround and back references are not supported. Without a pattern any text up to `maxLength` is accepted: it reaches the script quoted, never as shell code.',
       ),
     maxLength: z.number().int().min(1).max(MAX_STRING_PARAMETER_LENGTH),
     default: z.string().max(MAX_STRING_PARAMETER_LENGTH).refine(noNul).optional(),
@@ -152,13 +155,92 @@ export function parameterEnvName(name: string): string {
   return `SW_PARAM_${name.toUpperCase()}`;
 }
 
-/** The expression that decides whether a string value is allowed: the whole value must match, `u` flag. */
-export function compileParameterPattern(pattern: string): RegExp | undefined {
-  try {
-    return new RegExp(`^(?:${pattern})$`, 'u');
-  } catch {
-    return undefined;
+/** A coarse structural check for legacy definitions, including syntax outside the runnable dialect. */
+function hasClosedPatternDelimiters(pattern: string): boolean {
+  let depth = 0;
+  let inClass = false;
+  for (let index = 0; index < pattern.length; index += 1) {
+    const char = pattern[index];
+    if (char === '\\') {
+      if (index + 1 === pattern.length) {
+        return false;
+      }
+      index += 1;
+    } else if (inClass) {
+      inClass = char !== ']';
+    } else if (char === '[') {
+      inClass = true;
+    } else if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth -= 1;
+    }
   }
+  return depth === 0 && !inClass;
+}
+
+const INVALID_PARAMETER_PATTERN = 'The pattern is not a valid regular expression.';
+
+/** Compile only the supported dialect; no user-written expression is compiled by the JS regex engine. */
+function boundedParameterExpression(pattern: string): CompiledPattern | string {
+  if (pattern.length > MAX_PARAMETER_PATTERN_LENGTH) {
+    return INVALID_PARAMETER_PATTERN;
+  }
+  try {
+    const compiled = compilePattern(pattern, {
+      count: MAX_STRING_PARAMETER_LENGTH,
+      valueChars: MAX_STRING_PARAMETER_LENGTH,
+      strictJsSyntax: true,
+    });
+    return regexBudgetIssue(`^(?:${pattern})$`) ?? compiled;
+  } catch (error) {
+    if (error instanceof UnsafePatternError) {
+      return `${INVALID_PARAMETER_PATTERN} ${error.message}`;
+    }
+    throw error;
+  }
+}
+
+export function parameterPatternIssue(pattern: string): string | undefined {
+  const checked = boundedParameterExpression(pattern);
+  return typeof checked === 'string' ? checked : undefined;
+}
+
+/**
+ * What the rules for writing a script check beyond the schema, the checks that run a pattern or depend on the bound on
+ * matching: a pattern outside the supported dialect or work budget is refused, and a default must match its pattern.
+ * A pattern and a default that are stored already on the parameter of
+ * the same name (`stored`) are not checked again: saving an unrelated change of an old script must not lose or block
+ * its definitions, whatever the state of the runner.
+ */
+export function parameterWriteIssues(
+  parameters: readonly ScriptParameter[],
+  stored: readonly ScriptParameter[] = [],
+): ParameterIssue[] {
+  const issues: ParameterIssue[] = [];
+  for (const parameter of parameters) {
+    if (parameter.type !== 'string' || parameter.pattern === undefined) {
+      continue;
+    }
+    const before = stored.find((candidate) => candidate.name === parameter.name);
+    const samePattern = before?.type === 'string' && before.pattern === parameter.pattern;
+    const sameDefault = samePattern && before.default === parameter.default;
+    if (samePattern && (sameDefault || parameter.default === undefined)) {
+      continue;
+    }
+    const checked = boundedParameterExpression(parameter.pattern);
+    if (typeof checked === 'string') {
+      issues.push({ name: parameter.name, message: checked });
+      continue;
+    }
+    if (parameter.default === undefined || parameter.default.length > parameter.maxLength) {
+      continue;
+    }
+    if (!checked.matches(parameter.default)) {
+      issues.push({ name: parameter.name, message: 'The default does not match the pattern.' });
+    }
+  }
+  return issues;
 }
 
 export interface ParameterIssue {
@@ -186,17 +268,15 @@ export function parameterDefinitionIssues(
     }
     seen.add(name);
     if (parameter.type === 'string') {
-      const matcher =
-        parameter.pattern === undefined ? undefined : compileParameterPattern(parameter.pattern);
-      if (parameter.pattern !== undefined && matcher === undefined) {
-        issues.push({ name, message: 'The pattern is not a valid regular expression.' });
+      // A previously stored pattern may use syntax outside the runnable dialect. Keep it visible for repair.
+      if (parameter.pattern !== undefined && !hasClosedPatternDelimiters(parameter.pattern)) {
+        issues.push({ name, message: INVALID_PARAMETER_PATTERN });
       }
-      if (parameter.default !== undefined) {
-        if (parameter.default.length > parameter.maxLength) {
-          issues.push({ name, message: 'The default is longer than the maximum length.' });
-        } else if (matcher !== undefined && !matcher.test(parameter.default)) {
-          issues.push({ name, message: 'The default does not match the pattern.' });
-        }
+      // Static checks only: the schema also reads stored definitions, and a read never runs a pattern.
+      // The default is matched against the pattern when a definition is
+      // written (`parameterWriteIssues`) and when a run uses it (`checkParameterValues`).
+      if (parameter.default !== undefined && parameter.default.length > parameter.maxLength) {
+        issues.push({ name, message: 'The default is longer than the maximum length.' });
       }
     } else if (parameter.type === 'integer') {
       if (parameter.min > parameter.max) {
@@ -295,12 +375,22 @@ export function checkParameterValues(
           issues.push({ name, message: 'The value must not contain a NUL character.' });
         } else if (value.length > parameter.maxLength) {
           issues.push({ name, message: `At most ${String(parameter.maxLength)} characters.` });
-        } else if (
-          parameter.pattern !== undefined &&
-          !(compileParameterPattern(parameter.pattern)?.test(value) ?? false)
-        ) {
-          issues.push({ name, message: 'The value does not have the expected form.' });
         } else {
+          if (parameter.pattern !== undefined) {
+            const checked = boundedParameterExpression(parameter.pattern);
+            if (typeof checked === 'string') {
+              // A stored pattern that is now refused is not run.
+              issues.push({
+                name,
+                message: `The pattern of this parameter is refused and is not run: ${checked} Change the script before running it.`,
+              });
+              break;
+            }
+            if (!checked.matches(value)) {
+              issues.push({ name, message: 'The value does not have the expected form.' });
+              break;
+            }
+          }
           values[name] = value;
           env[parameterEnvName(name)] = value;
         }

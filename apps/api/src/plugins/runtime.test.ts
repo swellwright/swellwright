@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { link, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
@@ -23,10 +23,15 @@ import {
   start,
   stop,
 } from '../test-support.js';
+import { AuditService } from '../audit/audit.service.js';
+import { CONFIG, PLUGIN_NETWORK } from '../tokens.js';
+import { PluginBroker } from './broker.js';
 import { writeFixture } from './host/fixtures.js';
 import { PluginNetwork } from './host/network.js';
 import { PluginHostService } from './host/plugin-host.service.js';
-import { PluginCallError } from './host/process.js';
+import { PluginCallError, PluginProcess } from './host/process.js';
+import { PluginsService } from './plugins.service.js';
+import { PluginRuntime } from './runtime.js';
 
 const PUBLIC = [{ address: [93, 184, 216, 34].join('.'), family: 4 as const }];
 
@@ -279,6 +284,124 @@ describe('running approved plugins', { skip: !databaseUrl }, () => {
     await assert.rejects(call('dns-example', 'echo', 1), /it is disabled/u);
   });
 
+  it('ends a process started under an earlier approval when the plugin is approved again', async () => {
+    await enable('dns-example');
+    assert.equal(await call('dns-example', 'echo', 1), 1);
+    const first = found(host().pidOf('dns-example'), 'the first process');
+    await enable('dns-example');
+    await eventually(
+      () => Promise.resolve(alive(first) ? undefined : true),
+      'the old process to end',
+    );
+    assert.equal(await call('dns-example', 'echo', 2), 2);
+    assert.notEqual(found(host().pidOf('dns-example'), 'the new process'), first);
+  });
+
+  it('does not clear a replacement runtime snapshot when an older process finishes stopping', async (t) => {
+    const runtime = instance.app.get(PluginRuntime);
+    const stopProcess = Object.getOwnPropertyDescriptor(PluginProcess.prototype, 'stop')?.value as (
+      this: PluginProcess,
+    ) => Promise<void>;
+    let finish = (): void => undefined;
+    const stopping = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const delay = t.mock.method(
+      PluginProcess.prototype,
+      'stop',
+      async function (this: PluginProcess) {
+        await stopProcess.call(this);
+        await stopping;
+      },
+    );
+    const stopped = host().stop('dns-example');
+    try {
+      delay.mock.restore();
+      assert.equal(await call('dns-example', 'echo', 'replacement'), 'replacement');
+      assert.equal(runtime.snapshotOf('dns-example').state, 'running');
+    } finally {
+      finish();
+      await stopped;
+    }
+    assert.equal(runtime.snapshotOf('dns-example').state, 'running');
+  });
+
+  it('runs a plugin that was enabled before the host started, as after a restart of the API', async () => {
+    const app = instance.app;
+    const fresh = new PluginHostService(
+      app.get(PluginsService),
+      new PluginRuntime(),
+      app.get(PluginBroker),
+      app.get(AuditService),
+      app.get(CONFIG),
+      app.get(PLUGIN_NETWORK),
+    );
+    try {
+      assert.equal(await fresh.call('dns-example', 'DnsProvider', 'echo', 'fresh'), 'fresh');
+    } finally {
+      await fresh.onApplicationShutdown();
+    }
+  });
+
+  it('starts nothing when the plugin is stopped after its approval was read', async () => {
+    await host().stop('dns-example');
+    const plugins = instance.app.get(PluginsService);
+    const original = plugins.runnable.bind(plugins);
+    plugins.runnable = async (id: string) => {
+      const read = await original(id);
+      // Disabled (or approved again) right after this reading: what a disable does on this instance.
+      instance.app.get(PluginRuntime).requestStop(id);
+      return read;
+    };
+    try {
+      await assert.rejects(call('dns-example', 'echo', 1), (error: unknown) => {
+        assert.ok(error instanceof PluginCallError);
+        assert.equal(error.reason, 'not_running');
+        return true;
+      });
+      assert.equal(host().pidOf('dns-example'), undefined);
+    } finally {
+      plugins.runnable = original;
+    }
+    assert.equal(await call('dns-example', 'echo', 2), 2);
+  });
+
+  it('does not keep a process that was starting when the plugin was disabled', async () => {
+    await writeFixture(
+      local,
+      'slow-example',
+      'await new Promise((resolve) => setTimeout(resolve, 1500));\nexport default { methods: { echo: (p) => p } };\n',
+    );
+    await enable('slow-example');
+    const pending = call('slow-example', 'echo', 1).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal((await owner.post('/plugins/slow-example/disable')).status, 200);
+    const error = await pending;
+    assert.ok(error instanceof PluginCallError);
+    assert.equal(error.reason, 'not_running');
+    // Long after it would have been ready, there is still nothing running for it.
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    assert.equal(host().pidOf('slow-example'), undefined);
+    assert.equal((await view('slow-example')).runtime.state, 'stopped');
+  });
+
+  it('does not publish an obsolete check after the plugin was stopped', async (t) => {
+    const plugins = instance.app.get(PluginsService);
+    const runtime = instance.app.get(PluginRuntime);
+    const original = plugins.runnable.bind(plugins);
+    t.mock.method(plugins, 'runnable', async (id: string) => {
+      const read = await original(id);
+      await host().stop(id);
+      return read;
+    });
+    await check('dns-example');
+    assert.equal(runtime.snapshotOf('dns-example').state, 'stopped');
+    assert.equal(runtime.snapshotOf('dns-example').lastError, null);
+  });
+
   it('reports a plugin that cannot load, and leaves the record of it', async () => {
     await writeFixture(local, 'flaky-example', 'throw new Error("cannot start");\n');
     await enable('flaky-example');
@@ -286,10 +409,45 @@ describe('running approved plugins', { skip: !databaseUrl }, () => {
     assert.equal(reply.status, 200);
     const plugin = PluginViewSchema.parse(reply.body);
     assert.equal(plugin.runtime.state, 'failed');
-    assert.match(plugin.runtime.lastError ?? '', /cannot start/u);
+    assert.equal(plugin.runtime.lastError, 'The plugin could not load its modules.');
     const record = found((await events('plugin.checked')).at(-1), 'the record');
     assert.equal(record.outcome, 'failure');
-    assert.match(String(record.details['reason']), /cannot start/u);
+    assert.equal(record.details['reason'], 'The plugin could not load its modules.');
+  });
+
+  it('stops a running plugin after repeated unsafe hard links without revoking its approval', async () => {
+    const id = 'hardlink-example';
+    const directory = await writeFixture(local, id);
+    await enable(id);
+    assert.equal(await call(id, 'echo', 7), 7);
+    assert.ok(host().pidOf(id));
+    const alias = join(local, 'hardlink-alias.js');
+    await link(join(directory, 'dist', 'entry.js'), alias);
+    try {
+      const reasons: string[] = [];
+      for (let i = 0; i < 10; i += 1) {
+        await assert.rejects(call(id, 'echo', 7), (error: unknown) => {
+          assert.ok(error instanceof PluginCallError);
+          reasons.push(error.message);
+          return error.reason === 'not_running';
+        });
+      }
+      assert.equal(new Set(reasons).size, 1);
+      assert.match(reasons[0] ?? '', /exactly one hard link/u);
+      assert.equal(host().pidOf(id), undefined);
+      const notes = (await events('plugin.unverifiable')).filter(
+        (event) => event.object?.id === id,
+      );
+      assert.equal(notes.length, 1);
+      assert.equal(
+        (await db().pluginApproval.findUniqueOrThrow({ where: { pluginId: id } })).enabled,
+        true,
+      );
+      assert.match((await view(id)).problems.join(), /exactly one hard link/u);
+    } finally {
+      await rm(alias);
+    }
+    assert.equal(await call(id, 'echo', 8), 8);
   });
 
   it('leaves a plugin that keeps failing alone for a while', async () => {

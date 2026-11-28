@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { after, before, describe, it } from 'node:test';
 
 import {
+  type BaselineDocument,
   type BaselineFleet,
   BaselineFleetSchema,
   type BaselineView,
@@ -12,6 +13,7 @@ import {
   CheckRunDiffSchema,
   CheckRunListSchema,
   type CheckRunView,
+  CheckRunSummarySchema,
   CheckRunViewSchema,
   StartBaselineRunsResultSchema,
 } from '@swellwright/contracts';
@@ -31,6 +33,7 @@ import type { Gate, Program, StepHost } from '../commands/step-host.js';
 import { databaseUrl, errorCode } from '../test-support.js';
 import { CheckRunner } from './check-runner.service.js';
 import { CheckScheduler } from './check-scheduler.service.js';
+import { documentHash } from './document.js';
 
 /** What a stand-in server reports for each kind of observation: the lines of the observation, or `denied`. */
 type World = Record<string, readonly string[] | 'denied'>;
@@ -717,13 +720,77 @@ describe('baseline checks over SSH', { skip: !databaseUrl }, () => {
       'step_up_required',
     );
     await h.stepUp(h.operator, 'ops');
-    assert.equal(
-      (await h.operator.post(`/servers/${serverId}/baseline-runs`, { baselineId })).status,
-      201,
-    );
+    const started = await h.operator.post(`/servers/${serverId}/baseline-runs`, { baselineId });
+    assert.equal(started.status, 201, JSON.stringify(started.body));
     // The reads need no code.
     await h.lapse();
     assert.equal((await h.operator.get('/baseline-fleet')).status, 200);
+    // A 201 only queued this check. Leave the shared server free for the next test.
+    await waitForRun(CheckRunSummarySchema.parse(started.body).id);
+  });
+
+  it('opens and runs a stored version whose pattern the rules for writing now refuse, and refuses to write it', async () => {
+    const client = h.instance.isolated.database.client;
+    // The test before let the code of the operator age: starting a run and writing need a fresh one.
+    await h.stepUp(h.operator, 'ops');
+    // Saved before the bound on matching: a pattern the bound refuses, next to an ordinary check.
+    const legacy = ['(a|', 'a)*b'].join('');
+    const document: BaselineDocument = {
+      schema: 1,
+      checks: [
+        {
+          id: 'ssh.legacy',
+          title: 'An old pattern',
+          category: 'ssh',
+          severity: 'high',
+          observe: { kind: 'sshd.effective', field: 'permitrootlogin' },
+          expect: { matches: legacy },
+        },
+        {
+          id: 'ssh.root',
+          title: 'Root cannot log in over SSH',
+          category: 'ssh',
+          severity: 'high',
+          observe: { kind: 'sshd.effective', field: 'permitrootlogin' },
+          expect: { equals: 'no' },
+        },
+      ],
+    };
+    const source = JSON.stringify(document, null, 2);
+    const profile = await client.baselineProfile.create({ data: { name: 'legacy-pattern' } });
+    await client.baselineVersion.create({
+      data: {
+        profileId: profile.id,
+        version: 1,
+        document,
+        source,
+        documentSha256: documentHash(document),
+        checkCount: 2,
+      },
+    });
+    // It opens and is listed.
+    const view = await h.observer.get(`/baselines/${profile.id}`);
+    assert.equal(view.status, 200, JSON.stringify(view.body));
+    assert.equal(BaselineViewSchema.parse(view.body).document.checks.length, 2);
+    const list = (await h.observer.get('/baselines')).body as { baselines: { name: string }[] };
+    assert.ok(list.baselines.some((entry) => entry.name === 'legacy-pattern'));
+    // It runs: the refused check is an error, the other one is decided as usual.
+    const run = await runOnce(serverId, { baselineId: profile.id });
+    assert.equal(run.state, 'completed', JSON.stringify(run));
+    const by = new Map(run.results.map((result) => [result.checkId, result]));
+    assert.equal(by.get('ssh.legacy')?.status, 'error');
+    assert.match(by.get('ssh.legacy')?.message ?? '', /refused/u);
+    assert.equal(by.get('ssh.root')?.status, 'pass');
+    // Writing the same document now is refused, with the reason at the pattern.
+    const created = await h.operator.post('/baselines', { name: 'legacy-copy', source });
+    assert.equal(created.status, 400, JSON.stringify(created.body));
+    assert.match(JSON.stringify(created.body), /checks\[0\]\.expect\.matches/u);
+    assert.match(JSON.stringify(created.body), /repeats a part/u);
+    const edited = await h.operator.call('PUT', `/baselines/${profile.id}`, {
+      source,
+      expectedVersion: 1,
+    });
+    assert.equal(edited.status, 400, JSON.stringify(edited.body));
   });
 
   it('closes the runs that were going on when the process stopped, and starts clean', async () => {

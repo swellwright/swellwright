@@ -36,6 +36,9 @@ describe('canonical JSON', () => {
     assert.equal(isMask('[masked]'), true);
     assert.equal(isMask('[masked:1a2b3c4d]'), true);
     assert.equal(isMask('[masked:zz]'), false);
+    // The mask of a string that could not be read as a document is a mask too.
+    assert.equal(isMask('[masked: unreadable document]'), true);
+    assert.equal(isMask('[masked: anything else]'), false);
     assert.equal(isMask('masked'), false);
     assert.equal(isMask(5), false);
   });
@@ -156,6 +159,89 @@ describe('JSON Patch', () => {
     }
     assert.equal(({} as { polluted?: boolean }).polluted, undefined);
     assert.throws(() => patch({ ...doc }, { op: 'remove', path: '/constructor' }), JsonPatchError);
+  });
+  it('refuses a patch that grows the document by copying a subtree into itself, before it runs out of memory', () => {
+    // Every copy doubles /a: 2^60 values after 60 operations if nothing stopped it.
+    const doubling: JsonPatchOperation[] = [{ op: 'add', path: '/a', value: [1, 2, 3, 4] }];
+    for (let index = 0; index < 60; index += 1) {
+      doubling.push({ op: 'copy', from: '/a', path: '/a/-' });
+    }
+    const started = performance.now();
+    assert.throws(
+      () => patch({}, ...doubling),
+      (error: unknown) =>
+        error instanceof JsonPatchError &&
+        /larger than the limit|more than the limit/u.test(error.message) &&
+        error.index !== null,
+    );
+    assert.ok(performance.now() - started < 5000, 'the patch was refused in time');
+    // Copies that do not grow without bound, and remove what they made, use the work budget: 500 of them are refused
+    // when each clones a large subtree.
+    const big = { a: Array.from({ length: 20_000 }, (_unused, index) => index) };
+    const churn: JsonPatchOperation[] = [];
+    for (let index = 0; index < 250; index += 1) {
+      churn.push({ op: 'copy', from: '/a', path: '/b' }, { op: 'remove', path: '/b' });
+    }
+    assert.throws(() => patch(big, ...churn), /more than the limit/u);
+    // And as many tests of the whole document.
+    const tests: JsonPatchOperation[] = Array.from({ length: 500 }, () => ({
+      op: 'test',
+      path: '/a/0',
+      value: 0,
+    }));
+    tests.push({ op: 'test', path: '', value: big }, { op: 'test', path: '', value: big });
+    assert.deepEqual(patch(big, ...tests), big);
+    const wholeTests: JsonPatchOperation[] = Array.from({ length: 500 }, () => ({
+      op: 'test',
+      path: '',
+      value: big,
+    }));
+    assert.throws(() => patch(big, ...wholeTests), /more than the limit/u);
+  });
+  it('counts what a copy, an add or a move replaces, so overwriting a member does not use up the budget', () => {
+    const doc = { a: Array<number>(400_000).fill(0), b: [] as number[] };
+    const twice = patch(
+      doc,
+      { op: 'copy', from: '/a', path: '/b' },
+      { op: 'copy', from: '/a', path: '/b' },
+    ) as { a: number[]; b: number[] };
+    assert.equal(twice.b.length, 400_000);
+    const overwritten = patch(
+      doc,
+      { op: 'copy', from: '/a', path: '/b' },
+      { op: 'add', path: '/b', value: [1] },
+      { op: 'copy', from: '/a', path: '/b' },
+      { op: 'move', from: '/a', path: '/b' },
+      { op: 'copy', from: '/b', path: '/a' },
+    ) as { a: number[]; b: number[] };
+    assert.equal(overwritten.a.length, 400_000);
+    // A document that really grows past the limit is still refused.
+    assert.throws(
+      () =>
+        patch(doc, { op: 'copy', from: '/a', path: '/b' }, { op: 'copy', from: '/a', path: '/c' }),
+      /larger than the limit/u,
+    );
+    // An array index inserts: two copies into an array are two copies.
+    assert.throws(
+      () =>
+        patch(
+          { a: doc.a, list: [] },
+          { op: 'copy', from: '/a', path: '/list/-' },
+          { op: 'copy', from: '/a', path: '/list/0' },
+        ),
+      /larger than the limit/u,
+    );
+  });
+  it('still applies an ordinary patch to a large document', () => {
+    const big = { a: Array.from({ length: 50_000 }, (_unused, index) => index), b: 1 };
+    const result = patch(
+      big,
+      { op: 'copy', from: '/a', path: '/c' },
+      { op: 'replace', path: '/b', value: 2 },
+      { op: 'move', from: '/c', path: '/d' },
+    ) as { b: number; d: number[] };
+    assert.equal(result.b, 2);
+    assert.equal(result.d.length, 50_000);
   });
 });
 

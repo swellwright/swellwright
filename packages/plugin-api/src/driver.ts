@@ -26,6 +26,8 @@ export const DRIVER_LIMITS = {
   depth: 8,
   fileBytes: 128 * 1024,
   resultBytes: 1024 * 1024,
+  /** The parts a result or a request body may be built of once `each` loops are run. */
+  renderNodes: 20_000,
 } as const;
 
 const NAME = /^[a-z][A-Za-z0-9]{0,39}$/u;
@@ -262,7 +264,7 @@ function checkShape(
     });
   } else if (typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    if ('each' in record && allowEach) {
+    if (allowEach && Object.hasOwn(record, 'each')) {
       const keys = Object.keys(record).sort().join(',');
       if (
         keys !== 'as,each,map' ||
@@ -436,27 +438,33 @@ function safeExpressions(text: string): Expression[] {
 /** Every template string of an operation, wherever it is. */
 function collectTemplates(operation: Operation): string[] {
   const out: string[] = [];
-  const walk = (value: unknown): void => {
+  const walk = (value: unknown, allowEach: boolean): void => {
     if (typeof value === 'string') {
       out.push(value);
     } else if (Array.isArray(value)) {
-      value.forEach(walk);
+      for (const item of value) {
+        walk(item, allowEach);
+      }
     } else if (value !== null && typeof value === 'object') {
       const record = value as Record<string, unknown>;
-      if ('each' in record && typeof record['each'] === 'string') {
+      if (allowEach && Object.hasOwn(record, 'each') && typeof record['each'] === 'string') {
         out.push(`{{ ${record['each']} }}`);
+        walk(record['map'], allowEach);
+        return;
       }
-      Object.values(record).forEach(walk);
+      for (const item of Object.values(record)) {
+        walk(item, allowEach);
+      }
     }
   };
   for (const step of operation.steps) {
     out.push(step.request.url, ...Object.values(step.request.headers ?? {}));
-    walk(step.request.body);
+    walk(step.request.body, false);
     if (step.expect?.error !== undefined) {
       out.push(step.expect.error);
     }
   }
-  walk(operation.result);
+  walk(operation.result, true);
   return out;
 }
 
@@ -595,36 +603,100 @@ async function renderUrl(template: string, scope: Scope): Promise<string> {
   return text;
 }
 
-async function renderShape(value: unknown, scope: Scope): Promise<unknown> {
+/**
+ * What building one shape may cost, whatever the data it is built from: `each` over a long list, nested, or a
+ * large answer put into many places would otherwise make far more than the result may hold before its size is
+ * checked at the end.
+ */
+interface RenderBudget {
+  nodes: number;
+  chars: number;
+  readonly signal: AbortSignal | undefined;
+}
+
+function charge(budget: RenderBudget, nodes: number, chars: number): void {
+  budget.signal?.throwIfAborted();
+  budget.nodes += nodes;
+  budget.chars += chars;
+  if (budget.nodes > DRIVER_LIMITS.renderNodes) {
+    throw new DriverError(
+      `The result would have more than ${String(DRIVER_LIMITS.renderNodes)} parts.`,
+    );
+  }
+  if (budget.chars > DRIVER_LIMITS.resultBytes) {
+    throw new DriverError('The result is too large.');
+  }
+}
+
+/** How much text a value adds to a shape. Its JSON is measured once; the budget stops it before it adds up. */
+function sizeOf(value: unknown): number {
   if (typeof value === 'string') {
-    return render(value, scope);
+    return value.length;
+  }
+  return (JSON.stringify(value) as string | undefined)?.length ?? 0;
+}
+
+/**
+ * Builds a JSON shape whose strings are templates, one part after the other within the budget. `each` makes a loop
+ * only where the driver was checked with loops allowed (the result); elsewhere (a request body) it is a key like
+ * any other, as the check took it.
+ */
+async function renderShape(
+  value: unknown,
+  scope: Scope,
+  budget: RenderBudget,
+  allowEach: boolean,
+): Promise<unknown> {
+  charge(budget, 1, 0);
+  if (typeof value === 'string') {
+    const rendered = await render(value, scope);
+    charge(budget, 0, sizeOf(rendered));
+    return rendered;
   }
   if (Array.isArray(value)) {
-    return Promise.all(value.map((item) => renderShape(item, scope)));
+    const out: unknown[] = [];
+    for (const item of value) {
+      out.push(await renderShape(item, scope, budget, allowEach));
+    }
+    return out;
   }
   if (value !== null && typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    if ('each' in record) {
+    if (allowEach && Object.hasOwn(record, 'each')) {
       const list = await render(`{{ ${String(record['each'])} }}`, scope);
       if (!Array.isArray(list)) {
         throw new DriverError(`"${String(record['each'])}" is not a list`);
       }
+      // The whole loop is paid for before any of it is built.
+      charge(budget, list.length, 0);
       const name = String(record['as']);
-      const items: unknown[] = list;
-      return Promise.all(
-        items.map((item) =>
-          renderShape(record['map'], { ...scope, vars: { ...scope.vars, [name]: item } }),
-        ),
-      );
+      const out: unknown[] = [];
+      for (const item of list as unknown[]) {
+        out.push(
+          await renderShape(
+            record['map'],
+            { ...scope, vars: { ...scope.vars, [name]: item } },
+            budget,
+            allowEach,
+          ),
+        );
+      }
+      return out;
     }
-    const entries = await Promise.all(
-      Object.entries(record).map(
-        async ([key, item]) => [key, await renderShape(item, scope)] as const,
-      ),
-    );
+    const entries: [string, unknown][] = [];
+    for (const [key, item] of Object.entries(record)) {
+      // The name is part of what is built, with its quotes and colon, each time the object is built.
+      charge(budget, 0, key.length + 3);
+      entries.push([key, await renderShape(item, scope, budget, allowEach)]);
+    }
+    // Own properties only, whatever the keys are called (`__proto__` included).
     return Object.fromEntries(entries);
   }
   return value;
+}
+
+function newBudget(signal: AbortSignal | undefined): RenderBudget {
+  return { nodes: 0, chars: 0, signal };
 }
 
 function checkParams(declared: Operation['params'], given: unknown): Record<string, unknown> {
@@ -641,7 +713,8 @@ function checkParams(declared: Operation['params'], given: unknown): Record<stri
   }
   const out: Record<string, unknown> = {};
   for (const [name, def] of Object.entries(defs)) {
-    let value = record[name] ?? undefined;
+    // Own properties only: `constructor` or `toString` are not parameters that were given.
+    let value = Object.hasOwn(record, name) ? (record[name] ?? undefined) : undefined;
     value ??= 'default' in def ? def.default : undefined;
     if (value === undefined) {
       if (def.required === true) {
@@ -712,6 +785,8 @@ export async function runOperation(
   name: string,
   given: unknown,
   services: DriverServices,
+  /** Ends the operation: no step is started, and no part built, once it is aborted. */
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const operation = Object.hasOwn(driver.operations, name) ? driver.operations[name] : undefined;
   if (operation === undefined) {
@@ -728,6 +803,7 @@ export async function runOperation(
     secret: secret ? (field) => services.secret(field) : undefined,
   });
   for (const step of operation.steps) {
+    signal?.throwIfAborted();
     const url = await renderUrl(step.request.url, scope(true));
     const headers: Record<string, string> = {};
     for (const [header, template] of Object.entries(step.request.headers ?? {})) {
@@ -739,9 +815,13 @@ export async function runOperation(
       const rendered = await render(step.request.body, scope(true));
       body = typeof rendered === 'string' ? rendered : JSON.stringify(rendered);
     } else if (step.request.body !== undefined) {
-      body = JSON.stringify(await renderShape(step.request.body, scope(true)));
+      body = JSON.stringify(
+        await renderShape(step.request.body, scope(true), newBudget(signal), false),
+      );
       headers['content-type'] ??= 'application/json';
     }
+    // The last moment to stop: after this the request is sent, and may have its effect whatever happens next.
+    signal?.throwIfAborted();
     const response = await services.fetch(url, {
       method: step.request.method,
       headers,
@@ -776,7 +856,7 @@ export async function runOperation(
   const value =
     operation.result === undefined
       ? { status: last === undefined ? 0 : (steps[last.id]?.status ?? 0) }
-      : await renderShape(operation.result, scope(false));
+      : await renderShape(operation.result, scope(false), newBudget(signal), true);
   const text = JSON.stringify(value) as string | undefined;
   if (text !== undefined && Buffer.byteLength(text) > DRIVER_LIMITS.resultBytes) {
     throw new DriverError('The result is too large.');

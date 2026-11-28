@@ -136,12 +136,13 @@ export function validateConfig(
   const values: ConfigValues = {};
   const required = new Set(schema.required ?? []);
   for (const name of Object.keys(input)) {
-    if (!(name in schema.properties)) {
+    // Own properties only: `constructor` or `toString` are not settings because every object has them.
+    if (!Object.hasOwn(schema.properties, name)) {
       problems.push({ field: name, message: 'is not a setting of this plugin' });
     }
   }
   for (const [name, definition] of Object.entries(schema.properties)) {
-    const given = input[name];
+    const given = Object.hasOwn(input, name) ? input[name] : undefined;
     const has = given !== undefined && given !== null && given !== '';
     const value = has ? given : 'default' in definition ? definition.default : undefined;
     if (value === undefined || value === '') {

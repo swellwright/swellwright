@@ -783,13 +783,14 @@ export const rotateKekRoute = defineRoute({
   tags: ['vault'],
   summary: 'Replace the key that wraps every data key',
   description:
-    'Needs the vault open and the passphrase. A new key-encryption key wraps every data key (the values are not re-encrypted), the key version moves forward, and a new recovery key is issued because the old one opened the old key. All or nothing: a failure leaves the vault as it was.',
+    'Needs the vault open and the passphrase. A new key-encryption key wraps every data key (the values are not re-encrypted), the key version moves forward, and a new recovery key is issued because the old one opened the old key. The database changes atomically. If the core cannot confirm the result of the commit, it seals the vault; unlock it with the passphrase and issue a new recovery key.',
   auth: 'session',
   permission: 'vault:manage',
   stepUp: true,
   request: { body: ConfirmPassphraseRequestSchema },
   responses: {
     200: { description: 'The new recovery key and the vault.', schema: VaultInitializedSchema },
+    503: { ...ERROR, description: 'The core could not confirm whether the rotation committed.' },
   },
 });
 
@@ -1081,7 +1082,7 @@ export const enablePluginRoute = defineRoute({
   tags: ['plugins'],
   summary: 'Enable a plugin and approve what it asks for',
   description:
-    'Approves the plugin as it is now: the digest of its files and the permissions of its manifest. The digest in the request is what the administrator was shown; if the files differ now the answer is 409 and nothing is enabled. Only a plugin that is usable can be enabled (not invalid, not for other versions of Swellwright).',
+    'Approves the plugin as it is now: the digest of its files and the permissions of its manifest. Only a usable plugin with the displayed digest can be enabled. Approval also requires `vault:reveal` when a field in the current schema already contains a secret binding.',
   auth: 'session',
   permission: 'plugins:manage',
   stepUp: true,
@@ -1140,7 +1141,7 @@ export const updatePluginConfigRoute = defineRoute({
   tags: ['plugins'],
   summary: 'Change the settings of a plugin',
   description:
-    'Replaces the settings. Every value is checked against what the plugin declares, a field it does not declare is refused, and a secret field must name an existing vault secret of the right kind. Which fields changed is recorded, never the values.',
+    'Replaces the settings. A secret field must name an existing vault secret of the right kind. Adding or replacing a secret binding also requires `vault:reveal`. Changed field names and newly bound secret IDs are audited, never secret values.',
   auth: 'session',
   permission: 'plugins:manage',
   stepUp: true,
@@ -1155,7 +1156,7 @@ export const getPluginSidecarRoute = defineRoute({
   tags: ['plugins'],
   summary: 'The compose fragment that runs the container of a plugin',
   description:
-    'For a plugin whose code runs as a sidecar container: a Docker Compose file that adds the container to the stack on an internal network with no way out, read-only, without privileges, with the memory and cpu the manifest names and the image pinned by digest. It holds the token with which the sidecar proves itself to the core, derived from the plugin and its digest: keep it like a secret. Swellwright never starts a container itself.',
+    'For an enabled sidecar: a Docker Compose file with a token bound to the current approval. Keeping or exporting a token that can read bound secrets requires the same care as a secret; export also requires `vault:reveal` when secrets are approved. Export a new fragment after reapproval. Swellwright never starts a container itself.',
   auth: 'session',
   permission: 'plugins:manage',
   stepUp: true,
@@ -1170,12 +1171,14 @@ export const pluginGatewayRoute = defineRoute({
   tags: ['plugin-gateway'],
   summary: 'What a sidecar asks of the core',
   description:
-    "Called by a plugin's container, not by people: it proves itself with `Authorization: Bearer <token>`, the token of the compose fragment. The core does what the plugin was approved for and nothing else: requests to the approved hosts, the secret bound to a setting, the plugin's own storage. The answer is always 200 with `ok`; a refusal says why. A wrong token, a plugin that is not enabled or whose files changed answer 401.",
+    "Called by a plugin's container, not by people. The core checks `Authorization: Bearer <token>` against the current approval before serving each request; file verification can be reused briefly. Previously verified tokens can use reserved approval-check capacity, but initial checks and saturated capacity can still yield 429. Authenticated requests are limited to 120 per minute per plugin per API process. The core serves approved outbound requests, bound secrets, and the plugin's own storage. Each successful gateway secret delivery requires an audit record. The result is 200 with `ok`; an invalid token, disabled plugin or failed file verification yields 401, and throttling yields 429.",
   auth: 'none',
   handlerAuth: 'sidecar',
   request: { params: PluginIdParamsSchema, body: PluginGatewayRequestSchema },
   responses: {
     200: { description: 'The result or the refusal.', schema: PluginGatewayReplySchema },
+    401: { ...ERROR, description: 'The sidecar could not authenticate.' },
+    429: { ...ERROR, description: 'The gateway is busy or too many tokens were refused.' },
   },
 });
 

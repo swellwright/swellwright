@@ -10,6 +10,7 @@ import {
   VaultRotatedSchema,
   VaultStatusSchema,
 } from '@swellwright/contracts';
+import { type Database } from '@swellwright/db';
 
 import {
   auditEvents,
@@ -24,6 +25,11 @@ import {
   start,
   stop,
 } from '../test-support.js';
+import { AuditService } from '../audit/audit.service.js';
+import { VaultSealedException } from '../http.js';
+import { CLOCK, DATABASE, VAULT_KDF } from '../tokens.js';
+import { type KdfParams } from './kdf.js';
+import { VaultService } from './vault.service.js';
 
 const PASSPHRASE = 'a long passphrase for the vault, used in tests';
 const NEW_PASSPHRASE = 'another long passphrase, chosen later on';
@@ -351,6 +357,195 @@ describe('rotating the keys of the vault', { skip: !databaseUrl }, () => {
     await seal();
     assert.equal((await unseal({ passphrase })).status, 200);
     assert.equal(await reveal('written-meanwhile'), 'late-value');
+  });
+
+  it('takes the same words typed another way for the same passphrase when it is changed', async () => {
+    const composed = 'café au lait, a passphrase for the vault';
+    const changed = await owner.post('/vault/passphrase', {
+      currentPassphrase: passphrase,
+      newPassphrase: composed,
+    });
+    assert.equal(changed.status, 200, JSON.stringify(changed.body));
+    passphrase = composed;
+    // The fullwidth letter has the same NFKC form but not the same NFC form.
+    const same = await owner.post('/vault/passphrase', {
+      currentPassphrase: composed,
+      newPassphrase: 'ｃafé au lait, a passphrase for the vault',
+    });
+    assert.equal(same.status, 400);
+  });
+
+  /** A second API process on the same database, as a deployment with two replicas would have. */
+  const secondProcess = (database = instance.app.get<Database>(DATABASE)) =>
+    new VaultService(
+      database,
+      instance.app.get(AuditService),
+      instance.app.get<KdfParams>(VAULT_KDF),
+      instance.app.get<() => number>(CLOCK),
+    );
+  const META = { ip: undefined, userAgent: undefined, requestId: undefined };
+  const ownerActor = async () => {
+    const user = await db().user.findFirstOrThrow({ where: { username: 'owner' } });
+    return { id: user.id, name: user.username };
+  };
+
+  it('seals a process that holds a key another process replaced, instead of writing under it', async () => {
+    const actor = await ownerActor();
+    const other = secondProcess();
+    await other.unseal(actor, { passphrase }, META);
+    const rotated = await owner.post('/vault/rotate-kek', { passphrase });
+    assert.equal(rotated.status, 200, JSON.stringify(rotated.body));
+    recoveryKey = VaultInitializedSchema.parse(rotated.body).recoveryKey;
+
+    assert.equal((await other.status()).state, 'sealed', 'status notices the retired key');
+    assert.throws(() => {
+      other.requireOpen();
+    }, VaultSealedException);
+    await assert.rejects(
+      other.create(actor, { name: 'from-a-stale-process', type: 'generic', value: 'v' }, META),
+      (error: unknown) => error instanceof VaultSealedException,
+    );
+    assert.equal(
+      (await rows()).some((r) => r.name === 'from-a-stale-process'),
+      false,
+      'nothing was written under the retired key',
+    );
+    assert.equal((await other.status()).state, 'sealed', 'the stale process sealed itself');
+    // Opened again it holds the key in use and writes what every process can read.
+    await other.unseal(actor, { passphrase }, META);
+    const made = await other.create(
+      actor,
+      { name: 'from-the-other-process', type: 'generic', value: 'other-value' },
+      META,
+    );
+    ids.set('from-the-other-process', made.id);
+    assert.equal(await reveal('from-the-other-process'), 'other-value');
+  });
+
+  it('keeps the new key when a rotation was committed but its answer was lost', async () => {
+    const actor = await ownerActor();
+    const real = instance.app.get<Database>(DATABASE);
+    let committed = false;
+    const lossy = new Proxy(real.client, {
+      get(target, property) {
+        if (property === '$transaction') {
+          return async (...args: Parameters<typeof target.$transaction>) => {
+            const result = await (target.$transaction as (...a: unknown[]) => Promise<unknown>)(
+              ...args,
+            );
+            if (!committed) {
+              committed = true;
+              throw new Error('the answer of the commit was lost');
+            }
+            return result;
+          };
+        }
+        const value: unknown = Reflect.get(target, property);
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value;
+      },
+    });
+    const other = secondProcess(
+      new Proxy(real, {
+        get: (target, property) =>
+          property === 'client' ? lossy : (Reflect.get(target, property) as unknown),
+      }),
+    );
+    await other.unseal(actor, { passphrase }, META);
+    const version = (await meta()).kekVersion;
+    const answer = await other.rotateKek(actor, { passphrase }, META);
+    assert.equal((await meta()).kekVersion, version + 1, 'it was committed');
+    assert.equal(answer.status.state, 'unsealed', 'the process keeps the key that is stored');
+    assert.notEqual(answer.recoveryKey, recoveryKey);
+    // The recovery key that came back is the one that opens the vault now.
+    assert.equal((await unseal({ recoveryKey: answer.recoveryKey })).status, 200);
+    recoveryKey = answer.recoveryKey;
+    await expectAllValues();
+  });
+
+  it('returns the recovery key without needing another status read after a successful commit', async () => {
+    const actor = await ownerActor();
+    const real = instance.app.get<Database>(DATABASE);
+    let committed = false;
+    const interrupted = new Proxy(real.client, {
+      get(target, property) {
+        if (property === '$transaction') {
+          return async (...args: Parameters<typeof target.$transaction>) => {
+            const result = await (target.$transaction as (...a: unknown[]) => Promise<unknown>)(
+              ...args,
+            );
+            committed = true;
+            return result;
+          };
+        }
+        if (property === 'vaultMeta' && committed) {
+          throw new Error('database disconnected after commit');
+        }
+        return Reflect.get(target, property) as unknown;
+      },
+    });
+    const other = secondProcess(
+      new Proxy(real, {
+        get: (target, property) =>
+          property === 'client' ? interrupted : (Reflect.get(target, property) as unknown),
+      }),
+    );
+    try {
+      await other.unseal(actor, { passphrase }, META);
+      const version = (await meta()).kekVersion;
+      const answer = await other.rotateKek(actor, { passphrase }, META);
+      assert.equal(answer.status.kekVersion, version + 1);
+      assert.equal(answer.status.state, 'unsealed');
+      assert.notEqual(answer.recoveryKey, recoveryKey);
+      assert.equal((await unseal({ recoveryKey: answer.recoveryKey })).status, 200);
+      recoveryKey = answer.recoveryKey;
+      await expectAllValues();
+    } finally {
+      other.onApplicationShutdown();
+    }
+  });
+
+  it('seals when the database cannot confirm the rotation, then recovers with the passphrase', async () => {
+    const actor = await ownerActor();
+    const real = instance.app.get<Database>(DATABASE);
+    let disconnected = false;
+    const interrupted = new Proxy(real.client, {
+      get(target, property) {
+        if (property === '$transaction') {
+          return async (...args: Parameters<typeof target.$transaction>) => {
+            if (disconnected) {
+              throw new Error('connection is still down');
+            }
+            await (target.$transaction as (...a: unknown[]) => Promise<unknown>)(...args);
+            disconnected = true;
+            throw new Error('connection lost after commit');
+          };
+        }
+        return Reflect.get(target, property) as unknown;
+      },
+    });
+    const other = secondProcess(
+      new Proxy(real, {
+        get: (target, property) =>
+          property === 'client' ? interrupted : (Reflect.get(target, property) as unknown),
+      }),
+    );
+    try {
+      await other.unseal(actor, { passphrase }, META);
+      await assert.rejects(other.rotateKek(actor, { passphrase }, META), {
+        name: 'ServiceUnavailableException',
+      });
+      assert.throws(() => {
+        other.requireOpen();
+      }, VaultSealedException);
+      assert.equal((await unseal({ passphrase })).status, 200);
+      await expectAllValues();
+      const renewed = await owner.post('/vault/recovery-key/rotate', { passphrase });
+      assert.equal(renewed.status, 200);
+      recoveryKey = VaultInitializedSchema.parse(renewed.body).recoveryKey;
+      assert.equal((await unseal({ recoveryKey })).status, 200);
+    } finally {
+      other.onApplicationShutdown();
+    }
   });
 
   it('needs the permission and a fresh second factor for every rotation', async () => {

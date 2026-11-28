@@ -11,8 +11,8 @@
 #     never its content;
 #   - no network access beyond the machine: a request goes to loopback or to the own address of the machine, and the
 #     name of the machine is resolved once; package counts come from the lists already on the disk;
-#   - bounded: every external program gets a deadline when timeout(1) exists, every list is cut to a fixed length and
-#     every line to 400 bytes;
+#   - bounded output: external reads with a deadline use timeout(1) when available; clipped observations are marked
+#     incomplete and individual field values are at most 400 bytes;
 #   - plain POSIX sh (dash is enough), LC_ALL=C so that the output is the same in every language.
 #
 # What it reads: the plan on its standard input, one observation per line, fields separated by TAB:
@@ -30,6 +30,7 @@
 #   @@swb end INDEX STATUS         0 ok, 11 needs root, 99 unknown kind, anything else: the observation failed
 #   @@swb done
 # A value is one line, with control characters removed and at most 400 bytes. A list is the same field repeated.
+# The reserved field truncated=yes means the observation cannot be evaluated, even if its status was 0.
 
 LC_ALL=C
 export LC_ALL
@@ -59,7 +60,24 @@ bounded() {
 }
 
 # One line of an observation: kv FIELD VALUE. The only way anything is printed, so a value can never be two lines.
-kv() { printf '%s=%s\n' "$1" "$(printf '%s' "$2" | tr -d '\000-\037\177' | cut -b1-400)"; }
+kv() {
+  _kv=$(printf '%s' "$2" | tr -d '\000-\037\177' | cut -b1-401)
+  if [ "${#_kv}" -gt 400 ]; then
+    printf 'truncated=yes\n'
+  else
+    printf '%s=%s\n' "$1" "$_kv"
+  fi
+}
+# Print an explicitly bounded list. An omitted item makes the observation indeterminate.
+list_count() { printf '%s\n' "$1" | awk 'NF { n++ } END { print n + 0 }'; }
+kv_list() {
+  [ -n "$3" ] || return 0
+  if [ "$(list_count "$3")" -gt "$2" ]; then
+    printf 'truncated=yes\n'
+  fi
+  printf '%s\n' "$3" | head -n "$2" | while IFS= read -r _entry; do kv "$1" "$_entry"; done
+}
+is_num() { case $1 in '' | *[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 yn() { if [ "$1" = 1 ]; then printf 'yes'; else printf 'no'; fi; }
 need_root() { [ "$IS_ROOT" = 1 ]; }
 now() { date -u +%s; }
@@ -98,7 +116,7 @@ obs_kernel() {
   kv rebootRequired "$(yn "$_req")"
   for _p in "$R/var/run/reboot-required.pkgs" "$R/run/reboot-required.pkgs"; do
     if [ -r "$_p" ]; then
-      head -n 20 "$_p" | sort -u | while IFS= read -r _line; do kv rebootPackages "$_line"; done
+      kv_list rebootPackages 20 "$(sort -u "$_p")"
       break
     fi
   done
@@ -138,13 +156,20 @@ obs_time_sync() {
 
 obs_disk_usage() {
   _p=${P_path:-/}
-  _line=$(bounded 10 df -P -k "$_p" | tail -n 1)
+  _df=$(bounded 10 df -P -k "$_p") || return $?
+  _line=$(printf '%s\n' "$_df" | awk 'NR > 1 && NF >= 6 { last = $0 } END { print last }')
   [ -n "$_line" ] || return 1
+  _used=$(printf '%s\n' "$_line" | awk '{ v = $5; sub(/%$/, "", v); print v }')
+  _available=$(printf '%s\n' "$_line" | awk '{ print $4 }')
+  is_num "$_used" && is_num "$_available" || return 1
   kv mountpoint "$(printf '%s\n' "$_line" | awk '{ $1 = $2 = $3 = $4 = $5 = ""; sub(/^ +/, ""); print }')"
-  kv usedPercent "$(num "$(printf '%s\n' "$_line" | awk '{ v = $5; sub(/%/, "", v); print v }')")"
-  kv availableMiB "$(num "$(printf '%s\n' "$_line" | awk '{ print int($4 / 1024) }')")"
-  _inode=$(bounded 10 df -P -i "$_p" | tail -n 1 | awk '{ v = $5; sub(/%/, "", v); print v }')
-  kv inodeUsedPercent "$(num "$_inode")"
+  kv usedPercent "$_used"
+  kv availableMiB "$(printf '%s\n' "$_available" | awk '{ print int($1 / 1024) }')"
+  _df=$(bounded 10 df -P -i "$_p") || return $?
+  _inode=$(printf '%s\n' "$_df" | awk 'NR > 1 && NF >= 6 { v = $5; sub(/%$/, "", v) } END { print v }')
+  [ "$_inode" != - ] || return 0
+  is_num "$_inode" || return 1
+  kv inodeUsedPercent "$_inode"
 }
 
 obs_memory() {
@@ -200,12 +225,14 @@ obs_systemd_failed() {
   have systemctl || return 1
   _state=$(bounded 5 systemctl is-system-running)
   kv state "${_state:-unknown}"
-  _list=$(bounded 5 systemctl --failed --no-legend --plain --no-pager | awk '{ print $1 }' | head -n "$MAX_LINES")
+  # The status of systemctl itself is kept: a list that could not be read is a failed observation, not "none failed".
+  _raw=$(bounded 5 systemctl --failed --no-legend --plain --no-pager) || return 1
+  _list=$(printf '%s\n' "$_raw" | awk 'NF { print $1 }')
   if [ -z "$_list" ]; then
     kv failedCount 0
   else
     kv failedCount "$(printf '%s\n' "$_list" | wc -l | tr -d ' ')"
-    printf '%s\n' "$_list" | head -n 20 | while IFS= read -r _u; do kv units "$_u"; done
+    kv_list units 20 "$_list"
   fi
 }
 
@@ -213,58 +240,79 @@ obs_service_state() {
   have systemctl || return 1
   _u=${P_unit:-}
   [ -n "$_u" ] || return 1
-  _show=$(bounded 5 systemctl show -p LoadState -p ActiveState -p UnitFileState "$_u")
+  _rc=0
+  _show=$(bounded 5 systemctl show -p LoadState -p ActiveState -p UnitFileState "$_u") || _rc=$?
+  case $_rc in 0 | 1) ;; *) return "$_rc" ;; esac
   _load=$(printf '%s\n' "$_show" | sed -n 's/^LoadState=//p')
+  if [ "$_load" = not-found ]; then
+    kv exists no
+  else
+    [ "$_rc" = 0 ] || return "$_rc"
+    case $_load in
+      loaded | masked | stub | merged | bad-setting | error) kv exists yes ;;
+      *) return 1 ;;
+    esac
+  fi
   _act=$(printf '%s\n' "$_show" | sed -n 's/^ActiveState=//p')
   _enb=$(printf '%s\n' "$_show" | sed -n 's/^UnitFileState=//p')
-  if [ "$_load" = loaded ]; then kv exists yes; else kv exists no; fi
   kv active "${_act:-unknown}"
   kv enabled "${_enb:-unknown}"
 }
 
-# The listening sockets of a protocol (tcp or udp), as ss prints them: State Recv-Q Send-Q Local Peer [Process].
+# The listening sockets of a protocol (tcp or udp), as ss prints them: State Recv-Q Send-Q Local Peer [Process]. Fails
+# when ss fails (an old ss without -H is asked again without it), so that a caller never takes "could not list" for
+# "nothing listens".
 listening() {
   if [ "$1" = udp ]; then _flag=-lunp; else _flag=-ltnp; fi
-  bounded 10 ss -H "$_flag" 2>/dev/null || bounded 10 ss "$_flag" | tail -n +2
+  if _ss=$(bounded 10 ss -H "$_flag"); then
+    [ -z "$_ss" ] || printf '%s\n' "$_ss"
+    return 0
+  fi
+  _ss=$(bounded 10 ss "$_flag") || return 1
+  printf '%s\n' "$_ss" | tail -n +2
 }
 # The address of a local-address column without its port: [::]:22 -> ::, 0.0.0.0:22 -> 0.0.0.0, *:22 -> *
 addr_of() { printf '%s' "${1%:*}" | sed -e 's/^\[//' -e 's/\]$//'; }
 is_loopback() { case $1 in 127.* | ::1) return 0 ;; *) return 1 ;; esac; }
 
 obs_port_listener() {
+  need_root || return 11
   have ss || return 1
   _port=${P_port:-}
   [ -n "$_port" ] || return 1
   _proto=${P_proto:-tcp}
-  _rows=$(listening "$_proto" | awk -v want="$_port" '{ n = split($4, a, ":"); if (a[n] == want) print }')
+  _sockets=$(listening "$_proto") || return 1
+  _rows=$(printf '%s\n' "$_sockets" | awk -v want="$_port" 'NF { n = split($4, a, ":"); if (a[n] == want) print }')
   if [ -z "$_rows" ]; then
     kv listening no
     kv publicly no
     return 0
   fi
   kv listening yes
-  _addrs=$(printf '%s\n' "$_rows" | awk '{ a = $4; sub(/:[0-9]+$/, "", a); gsub(/^\[|\]$/, "", a); print a }' | sort -u | head -n 20)
-  printf '%s\n' "$_addrs" | while IFS= read -r _a; do kv addresses "$_a"; done
+  _addrs=$(printf '%s\n' "$_rows" | awk '{ a = $4; sub(/:[0-9]+$/, "", a); gsub(/^\[|\]$/, "", a); print a }' | sort -u)
+  kv_list addresses 20 "$_addrs"
   _pub=0
   for _a in $_addrs; do
     is_loopback "$_a" || _pub=1
   done
   kv publicly "$(yn "$_pub")"
-  printf '%s\n' "$_rows" | grep -o '("[^"]*"' | sed -e 's/^("//' -e 's/"$//' | sort -u | head -n 10 | while IFS= read -r _p; do kv processes "$_p"; done
+  kv_list processes 10 "$(printf '%s\n' "$_rows" | grep -o '("[^"]*"' | sed -e 's/^("//' -e 's/"$//' | sort -u)"
 }
 
 obs_ports_public() {
   have ss || return 1
+  _tcp=$(listening tcp) || return 1
+  _udp=$(listening udp) || return 1
   _all=$({
-    listening tcp | awk '{ print "tcp " $4 }'
-    listening udp | awk '{ print "udp " $4 }'
+    printf '%s\n' "$_tcp" | awk 'NF { print "tcp " $4 }'
+    printf '%s\n' "$_udp" | awk 'NF { print "udp " $4 }'
   } | while read -r _proto _local; do
     _a=$(addr_of "$_local")
     is_loopback "$_a" && continue
     printf '%s/%s\n' "$_proto" "${_local##*:}"
-  done | sort -u | head -n "$MAX_LINES")
-  [ -z "$_all" ] || printf '%s\n' "$_all" | while IFS= read -r _p; do kv ports "$_p"; done
-  if [ -z "$_all" ]; then kv count 0; else kv count "$(printf '%s\n' "$_all" | wc -l | tr -d ' ')"; fi
+  done | sort -u)
+  kv count "$(list_count "$_all")"
+  kv_list ports "$MAX_LINES" "$_all"
 }
 
 obs_ufw_status() {
@@ -278,36 +326,42 @@ obs_ufw_status() {
   _out=$(bounded 10 ufw status verbose) || return 1
   if printf '%s\n' "$_out" | grep -q '^Status: active'; then kv active yes; else kv active no; fi
   kv defaultIncoming "$(printf '%s\n' "$_out" | sed -n 's/^Default: *\([a-z]*\) (incoming).*/\1/p' | head -n 1)"
-  _rules=$(printf '%s\n' "$_out" | awk '/^--/ { on = 1; next } on && NF { gsub(/[ \t]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }' | head -n "$MAX_LINES")
+  _rules=$(printf '%s\n' "$_out" | awk '/^--/ { on = 1; next } on && NF { gsub(/[ \t]+/, " "); sub(/^ /, ""); sub(/ $/, ""); print }')
   if [ -z "$_rules" ]; then
     kv ruleCount 0
   else
     kv ruleCount "$(printf '%s\n' "$_rules" | wc -l | tr -d ' ')"
-    printf '%s\n' "$_rules" | while IFS= read -r _r; do kv rules "$_r"; done
+    kv_list rules "$MAX_LINES" "$_rules"
   fi
 }
 
 obs_iptables_chain() {
   need_root || return 11
   _chain=${P_chain:-DOCKER-USER}
-  if ! have iptables; then
-    kv exists no
-    return 0
-  fi
-  _out=$(bounded 10 iptables -w 5 -S "$_chain")
-  if [ -z "$_out" ]; then
+  have iptables || return 1
+  if _out=$(bounded 10 iptables -w 5 -S "$_chain"); then
+    [ -n "$_out" ] || return 1
+  else
+    _rc=$?
+    [ "$_rc" = 1 ] || return "$_rc"
+    # Code 1 can mean other errors too. Confirm absence against a successful list.
+    _chains=$(bounded 10 iptables -w 5 -S) || return $?
+    [ -n "$_chains" ] || return 1
+    if printf '%s\n' "$_chains" | awk -v chain="$_chain" '
+      ($1 == "-N" || $1 == "-P") && $2 == chain { found = 1 }
+      END { exit !found }'; then
+      return 1
+    fi
     kv exists no
     return 0
   fi
   kv exists yes
-  _rules=$(printf '%s\n' "$_out" | grep '^-A ' | head -n 100)
+  _rules=$(printf '%s\n' "$_out" | grep '^-A ')
   if [ -z "$_rules" ]; then
     kv ruleCount 0
-    kv text ""
   else
     kv ruleCount "$(printf '%s\n' "$_rules" | wc -l | tr -d ' ')"
-    printf '%s\n' "$_rules" | while IFS= read -r _r; do kv rules "$_r"; done
-    kv text "$(printf '%s\n' "$_rules" | tr '\n' ';' | cut -b1-2000)"
+    kv_list rules 100 "$_rules"
   fi
 }
 
@@ -319,18 +373,18 @@ obs_fail2ban_status() {
     return 0
   fi
   kv installed yes
-  _out=$(bounded 10 fail2ban-client status)
-  if [ -z "$_out" ]; then
-    kv active no
-    return 0
-  fi
+  _out=$(bounded 10 fail2ban-client status) || return $?
+  _jail_line=$(printf '%s\n' "$_out" | grep 'Jail list:') || return 1
   kv active yes
-  _jails=$(printf '%s\n' "$_out" | sed -n 's/.*Jail list:[ \t]*//p' | tr ',' '\n' | tr -d ' \t' | grep -E '^[A-Za-z0-9_.-]+$' | head -n 20)
+  _jails=$(printf '%s\n' "$_jail_line" | sed -n 's/.*Jail list:[ \t]*//p' | tr ',' '\n' | tr -d ' \t' | grep -E '^[A-Za-z0-9_.-]+$')
+  kv_list jails 20 "$_jails"
+  [ "$(list_count "$_jails")" -le 20 ] || return 0
   _banned=0
   for _j in $_jails; do
-    kv jails "$_j"
-    _n=$(bounded 10 fail2ban-client status "$_j" | sed -n 's/.*Currently banned:[ \t]*//p' | head -n 1)
-    _banned=$((_banned + $(num "$_n")))
+    _jail=$(bounded 10 fail2ban-client status "$_j") || return $?
+    _n=$(printf '%s\n' "$_jail" | sed -n 's/.*Currently banned:[ \t]*//p' | head -n 1)
+    is_num "$_n" || return 1
+    _banned=$((_banned + _n))
   done
   kv bannedCount "$_banned"
 }
@@ -382,7 +436,8 @@ obs_ssh_keys() {
       fi
       _count=$((_count + 1))
       _total=$((_total + 1))
-      [ "$_total" -gt 200 ] || kv keys "$_name $_fp"
+      if [ "$_total" -gt 200 ]; then printf 'truncated=yes\n'; return 0; fi
+      kv keys "$_name $_fp"
     done <"$_file"
     [ "$_count" -eq 0 ] || kv accounts "$_name"
   done
@@ -393,28 +448,32 @@ obs_ssh_keys() {
 obs_sudoers() {
   need_root || return 11
   if [ -f "$R/etc/sudoers" ]; then kv present yes; else kv present no; fi
-  _drop=$(ls "$R/etc/sudoers.d" 2>/dev/null | grep -E '^[A-Za-z0-9._-]+$' | grep -v '^README$' | head -n 50)
-  [ -z "$_drop" ] || printf '%s\n' "$_drop" | while IFS= read -r _f; do kv dropIns "$_f"; done
-  {
+  _drop=$(ls "$R/etc/sudoers.d" 2>/dev/null | grep -E '^[A-Za-z0-9._-]+$' | grep -v '^README$')
+  kv_list dropIns 50 "$_drop"
+  [ "$(list_count "$_drop")" -le 50 ] || return 0
+  _subjects=$({
     cat "$R/etc/sudoers" 2>/dev/null
     for _f in $_drop; do
       # sudo itself skips names with a dot or a tilde.
       case $_f in *.* | *~) continue ;; esac
       cat "$R/etc/sudoers.d/$_f" 2>/dev/null
     done
-  } | awk '!/^[ \t]*#/ && /NOPASSWD/ && $1 !~ /^Defaults/ { print $1 }' | sort -u | head -n 50 | while IFS= read -r _s; do kv nopasswd "$_s"; done
+  } | awk '!/^[ \t]*#/ && /NOPASSWD/ && $1 !~ /^Defaults/ { print $1 }' | sort -u)
+  kv_list nopasswd 50 "$_subjects"
 }
 
 obs_users_login() {
-  _rows=$(getent passwd | awk -F: '$7 != "" && $7 !~ /(nologin|false|sync|shutdown|halt)$/ { print $1 ":" $3 }' | head -n 100)
-  [ -z "$_rows" ] || printf '%s\n' "$_rows" | while IFS= read -r _r; do kv accounts "$_r"; done
-  if [ -z "$_rows" ]; then kv count 0; else kv count "$(printf '%s\n' "$_rows" | wc -l | tr -d ' ')"; fi
-  getent passwd | awk -F: '$3 == 0 { print $1 }' | head -n 10 | while IFS= read -r _r; do kv uidZero "$_r"; done
+  _passwd=$(getent passwd) || return $?
+  _rows=$(printf '%s\n' "$_passwd" | awk -F: '$7 != "" && $7 !~ /(nologin|false|sync|shutdown|halt)$/ { print $1 ":" $3 }')
+  kv_list accounts 100 "$_rows"
+  kv count "$(list_count "$_rows")"
+  kv_list uidZero 10 "$(printf '%s\n' "$_passwd" | awk -F: '$3 == 0 { print $1 }')"
   if need_root && [ -r "$R/etc/shadow" ]; then
     # An empty value says "looked, found none"; then only the names of accounts whose password field is empty. The
     # hashes are never printed.
     kv emptyPassword ""
-    awk -F: '$2 == "" { print $1 }' "$R/etc/shadow" | head -n 20 | while IFS= read -r _r; do kv emptyPassword "$_r"; done
+    _empty=$(awk -F: '$2 == "" { print $1 }' "$R/etc/shadow") || return $?
+    kv_list emptyPassword 20 "$_empty"
   fi
 }
 
@@ -446,8 +505,10 @@ obs_docker_engine() {
   kv running yes
   kv version "$_ver"
   kv composeVersion "$(bounded 10 docker compose version --short)"
-  kv containers "$(num "$(bounded 10 docker ps -aq | wc -l | tr -d ' ')")"
-  kv runningContainers "$(num "$(bounded 10 docker ps -q | wc -l | tr -d ' ')")"
+  _containers=$(bounded 10 docker ps -aq) || return $?
+  _running=$(bounded 10 docker ps -q) || return $?
+  kv containers "$(list_count "$_containers")"
+  kv runningContainers "$(list_count "$_running")"
 }
 
 obs_docker_container() {
@@ -486,13 +547,30 @@ obs_docker_container() {
   else
     kv uptimeSeconds 0
   fi
-  # The names of the variables are printed. A value never leaves the pipe, except the four that are named here.
-  bounded 10 docker container inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$_name" |
-    awk -F= '
-      NF { print "n " $1 }
-      $1 == "SNI_VERIFICATION" || $1 == "NODE_PORT" || $1 == "NODE_ENV" || $1 == "TZ" { print "f " $0 }' |
-    head -n 300 | while IFS= read -r _l; do
+  # The names of the variables are printed. A value is never printed, except the four that are named here, and only
+  # when they are plain words. Docker writes every entry as one JSON string, so a value with a line break in it (a PEM
+  # key, a YAML document) stays inside its own line and can never pass for a name: a line that is not a quoted entry is
+  # dropped, and a name must be a variable name. The status of the inspection is kept: a list that could not be read
+  # (a timeout, a container removed meanwhile) fails the observation instead of reading as "no variables".
+  _env=$(bounded 10 docker container inspect --format '{{range .Config.Env}}{{println (json .)}}{{end}}' "$_name") || return 1
+  [ -n "$_env" ] || return 0
+  printf '%s\n' "$_env" |
+    awk '
+      !/^".*"$/ { next }
+      {
+        e = substr($0, 2, length($0) - 2)
+        i = index(e, "=")
+        name = (i > 0) ? substr(e, 1, i - 1) : e
+        if (name !~ /^[A-Za-z_][A-Za-z0-9_.-]*$/) next
+        print "n " name
+        if (i > 0 && (name == "SNI_VERIFICATION" || name == "NODE_PORT" || name == "NODE_ENV" || name == "TZ")) {
+          v = substr(e, i + 1)
+          if (v ~ /^[A-Za-z0-9._:\/+-]*$/) print "f " name "=" v
+        }
+      }' |
+    awk 'NR <= 300 { print } NR == 301 { print "truncated"; exit }' | while IFS= read -r _l; do
       case $_l in
+        truncated) printf 'truncated=yes\n' ;;
         "n "*) kv envNames "${_l#n }" ;;
         "f "*) kv envFlags "${_l#f }" ;;
       esac
@@ -511,7 +589,7 @@ obs_nginx_config() {
   kv version "$(bounded 5 nginx -v 2>&1 | sed -n 's/.*nginx\/\([^ ]*\).*/\1/p' | head -n 1)"
   if have systemctl && [ "$(bounded 5 systemctl is-active nginx)" = active ]; then kv active yes; else kv active no; fi
   if bounded 15 nginx -t >/dev/null 2>&1; then kv valid yes; else kv valid no; fi
-  ls "$R/etc/nginx/sites-enabled" 2>/dev/null | head -n 50 | while IFS= read -r _s; do kv enabledSites "$_s"; done
+  kv_list enabledSites 50 "$(ls "$R/etc/nginx/sites-enabled" 2>/dev/null)"
 }
 
 obs_haproxy_config() {
@@ -527,8 +605,8 @@ obs_haproxy_config() {
   if have systemctl && [ "$(bounded 5 systemctl is-active haproxy)" = active ]; then kv active yes; else kv active no; fi
   _cfg=$R/etc/haproxy/haproxy.cfg
   if bounded 15 haproxy -c -f "$_cfg" >/dev/null 2>&1; then kv valid yes; else kv valid no; fi
-  awk '$1 == "frontend" { print $2 }' "$_cfg" 2>/dev/null | head -n 50 | while IFS= read -r _f; do kv frontends "$_f"; done
-  awk '$1 == "default_backend" { print $2 }' "$_cfg" 2>/dev/null | head -n 50 | while IFS= read -r _b; do kv defaultBackends "$_b"; done
+  kv_list frontends 50 "$(awk '$1 == "frontend" { print $2 }' "$_cfg" 2>/dev/null)"
+  kv_list defaultBackends 50 "$(awk '$1 == "default_backend" { print $2 }' "$_cfg" 2>/dev/null)"
 }
 
 obs_cert_file() {
@@ -690,19 +768,22 @@ obs_http_local() {
   fi
   if [ -n "${P_sni:-}" ]; then
     _code=$(bounded 10 curl -s -k -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 6 --noproxy '*' \
-      --resolve "$P_sni:$_port:$_addr" "$_scheme://$P_sni:$_port/")
+      --resolve "$P_sni:$_port:$_addr" "$_scheme://$P_sni:$_port/") || return 1
   else
     _code=$(bounded 10 curl -s -k -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 6 --noproxy '*' \
-      "$_scheme://$_addr:$_port/")
+      "$_scheme://$_addr:$_port/") || return 1
   fi
-  kv status "$(num "$_code")"
+  case $_code in
+    [1-5][0-9][0-9]) kv status "$_code" ;;
+    *) return 1 ;;
+  esac
 }
 
 obs_dns_self() {
   _name=$(hostname -f 2>/dev/null)
   [ -n "$_name" ] || _name=$(hostname)
   kv name "$_name"
-  _addrs=$(bounded 8 getent ahostsv4 "$_name" | awk '{ print $1 }' | sort -u | head -n 10)
+  _addrs=$(bounded 8 getent ahostsv4 "$_name" | awk '{ print $1 }' | sort -u)
   if [ -z "$_addrs" ]; then
     kv resolves no
     kv local no
@@ -712,8 +793,8 @@ obs_dns_self() {
   _local=0
   _mine=$(ip -4 -o addr show 2>/dev/null | awk '{ split($4, a, "/"); print a[1] }')
   [ -n "$_mine" ] || _mine=$(hostname -I 2>/dev/null | tr ' ' '\n')
+  kv_list addresses 10 "$_addrs"
   for _a in $_addrs; do
-    kv addresses "$_a"
     case $_a in 127.*) _local=1 ;; esac
     if printf '%s\n' "$_mine" | grep -qx -e "$_a"; then _local=1; fi
   done
@@ -754,7 +835,8 @@ printf '%s\n' "$PLAN" | while IFS= read -r _line; do
     printf '\n@@swb end %s 99\n' "$_idx"
     continue
   fi
-  _rc=$({ { "$_fn" </dev/null; echo "$?" >&4; } 2>/dev/null | tr -d '\000' | head -c 65536 | sed 's/^/| /' >&3; } 4>&1)
+  _rc=$({ { "$_fn" </dev/null; echo "$?" >&4; } 2>/dev/null | tr -d '\000' | head -c 65537 |
+    awk '{ n += length($0) + 1; if (n <= 65536) print "| " $0; else if (!marked++) print "| truncated=yes" }' >&3; } 4>&1)
   printf '\n@@swb end %s %s\n' "$_idx" "${_rc:-1}"
 done
 printf '@@swb done\n'

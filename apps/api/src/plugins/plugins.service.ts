@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   ConflictException,
+  ForbiddenException,
   Inject,
   Injectable,
   Logger,
@@ -32,12 +33,14 @@ import { type AppConfig } from '../config.js';
 import { secretTypeOf } from './broker.js';
 import { CONFIG, DATABASE } from '../tokens.js';
 import { type Actor } from '../users/users.service.js';
-import { type DiscoveredPlugin, discoverPlugins } from './discovery.js';
+import { type DiscoveredPlugin, discoverPlugin, discoverPlugins } from './discovery.js';
 import type { RuntimeSnapshot } from './host/process.js';
 import { PluginRuntime } from './runtime.js';
 
 /** An arbitrary constant: one transaction at a time may enable, disable or switch off a plugin. */
 const PLUGINS_LOCK_KEY = 7_761_238;
+const UNVERIFIABLE_LIMIT = 3;
+const UNVERIFIABLE_STRIKE_MS = 1000;
 
 /** Why a plugin that was enabled was switched off without anyone asking. */
 export type SwitchOffReason = 'missing' | 'unavailable' | 'changed';
@@ -61,16 +64,25 @@ function parseApproved(text: string): PluginPermissionsView {
 function indexById(found: readonly DiscoveredPlugin[]): Map<string, DiscoveredPlugin> {
   const index = new Map<string, DiscoveredPlugin>();
   for (const plugin of found) {
-    const id = plugin.manifest?.id;
+    const id = plugin.manifest?.id ?? (plugin.transient === true ? plugin.folder : undefined);
     if (id === undefined) {
       continue;
     }
     const known = index.get(id);
-    if (known === undefined || (known.state === 'invalid' && plugin.state !== 'invalid')) {
+    if (
+      known === undefined ||
+      (known.state === 'invalid' &&
+        (plugin.state !== 'invalid' || (known.transient !== true && plugin.transient === true)))
+    ) {
       index.set(id, plugin);
     }
   }
   return index;
+}
+
+/** One approval as opposed to any other: the same files approved again, with other permissions, is another one. */
+function revisionOf(record: PluginApproval): string {
+  return `${record.approvedAt.toISOString()}\0${record.digest}\0${record.permissions}`;
 }
 
 function whyNotRunning(
@@ -83,7 +95,7 @@ function whyNotRunning(
   if (plugin.state !== 'available') {
     return 'unavailable';
   }
-  return plugin.digest === record.digest ? undefined : 'changed';
+  return plugin.digest === record.digest && plugin.trust === record.trust ? undefined : 'changed';
 }
 
 function statusOf(
@@ -99,7 +111,7 @@ function statusOf(
   if (record === undefined) {
     return 'not_enabled';
   }
-  if (record.digest !== plugin.digest) {
+  if (record.digest !== plugin.digest || record.trust !== plugin.trust) {
     return 'changed';
   }
   return record.enabled ? 'enabled' : 'disabled';
@@ -202,6 +214,10 @@ export function viewOf(
 @Injectable()
 export class PluginsService implements OnApplicationBootstrap {
   private readonly logger = new Logger('Plugins');
+  private readonly unverifiable = new Map<
+    string,
+    { approvedAt: number; strikes: number; lastStrike: number }
+  >();
 
   constructor(
     @Inject(DATABASE) private readonly database: Database | undefined,
@@ -242,37 +258,88 @@ export class PluginsService implements OnApplicationBootstrap {
     const byId = indexById(found);
     const enabled = await this.db.pluginApproval.findMany({ where: { enabled: true } });
     for (const record of enabled) {
-      const reason = whyNotRunning(record, byId.get(record.pluginId));
+      const current = byId.get(record.pluginId);
+      const unavailable =
+        current?.trust !== record.trust
+          ? found.find(
+              (plugin) =>
+                plugin.folder === record.pluginId &&
+                plugin.trust === record.trust &&
+                plugin.transient === true,
+            )
+          : undefined;
+      const plugin = unavailable ?? current;
+      if (plugin?.transient === true && plugin.trust === record.trust) {
+        await this.noteUnverifiable(record, plugin);
+        continue;
+      }
+      this.unverifiable.delete(record.pluginId);
+      const reason = whyNotRunning(record, plugin);
       if (reason !== undefined) {
-        await this.switchOff(record.pluginId, reason);
+        await this.switchOff(record, reason);
       }
     }
   }
 
-  private async switchOff(pluginId: string, reason: SwitchOffReason): Promise<void> {
-    await this.db.$transaction(async (tx) => {
+  private async noteUnverifiable(record: PluginApproval, plugin: DiscoveredPlugin): Promise<void> {
+    const id = record.pluginId;
+    const approvedAt = record.approvedAt.getTime();
+    const observed = this.unverifiable.get(id);
+    const previous = observed?.approvedAt === approvedAt ? observed : undefined;
+    const strikes = previous?.strikes ?? 0;
+    if (strikes >= UNVERIFIABLE_LIMIT) {
+      return;
+    }
+    const now = Date.now();
+    if (
+      plugin.hardLink !== true &&
+      previous !== undefined &&
+      now - previous.lastStrike < UNVERIFIABLE_STRIKE_MS
+    ) {
+      return;
+    }
+    const next = plugin.hardLink === true ? UNVERIFIABLE_LIMIT : strikes + 1;
+    this.unverifiable.set(id, { approvedAt, strikes: next, lastStrike: now });
+    if (next >= UNVERIFIABLE_LIMIT) {
+      this.runtime.requestStop(id);
+      await this.audit.note({
+        action: 'plugin.unverifiable',
+        outcome: 'failure',
+        actor: null,
+        object: { type: 'plugin', id },
+        details: { reason: plugin.hardLink === true ? 'hard_link' : 'file_verification_failed' },
+        meta: { ip: undefined, requestId: undefined },
+      });
+    }
+  }
+
+  private async switchOff(record: PluginApproval, reason: SwitchOffReason): Promise<void> {
+    const { pluginId, approvedAt } = record;
+    const stopped = await this.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PLUGINS_LOCK_KEY})`;
       const changed = await tx.pluginApproval.updateMany({
-        where: { pluginId, enabled: true },
+        where: { pluginId, enabled: true, approvedAt },
         data: { enabled: false },
       });
       if (changed.count === 0) {
-        return;
+        return false;
       }
-      const record = await tx.pluginApproval.findUnique({ where: { pluginId } });
       await this.audit.record(
         {
           action: 'plugin.disabled',
           outcome: 'success',
           actor: null,
           object: { type: 'plugin', id: pluginId },
-          details: { reason, version: record?.version ?? null },
+          details: { reason, version: record.version },
           meta: { ip: undefined, requestId: undefined },
         },
         tx,
       );
+      return true;
     });
-    this.runtime.requestStop(pluginId);
+    if (stopped) {
+      this.runtime.requestStop(pluginId);
+    }
   }
 
   /**
@@ -286,30 +353,78 @@ export class PluginsService implements OnApplicationBootstrap {
         /** What was approved, from the stored approval. */
         readonly network: readonly string[];
         readonly secretKinds: readonly string[];
+        /** Which approval this is: a process started under another one is not used for this one. */
+        readonly revision: string;
+        readonly approvedAt: Date;
       }
     | { readonly kind: 'unknown' }
     | { readonly kind: 'not_enabled'; readonly why: string }
   > {
-    const plugin = indexById(await this.discover()).get(id);
+    const unavailable: DiscoveredPlugin[] = [];
+    const discovered = await discoverPlugin(
+      this.config.pluginRoots,
+      this.config.version,
+      id,
+      (candidate) => {
+        unavailable.push(candidate);
+      },
+    );
     const record = await this.db.pluginApproval.findUnique({ where: { pluginId: id } });
+    // File checks can be slow. Only then read the current approval and resolve its trust tier.
+    const plugin =
+      discovered?.trust === record?.trust
+        ? discovered
+        : (unavailable.find((candidate) => candidate.trust === record?.trust) ?? discovered);
     if (record === null) {
+      this.unverifiable.delete(id);
       return plugin === undefined
         ? { kind: 'unknown' }
         : { kind: 'not_enabled', why: 'it was never enabled' };
     }
     if (!record.enabled) {
+      this.unverifiable.delete(id);
       return { kind: 'not_enabled', why: 'it is disabled' };
     }
+    if (plugin?.transient === true && plugin.trust === record.trust) {
+      await this.noteUnverifiable(record, plugin);
+      return {
+        kind: 'not_enabled',
+        why:
+          plugin.hardLink === true
+            ? 'a plugin file must have exactly one hard link; install an independent copy'
+            : 'its files could not be verified; try again',
+      };
+    }
+    this.unverifiable.delete(id);
     const reason = whyNotRunning(record, plugin);
     if (reason !== undefined || plugin === undefined) {
-      await this.switchOff(id, reason ?? 'missing');
+      await this.switchOff(record, reason ?? 'missing');
       return {
         kind: 'not_enabled',
         why: `its files are not what was approved (${reason ?? 'missing'}); it was switched off`,
       };
     }
     const approved = parseApproved(record.permissions);
-    return { kind: 'ok', plugin, network: approved.network, secretKinds: approved.secrets };
+    return {
+      kind: 'ok',
+      plugin,
+      network: approved.network,
+      secretKinds: approved.secrets,
+      revision: revisionOf(record),
+      approvedAt: record.approvedAt,
+    };
+  }
+
+  /**
+   * The digest a plugin was approved with, when it is enabled: what the token of its sidecar is made from. One read
+   * of the approval and nothing of the files, so that a request at the gateway with a wrong token costs no discovery.
+   */
+  async enabledApproval(id: string): Promise<{ digest: string; approvedAt: Date } | undefined> {
+    const record = await this.db.pluginApproval.findUnique({
+      where: { pluginId: id },
+      select: { enabled: true, digest: true, approvedAt: true },
+    });
+    return record?.enabled === true ? record : undefined;
   }
 
   async list(): Promise<PluginList> {
@@ -322,8 +437,10 @@ export class PluginsService implements OnApplicationBootstrap {
     const plugins = found.map((plugin) =>
       viewOf(
         plugin,
-        plugin.manifest ? records.get(plugin.manifest.id) : undefined,
-        this.runtime.snapshotOf(plugin.manifest?.id ?? ''),
+        records.get(plugin.manifest?.id ?? (plugin.transient === true ? plugin.folder : '')),
+        this.runtime.snapshotOf(
+          plugin.manifest?.id ?? (plugin.transient === true ? plugin.folder : ''),
+        ),
       ),
     );
     const shown = new Set(found.flatMap((p) => (p.manifest ? [p.manifest.id] : [])));
@@ -358,7 +475,13 @@ export class PluginsService implements OnApplicationBootstrap {
    * Approves a plugin as it is now. The digest is what the administrator was shown; if the files differ the
    * approval is refused, so nobody approves code they have not seen.
    */
-  async enable(actor: Actor, id: string, digest: string, meta: RequestMeta): Promise<PluginView> {
+  async enable(
+    actor: Actor,
+    id: string,
+    digest: string,
+    meta: RequestMeta,
+    canReveal: boolean,
+  ): Promise<PluginView> {
     await this.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(${PLUGINS_LOCK_KEY})`;
       const plugin = indexById(await this.discover()).get(id);
@@ -375,14 +498,42 @@ export class PluginsService implements OnApplicationBootstrap {
           'The plugin changed since you looked at it. Review it again before enabling.',
         );
       }
+      if (!canReveal && plugin.configSchema !== undefined) {
+        const fields = secretFields(plugin.configSchema);
+        if (fields.length > 0) {
+          const row = await tx.pluginConfig.findUnique({ where: { pluginId: id } });
+          let saved: unknown;
+          try {
+            saved = row === null ? undefined : JSON.parse(row.settings);
+          } catch {
+            saved = undefined;
+          }
+          if (
+            typeof saved === 'object' &&
+            saved !== null &&
+            fields.some(({ field }) => {
+              const value = (saved as Record<string, unknown>)[field];
+              return Object.hasOwn(saved, field) && typeof value === 'string' && value !== '';
+            })
+          ) {
+            throw new ForbiddenException(
+              'Approving a plugin with a saved secret binding requires vault:reveal.',
+            );
+          }
+        }
+      }
       const permissions = canonicalPermissions(plugin.manifest.permissions);
+      const previous = await tx.pluginApproval.findUnique({
+        where: { pluginId: id },
+        select: { approvedAt: true },
+      });
       const data = {
         enabled: true,
         version: plugin.manifest.version,
         trust: plugin.trust,
         digest: plugin.digest,
         permissions: JSON.stringify(permissions),
-        approvedAt: new Date(),
+        approvedAt: new Date(Math.max(Date.now(), (previous?.approvedAt.getTime() ?? 0) + 1)),
         approvedBy: actor?.name ?? 'unknown',
       };
       await tx.pluginApproval.upsert({
@@ -410,6 +561,9 @@ export class PluginsService implements OnApplicationBootstrap {
         tx,
       );
     });
+    // A process that runs under an earlier approval of this plugin ends: it holds the permissions of that one.
+    this.unverifiable.delete(id);
+    this.runtime.requestStop(id);
     return this.viewById(id);
   }
 
@@ -478,23 +632,11 @@ export class PluginsService implements OnApplicationBootstrap {
     id: string,
     input: Readonly<Record<string, unknown>>,
     meta: RequestMeta,
+    canBindSecret: boolean,
   ): Promise<PluginConfigView> {
     const schema = await this.withSchema(id);
     const { values, problems } = validateConfig(schema, input);
-    for (const { field, kind } of secretFields(schema)) {
-      const bound = values[field];
-      if (typeof bound !== 'string') {
-        continue;
-      }
-      const type = secretTypeOf(kind);
-      const secret = await this.db.secret.findUnique({
-        where: { id: bound },
-        select: { type: true },
-      });
-      if (secret === null || secret.type !== type) {
-        problems.push({ field, message: `must be a secret of the kind "${kind}" that exists` });
-      }
-    }
+    const bindings = secretFields(schema);
     if (problems.length > 0) {
       throw new BadRequestException(
         problems
@@ -514,6 +656,33 @@ export class PluginsService implements OnApplicationBootstrap {
         old = before === null ? {} : (JSON.parse(before.settings) as Record<string, unknown>);
       } catch {
         old = {};
+      }
+      const assigned = bindings.flatMap(({ field }) => {
+        const value = values[field];
+        return typeof value === 'string' && value !== old[field] ? [{ field, id: value }] : [];
+      });
+      if (assigned.length > 0 && !canBindSecret) {
+        throw new ForbiddenException('Binding a plugin secret requires vault:reveal.');
+      }
+      for (const { field, kind } of bindings) {
+        const bound = values[field];
+        if (typeof bound === 'string') {
+          const secret = await tx.secret.findUnique({
+            where: { id: bound },
+            select: { type: true },
+          });
+          if (secret === null || secret.type !== secretTypeOf(kind)) {
+            problems.push({ field, message: `must be a secret of the kind "${kind}" that exists` });
+          }
+        }
+      }
+      if (problems.length > 0) {
+        throw new BadRequestException(
+          problems
+            .map(({ field, message }) => `${field} ${message}`)
+            .join('; ')
+            .slice(0, 500),
+        );
       }
       const names = new Set([...Object.keys(old), ...Object.keys(values)]);
       const changed = [...names].filter(
@@ -536,6 +705,19 @@ export class PluginsService implements OnApplicationBootstrap {
         },
         tx,
       );
+      for (const { field, id: secretId } of assigned) {
+        await this.audit.record(
+          {
+            action: 'plugin.secret.bound',
+            outcome: 'success',
+            actor,
+            object: { type: 'plugin', id },
+            details: { field, secret: secretId },
+            meta,
+          },
+          tx,
+        );
+      }
     });
     return this.configView(id, schema);
   }
@@ -567,6 +749,7 @@ export class PluginsService implements OnApplicationBootstrap {
         tx,
       );
     });
+    this.unverifiable.delete(id);
     this.runtime.requestStop(id);
     return this.viewById(id);
   }

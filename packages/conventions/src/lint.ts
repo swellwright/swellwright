@@ -65,6 +65,13 @@ export function lint(model: PanelModel, pack: ResolvedPack, options: LintOptions
   const limit = options.limit ?? CONVENTION_PACK_LIMITS.findings;
   const index = new ModelIndex(model);
   const patterns = new Map<string, CompiledPattern>();
+  let remainingPatternWork = 10_000_000;
+  const chargeWork = (units: number): void => {
+    remainingPatternWork -= units;
+    if (remainingPatternWork < 0) {
+      throw new Error('Convention pattern work limit exceeded.');
+    }
+  };
   const findings: ConventionFinding[] = [];
   const byRule: Record<string, number> = {};
   const counts: Record<CheckSeverity, number> = { error: 0, warning: 0, info: 0 };
@@ -90,13 +97,14 @@ export function lint(model: PanelModel, pack: ResolvedPack, options: LintOptions
       pattern: (source) => {
         let compiled = patterns.get(source);
         if (compiled === undefined) {
-          compiled = compilePattern(source);
+          const pattern = compilePattern(source);
+          compiled = { source, matches: (value) => pattern.matches(value, chargeWork) };
           patterns.set(source, compiled);
         }
         return compiled;
       },
       emit: (input) => {
-        if (scope !== null && !scope.allows(input.subject)) {
+        if (scope !== null && !scope.allows(input.subject, chargeWork)) {
           return;
         }
         const severity = resolved.severity ?? input.severity ?? rule.defaultSeverity;

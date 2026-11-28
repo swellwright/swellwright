@@ -6,6 +6,7 @@ import {
   type EnablePluginRequest,
   getPluginConfigRoute,
   getPluginSidecarRoute,
+  hasPermission,
   listPluginsRoute,
   PluginIdParamsSchema,
   type PluginConfigView,
@@ -44,7 +45,13 @@ export class PluginsController {
   @ContractRoute(enablePluginRoute)
   enable(@Body() body: EnablePluginRequest, @Req() req: AuthedRequest): Promise<PluginView> {
     const { id } = PluginIdParamsSchema.parse(req.params);
-    return this.plugins.enable(actorOf(req), id, body.digest, requestMeta(req));
+    return this.plugins.enable(
+      actorOf(req),
+      id,
+      body.digest,
+      requestMeta(req),
+      hasPermission(requireAuth(req).user.role, 'vault:reveal'),
+    );
   }
 
   @ContractRoute(disablePluginRoute)
@@ -71,13 +78,24 @@ export class PluginsController {
     @Req() req: AuthedRequest,
   ): Promise<PluginConfigView> {
     const { id } = PluginIdParamsSchema.parse(req.params);
-    return this.plugins.updateConfig(actorOf(req), id, body.values, requestMeta(req));
+    return this.plugins.updateConfig(
+      actorOf(req),
+      id,
+      body.values,
+      requestMeta(req),
+      hasPermission(requireAuth(req).user.role, 'vault:reveal'),
+    );
   }
 
   @ContractRoute(getPluginSidecarRoute)
   sidecar(@Req() req: AuthedRequest): Promise<PluginSidecarFragment> {
     const { id } = PluginIdParamsSchema.parse(req.params);
-    return this.host.fragment(actorOf(req), id, requestMeta(req));
+    return this.host.fragment(
+      actorOf(req),
+      id,
+      requestMeta(req),
+      hasPermission(requireAuth(req).user.role, 'vault:reveal'),
+    );
   }
 
   /** Open to the network and guarded by the token of the plugin: see `PluginHostService.gateway`. */

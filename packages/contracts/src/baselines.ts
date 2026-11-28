@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { regexBudgetIssue } from './regex-budget.js';
 import { ServerNameSchema, ServerTagSchema } from './servers.js';
 
 /**
@@ -23,8 +24,8 @@ export interface ObservationFieldDef {
   readonly type: ObservationFieldType;
   readonly description: string;
   /**
-   * A list that the server may not be able to observe at all (it needs root): it is null when the script did not
-   * look and an empty list when it looked and found nothing. Every other list is empty when nothing was found.
+   * A field that may be unavailable even when the other fields were observed. Its null value means unknown.
+   * An optional list is empty when it was observed and nothing was found.
    */
   readonly optional?: true;
 }
@@ -78,8 +79,32 @@ const F = (
   optional?: true,
 ): ObservationFieldDef => ({ name, type, description, ...(optional ? { optional } : {}) });
 
-/** An absolute path of plain characters: no space, quote or shell syntax, no `..`. */
-export const OBSERVATION_PATH_PATTERN = '^/(?:[A-Za-z0-9._@+=,:-]+/?)*$';
+/**
+ * An absolute path of plain characters: no space, quote or shell syntax, no `//`, no `..`. Written so that every
+ * repetition ends at a `/` (a pattern that may split a name in more than one way takes exponential time on a long name
+ * with a bad character at its end); `isObservationPath` says the same without a regular expression.
+ */
+export const OBSERVATION_PATH_PATTERN = '^/(?:[A-Za-z0-9._@+=,:-]+/)*[A-Za-z0-9._@+=,:-]*$';
+
+/** One name of a path: plain characters only (a single class, so the check is one pass). */
+const PATH_SEGMENT = /^[A-Za-z0-9._@+=,:-]*$/u;
+
+/**
+ * The language of `OBSERVATION_PATH_PATTERN` in one pass over the text: `/`, then names of plain characters each
+ * separated by one `/`, with an optional `/` at the end (`/`, `/etc`, `/etc/`, `/etc/ssh/sshd_config`).
+ */
+export function isObservationPath(value: string): boolean {
+  if (!value.startsWith('/')) {
+    return false;
+  }
+  const segments = value.slice(1).split('/');
+  return segments.every(
+    (segment, index) =>
+      // Only the last segment may be empty: it is the part after a trailing slash (or after the root itself).
+      (segment.length > 0 || index === segments.length - 1) && PATH_SEGMENT.test(segment),
+  );
+}
+
 const PATH_PARAM = (description: string, def?: string): ObservationParamDef => ({
   name: 'path',
   type: 'string',
@@ -166,7 +191,12 @@ export const OBSERVATION_KINDS: readonly ObservationKindDef[] = [
       F('mountpoint', 'string', 'Where the filesystem is mounted.'),
       F('usedPercent', 'number', 'Space used, in percent.'),
       F('availableMiB', 'number', 'Space available, in MiB.'),
-      F('inodeUsedPercent', 'number', 'Inodes used, in percent (0 when the filesystem has none).'),
+      F(
+        'inodeUsedPercent',
+        'number',
+        'Inodes used, in percent, when reported by the filesystem.',
+        true,
+      ),
     ],
   },
   {
@@ -337,7 +367,8 @@ export const OBSERVATION_KINDS: readonly ObservationKindDef[] = [
       F(
         'text',
         'string',
-        'All the rules in one text, separated by semicolons, cut at 2000 characters.',
+        'The complete rules separated by semicolons, if they fit in 2000 characters.',
+        true,
       ),
     ],
   },
@@ -672,7 +703,7 @@ export const OBSERVATION_KINDS: readonly ObservationKindDef[] = [
           'The host name to ask for (HTTPS SNI and Host header). Without it the request names the address.',
       },
     ],
-    fields: [F('status', 'number', 'The HTTP status code; 0 when nothing answered.')],
+    fields: [F('status', 'number', 'The HTTP status code from a completed HTTP exchange.')],
   },
   {
     kind: 'dns.self',
@@ -746,7 +777,9 @@ export function observationParamIssues(
     } else if (
       typeof value !== 'string' ||
       value.length > param.maxLength ||
-      !new RegExp(param.pattern, 'u').test(value) ||
+      !(param.pattern === OBSERVATION_PATH_PATTERN
+        ? isObservationPath(value)
+        : new RegExp(param.pattern, 'u').test(value)) ||
       value.includes('..')
     ) {
       issues.push(`"${param.name}" is not an acceptable value (${param.description})`);
@@ -817,8 +850,11 @@ export function durationSeconds(text: string): number | undefined {
   return Number(match[1]) * unit;
 }
 
-/** A pattern that can be compiled, that is short, and has no group that repeats and is itself repeated. */
-export function regexIssue(source: string): string | undefined {
+/**
+ * What every `matches` pattern, also one of a stored version, must be: short, a regular expression, without a back
+ * reference. These are the rules a document has always been checked against, so a stored version always meets them.
+ */
+export function regexSyntaxIssue(source: string): string | undefined {
   if (source.length === 0 || source.length > MAX_REGEX_LENGTH) {
     return `The pattern must be 1 to ${String(MAX_REGEX_LENGTH)} characters.`;
   }
@@ -830,10 +866,17 @@ export function regexIssue(source: string): string | undefined {
   if (/\\[1-9]|\\k</u.test(source)) {
     return 'The pattern must not use back references.';
   }
-  if (/\((?:[^()\\]|\\.)*[+*}](?:[^()\\]|\\.)*\)[+*{]/u.test(source)) {
-    return 'The pattern repeats a group that repeats; write it without nested repetition.';
-  }
   return undefined;
+}
+
+/**
+ * A pattern that meets `regexSyntaxIssue` and whose matching is bounded: a `matches` runs on the API's event loop, so a
+ * pattern that can backtrack for long is refused (see `regexBudgetIssue`). This is the rule for a document that is
+ * written now (`baselineWriteIssues`) and for running a pattern; a version stored under older rules stays readable,
+ * and its refused checks are an `error` when they run.
+ */
+export function regexIssue(source: string): string | undefined {
+  return regexSyntaxIssue(source) ?? regexBudgetIssue(source);
 }
 
 const ScalarSchema = z.union([z.string().max(400), z.number(), z.boolean()]);
@@ -966,8 +1009,10 @@ function comparatorProblem(
         : `"${field.name}" holds ${want === 'string' ? 'text' : want === 'number' ? 'numbers' : 'booleans'}; the list must hold only those.`;
     }
     case 'matches':
+      // The schema reads stored versions too: only the rules a document has always had. The bound on matching is
+      // a rule for writing (`baselineWriteIssues`) and for running.
       return type === 'string'
-        ? (regexIssue(argument as string) ?? undefined)
+        ? (regexSyntaxIssue(argument as string) ?? undefined)
         : `"matches" works on text; "${field.name}" is ${type === 'list' ? 'a list' : `a ${type}`} (for a list use contains).`;
     case 'atLeast':
     case 'atMost':
@@ -1051,6 +1096,27 @@ export const BaselineDocumentSchema = z
       'What a healthy server looks like: a list of checks, each an observation of the catalogue and an expectation about one of its fields.',
   });
 export type BaselineDocument = z.infer<typeof BaselineDocumentSchema>;
+
+/**
+ * What the rules for a document written now refuse beyond `BaselineDocumentSchema`: a `matches` pattern whose matching
+ * could backtrack for long. The schema itself reads stored versions as well, so it keeps only the rules a document has
+ * always had; creating, changing and validating a document apply these too.
+ */
+export function baselineWriteIssues(
+  document: BaselineDocument,
+): { readonly path: (string | number)[]; readonly message: string }[] {
+  const issues: { path: (string | number)[]; message: string }[] = [];
+  document.checks.forEach((check, index) => {
+    const { comparator, argument } = comparatorOf(check.expect);
+    if (comparator === 'matches' && typeof argument === 'string') {
+      const problem = regexIssue(argument);
+      if (problem !== undefined) {
+        issues.push({ path: ['checks', index, 'expect', 'matches'], message: problem });
+      }
+    }
+  });
+  return issues;
+}
 
 // ---- Results -------------------------------------------------------------------------------------------------------
 

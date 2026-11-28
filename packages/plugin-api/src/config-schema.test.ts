@@ -81,6 +81,20 @@ describe('checking what an administrator entered', () => {
     });
   });
 
+  it('does not take what every object has for a setting', () => {
+    // Names every object has are not settings of the schema...
+    assert.deepEqual(
+      check({ zone: 'example.org', constructor: 'x', toString: 'y' }).problems.map((p) => p.field),
+      ['constructor', 'toString'],
+    );
+    // ...and a setting with such a name that was not entered is not filled from the prototype.
+    const schema = ConfigSchemaFileSchema.parse({
+      type: 'object',
+      properties: { toString: { type: 'string' } },
+    });
+    assert.deepEqual(validateConfig(schema, {}), { values: {}, problems: [] });
+  });
+
   it('asks for what is required and says what is wrong with each field', () => {
     assert.deepEqual(check({}).problems, [{ field: 'zone', message: 'is required' }]);
     assert.deepEqual(check({ zone: '' }).problems, [{ field: 'zone', message: 'is required' }]);

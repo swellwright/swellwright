@@ -1,5 +1,17 @@
 import { createHash, createHmac } from 'node:crypto';
 
+import { MASK_TOO_LARGE, UNREADABLE_DOCUMENT } from '@swellwright/contracts';
+
+import {
+  type Document,
+  isAlias,
+  isMap,
+  isScalar,
+  parseAllDocuments,
+  stringify as stringifyYaml,
+  visit,
+} from 'yaml';
+
 // Masking of secrets in what a panel returns (ADR 0041, docs/en/design/05-security.md). One function does it for
 // every view that leaves the API: a config profile, an inbound, a host's opaque parameters, a subscription template,
 // a snippet, a node plugin, a URL with credentials in it. It is a deny-list (a key whose name says it is a secret, the
@@ -10,8 +22,7 @@ import { createHash, createHmac } from 'node:crypto';
 
 export const MASK = '[masked]';
 const MAX_DEPTH = 64;
-/** A string that looks like JSON is read as JSON up to this size, so a secret inside a stringified document is found. */
-const MAX_EMBEDDED_JSON = 1_048_576;
+const MAX_ENCODED_YAML_CHARS = 2_097_152;
 
 export interface MaskOptions {
   /**
@@ -33,6 +44,8 @@ export interface MaskOptions {
    * `extraSecretKeys` do the masking there.
    */
   readonly people?: 'xray' | 'off' | undefined;
+  /** Redacts known credentials from a decoded base64 YAML field before it is encoded again. */
+  readonly scrubDecodedYaml?: ((text: string) => { text: string; count: number }) | undefined;
 }
 
 export interface Masked<T> {
@@ -41,7 +54,15 @@ export interface Masked<T> {
   readonly count: number;
 }
 
-const norm = (key: string): string => key.toLowerCase().replace(/[^a-z0-9]/gu, '');
+/**
+ * A name as the rules compare it: compatibility forms folded (`ｐａｓｓｗｏｒｄ` is `password`), lower case, and only
+ * letters and digits (`api_key`, `api-key`, and `password` with a zero-width space inside all become one name).
+ */
+const norm = (key: string): string =>
+  key
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/gu, '');
 
 /** Names that are a secret wherever they appear. */
 const SECRET_KEYS: ReadonlySet<string> = new Set([
@@ -80,6 +101,11 @@ const SECRET_KEYS: ReadonlySet<string> = new Set([
   'xapikey',
   'xauthtoken',
   'xapitoken',
+  'apitoken',
+  'idtoken',
+  'sessiontoken',
+  'cookies',
+  'sessionid',
 ]);
 
 /** A name that contains one of these is a secret too (`obfsPassword`, `adminSecret`, `telegramBotToken`). */
@@ -90,10 +116,25 @@ const SECRET_SUBSTRINGS = [
   'privatekey',
   'passphrase',
   'apikey',
-  'accesstoken',
-  'authtoken',
-  'bottoken',
+  'token',
 ];
+
+/**
+ * A name with `token` in it that names something about a token, not the token: `tokenUrl`, `tokenType`, `tokenName`,
+ * `tokenUuid`, `tokenExpiresAt`. A plural (`apiTokens`, `accessTokens`) is a collection: its plain items are masked and
+ * its objects are read by their own names (see `isSecretCollectionName`).
+ */
+const TOKEN_ABOUT =
+  /(?:url|uri|endpoint|type|name|names|uuid|id|ids|count|at|expiry|expires|expiresin|scope|scopes|tokens)$/u;
+
+/**
+ * A name that ends in `key` is a secret (`apiKey`, `signingKey`, `encryptionKey`, `licenseKey`), except a key that is
+ * public by nature. The bare `key` has its own rule (it is also the name half of a name/value pair).
+ */
+const PUBLIC_KEY_NAMES = /(?:publickey|publickeys|hostkey|pubkey)$/u;
+
+/** A text field that holds a YAML document as base64 (`encodedTemplateYaml` of a subscription template). */
+const ENCODED_YAML = /^encoded[a-z0-9]*yaml$/u;
 
 /** The array keys whose items describe a person or a peer: their ids and logins are secrets, their labels are not. */
 const PEOPLE_KEYS: ReadonlySet<string> = new Set([
@@ -117,50 +158,262 @@ const PEOPLE_FIELDS: ReadonlySet<string> = new Set([
   'key',
 ]);
 
-/** Query parameters of a URL that carry a secret. */
-const SECRET_PARAMS: ReadonlySet<string> = new Set([
-  'password',
-  'pass',
-  'pwd',
-  'token',
+/** The properties that name the value of a name/value pair (compared like every name: case and separators ignored). */
+const NAME_KEYS: ReadonlySet<string> = new Set([
+  'name',
   'key',
-  'secret',
-  'sid',
-  'psk',
-  'seed',
-  'apikey',
-  'accesstoken',
-  'obfspassword',
-  'privatekey',
-  'auth',
+  'id',
+  'label',
+  'field',
+  'variable',
+  'var',
+  'env',
+  'header',
+  'headername',
+  'param',
+  'parameter',
+  'title',
 ]);
 
-const NAME_KEYS: ReadonlySet<string> = new Set(['name', 'key', 'header', 'headername']);
+/**
+ * A text that carries no structure: one line, with no `name: value` or `name=value` in it (a `:` inside a word, as
+ * in a link or a time, and the `=` padding at the end of base64 are not separators). Such a text keeps the value rules;
+ * any other text is read as a document or masked whole.
+ */
+export function isTrivialText(text: string): boolean {
+  if (PLAIN_WORD.test(text)) return true;
+  const trimmed = text.trim();
+  if (
+    startsFlowDocument(trimmed) ||
+    /[\p{Cc}\u2028\u2029]|:(?:\s|$)|["'][ \p{Cf}]*:/u.test(trimmed) ||
+    /(?:^|\s)(?:--(?:password|passwd|passphrase|token|secret)(?:\s|=)|curl(?:\s|$))/iu.test(trimmed)
+  ) {
+    return false;
+  }
+  // URL tails include query assignments and authority delimiters. The value rules know how to read those.
+  const remaining = trimmed.replace(/:\/\/[^\s"'<>]*/gu, '');
+  if (remaining.includes('=') && !/^[A-Za-z0-9+/_-]+={1,2}$/u.test(remaining)) {
+    return false;
+  }
+  for (const [word] of remaining.matchAll(/[^\s:=]+(?::[^\s:]*)?/gu)) {
+    const colon = word.indexOf(':');
+    if (colon < 0 || word.includes('@', colon)) continue;
+    const key = norm(word.slice(0, colon));
+    if (
+      key === 'auth' ||
+      key === 'decryption' ||
+      isSecretName(key) ||
+      isSecretCollectionName(key)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+const startsFlowDocument = (trimmed: string): boolean =>
+  trimmed.startsWith('{') || trimmed.startsWith('[');
 
 const isSecretName = (key: string): boolean => {
   const n = norm(key);
-  return SECRET_KEYS.has(n) || SECRET_SUBSTRINGS.some((part) => n.includes(part));
+  if (SECRET_KEYS.has(n)) {
+    return true;
+  }
+  if (n !== 'key' && n.endsWith('key') && !PUBLIC_KEY_NAMES.test(n)) {
+    return true;
+  }
+  return SECRET_SUBSTRINGS.some(
+    (part) => n.includes(part) && (part !== 'token' || !TOKEN_ABOUT.test(n)),
+  );
 };
+
+/**
+ * The plural of a secret name (`accessTokens`, `botTokens`, `passwords`): a collection of secrets. A text or a number
+ * in it is a secret; an object in it describes one (a token with its name and expiry) and is read by its own names.
+ */
+const isSecretCollectionName = (key: string): boolean => {
+  const n = norm(key);
+  return n.length > 1 && n.endsWith('s') && isSecretName(n.slice(0, -1));
+};
+
+/**
+ * The names whose plain value stays readable inside an object item of a collection of secrets (`apiTokens: [{ name,
+ * expiresAt, token }]`): what describes a token, never the token. Everything else under a secret name is masked.
+ */
+const COLLECTION_METADATA: ReadonlySet<string> = new Set([
+  'id',
+  'uuid',
+  'name',
+  'type',
+  'createdat',
+  'updatedat',
+  'expiresat',
+  // The panel's own spelling (`GET /api/tokens`: `response.tokens[].expireAt`).
+  'expireat',
+  'lastusedat',
+  'tokentype',
+  'tokenname',
+  'tokenuuid',
+  'tokenid',
+  'tokenurl',
+  'count',
+  'usecount',
+]);
+
+/** How many values one call may visit, aliases and embedded documents included: past it the whole value is masked. */
+const MAX_VISITS = 500_000;
+/** No single fragment gets more scans than a YAML document; repeated text work also shares a call budget. */
+const MAX_TEXT_WORK = 4 * 1024 * 1024;
+/** Shared containers can expand far beyond their input size. Bound repeat work without lowering the limit for trees. */
+const MAX_REPEAT_VISITS = 4096;
+
+class UnsafeMaskStructure extends Error {}
+class MaskBudgetExceeded extends UnsafeMaskStructure {}
+
+const refusalMask = (error: UnsafeMaskStructure): string =>
+  error instanceof MaskBudgetExceeded ? MASK_TOO_LARGE : MASK;
+
+type ContainerMode = 'ordinary' | 'people' | 'all' | 'collection' | 'record';
+
+/**
+ * A YAML text larger than this is not read as a document; it gets the whole-text rule of `maskTextFailClosed`. The
+ * parser does work that grows faster than the text in places (an alias looks through the anchors before it), so the
+ * limit keeps the worst case of one read in milliseconds.
+ */
+export const MAX_YAML_CHARS = 64 * 1024;
+/**
+ * A text with more `&` and `*` characters than this (anchors, aliases, or anything that could be one) is not read as
+ * YAML either: resolving an alias is linear in the anchors before it, so many of both are quadratic. A subscription
+ * template uses a few at most.
+ */
+const MAX_YAML_ANCHORS_AND_ALIASES = 300;
+
+function anchorsAndAliases(text: string): number {
+  let count = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code === 0x26 || code === 0x2a) {
+      count += 1;
+    }
+  }
+  return count;
+}
+/** The most nodes a YAML stream may have before it is converted. */
+const MAX_YAML_NODES = 100_000;
+
+/**
+ * Every key of every mapping is a plain scalar met once, no alias stands for a scalar, and the stream has at most
+ * `MAX_YAML_NODES` nodes. An alias of a scalar is refused because the converted value no longer says where it came
+ * from: `password: &p secret` and `message: *p` would show the secret under a name that is not secret. An alias of a
+ * mapping or a list is fine: its contents keep their own names.
+ */
+function plainAndBounded(document: Document, counter: { nodes: number }): boolean {
+  let clean = true;
+  visit(document, (_key, node) => {
+    counter.nodes += 1;
+    if (counter.nodes > MAX_YAML_NODES) {
+      clean = false;
+      return visit.BREAK;
+    }
+    if (isAlias(node)) {
+      const target: unknown = node.resolve(document);
+      if (target === undefined || isScalar(target)) {
+        clean = false;
+        return visit.BREAK;
+      }
+    }
+    if (isMap(node)) {
+      const seen = new Set<string>();
+      for (const pair of node.items) {
+        const key: unknown = pair.key;
+        if (!isScalar(key) || (key.value !== null && typeof key.value === 'object')) {
+          clean = false;
+          return visit.BREAK;
+        }
+        const name = String(key.value);
+        if (seen.has(name)) {
+          clean = false;
+          return visit.BREAK;
+        }
+        seen.add(name);
+      }
+    }
+    return undefined;
+  });
+  return clean;
+}
+
+/**
+ * The documents of a YAML stream, or undefined when it cannot be read cleanly and within bounds: too large, a syntax
+ * error or a warning (an unknown tag), a key that is repeated or is not a plain scalar, too many nodes, aliases that
+ * expand too far. The parser never logs (its messages quote the source, which can be a credential) and the check for
+ * repeated keys is one pass with a set per mapping (the parser's own check is quadratic in the number of keys).
+ */
+export function readYamlDocuments(text: string): unknown[] | undefined {
+  if (text.length > MAX_YAML_CHARS || anchorsAndAliases(text) > MAX_YAML_ANCHORS_AND_ALIASES) {
+    return undefined;
+  }
+  try {
+    const parsed = parseAllDocuments(text, {
+      schema: 'core',
+      strict: true,
+      uniqueKeys: false,
+      logLevel: 'silent',
+      prettyErrors: false,
+    });
+    const documents = Array.isArray(parsed) ? parsed : [];
+    const counter = { nodes: 0 };
+    const out: unknown[] = [];
+    for (const document of documents) {
+      if (document.errors.length > 0 || document.warnings.length > 0) {
+        return undefined;
+      }
+      if (!plainAndBounded(document, counter)) {
+        return undefined;
+      }
+      out.push(document.toJS({ maxAliasCount: 100 }));
+    }
+    return out;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * What a text that is not one clean document becomes (see `maskTextFailClosed`): no rule can tell its names from
+ * its values, so none of it is shown.
+ */
+export { UNREADABLE_DOCUMENT };
 
 /** `vmess://` carries its whole configuration, id included, in one base64 text; `ss://` can too. The payload is secret. */
 const OPAQUE_LINK = /\b(vmess:\/\/|ssr?:\/\/)([A-Za-z0-9+/=_-]{12,})/giu;
 const PEM_PRIVATE =
   /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|$)/gu;
-const URL_USERINFO = /\b([a-z][a-z0-9+.-]*:\/\/)([^/\s@?#"'<>]+)@/giu;
-const URL_PARAM = /([?&;])([A-Za-z0-9_.-]{1,40})=([^&#\s"'<>]*)/gu;
-const JWT = /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b/gu;
+/** A whole PEM block of base64 lines (no header lines): its body cannot hold a `-`, so the match is linear. */
+const PEM_BLOCK = /-----BEGIN [A-Z0-9 ]{1,40}-----[A-Za-z0-9+/=\s]*-----END [A-Z0-9 ]{1,40}-----/gu;
+// Anchored by a literal delimiter. A new :// cannot start inside a previous authority.
+// The authority ends at a URL delimiter. A greedy run finds its last @, not the first.
+const URL_USERINFO = /(:\/\/)([^/\s?#"'<>]+)@/gu;
+const URL_PARAM = /([?&;])([^/?&;=#\s"'<>]+)=([^&#;\s"'<>]*)/gu;
+// Consume whole runs, then inspect pieces without retrying a greedy match at each word boundary.
+const JWT_RUN = /[A-Za-z0-9_.-]+/gu;
+const AUTHORITY_RUN = /[^/\s?#"'<>]+/gu;
 const BEARER = /\b(Bearer\s+)[A-Za-z0-9._~+/=-]{8,}/giu;
+const BASIC = /\b(Basic\s+)[A-Za-z0-9+/_-]+={0,2}/giu;
+const PLAIN_WORD = /^[A-Za-z0-9_-]+$/u;
 
 class Masker {
   count = 0;
   private readonly key: Uint8Array | string | undefined;
   private readonly extra: ReadonlySet<string>;
   private readonly people: boolean;
+  private readonly scrubDecodedYaml: MaskOptions['scrubDecodedYaml'];
 
   constructor(options: MaskOptions) {
     this.key = options.fingerprintKey;
     this.extra = new Set((options.extraSecretKeys ?? []).map(norm));
     this.people = options.people !== 'off';
+    this.scrubDecodedYaml = options.scrubDecodedYaml;
   }
 
   /** A name that says its value is secret: the built-in rules and the extra names of this call. */
@@ -178,21 +431,104 @@ class Masker {
       typeof original === 'string'
         ? original
         : JSON.stringify(original === undefined ? null : original);
+    this.chargeText(text.length);
     const digest = createHmac('sha256', this.key).update(text).digest('hex').slice(0, 8);
     return `[masked:${digest}]`;
   }
 
+  private visits = 0;
+  private textWork = 0;
+  private repeatVisits = 0;
+  private repeatDepth = 0;
+  private readonly seen = new WeakMap<object, ContainerMode>();
+  /** The objects on the way from the top to the value being read: one met again is a cycle (a YAML alias of itself). */
+  private readonly path: object[] = [];
+
+  /** Counts one visit; past the budget the call fails closed (see `maskSecrets`). */
+  private visit(): void {
+    this.visits += 1;
+    if (this.visits > MAX_VISITS) {
+      throw new MaskBudgetExceeded();
+    }
+    if (this.repeatDepth > 0) {
+      this.visitRepeated();
+    }
+  }
+
+  private visitRepeated(): void {
+    this.repeatVisits += 1;
+    if (this.repeatVisits > MAX_REPEAT_VISITS) {
+      throw new MaskBudgetExceeded();
+    }
+  }
+
+  private chargeText(length: number): void {
+    this.textWork += length;
+    if (this.textWork > MAX_TEXT_WORK) {
+      throw new MaskBudgetExceeded();
+    }
+  }
+
+  /** Reject wide objects before reading their values or allocating a second array of entries. */
+  private keys(source: Readonly<Record<string, unknown>>): string[] {
+    const keys = Object.keys(source);
+    if (2 * keys.length > MAX_VISITS - this.visits) {
+      throw new MaskBudgetExceeded();
+    }
+    for (const key of keys) {
+      this.chargeText(key.length);
+    }
+    return keys;
+  }
+
+  /** Refuses aliases that can expose a value masked in another context; a cycle is masked rather than followed. */
+  private inside<R>(value: object, mode: ContainerMode, read: () => R): R | string {
+    const previous = this.seen.get(value);
+    if (previous !== undefined && previous !== mode) {
+      throw new UnsafeMaskStructure();
+    }
+    // A stack, not a set: the path is at most `MAX_DEPTH` long.
+    if (this.path.includes(value)) {
+      return this.mask(null);
+    }
+    if (previous === undefined) {
+      this.seen.set(value, mode);
+    } else {
+      this.visitRepeated();
+      this.repeatDepth += 1;
+    }
+    this.path.push(value);
+    try {
+      return read();
+    } finally {
+      this.path.pop();
+      if (previous !== undefined) {
+        this.repeatDepth -= 1;
+      }
+    }
+  }
+
+  private peopleMode(key: string | undefined): 'people' | 'ordinary' {
+    return this.people && key !== undefined && PEOPLE_KEYS.has(norm(key)) ? 'people' : 'ordinary';
+  }
+
   /** Replaces every scalar inside a value that is secret as a whole; the shape (how many items) stays visible. */
   private maskAll(value: unknown, depth: number): unknown {
+    this.visit();
     if (depth > MAX_DEPTH) {
       return this.mask(null);
     }
     if (Array.isArray(value)) {
-      return value.map((item) => this.maskAll(item, depth + 1));
+      return this.inside(value, 'all', () => value.map((item) => this.maskAll(item, depth + 1)));
     }
     if (value !== null && typeof value === 'object') {
-      return Object.fromEntries(
-        Object.entries(value).map(([key, item]) => [key, this.maskAll(item, depth + 1)]),
+      return this.inside(value, 'all', () =>
+        this.named(
+          this.keys(value as Record<string, unknown>).map(
+            (key) =>
+              [key, this.maskAll((value as Record<string, unknown>)[key], depth + 1)] as const,
+          ),
+        ),
       );
     }
     if (value === null || value === undefined || value === '') {
@@ -201,45 +537,203 @@ class Masker {
     return this.mask(value);
   }
 
-  /** The value rules for a string: PEM keys, credentials in URLs, JWTs, bearer tokens, embedded JSON. */
-  text(input: string, depth = 0): string {
-    let out = input;
-    const trimmed = out.trimStart();
-    if (
-      (trimmed.startsWith('{') || trimmed.startsWith('[')) &&
-      out.length <= MAX_EMBEDDED_JSON &&
-      depth <= MAX_DEPTH
-    ) {
-      try {
-        const parsed: unknown = JSON.parse(out);
-        if (parsed !== null && typeof parsed === 'object') {
-          const before = this.count;
-          const masked = this.walk(parsed, depth + 1, undefined, undefined);
-          // Only rewrite the text when something in it was a secret: a document without any is left as it is.
-          if (this.count > before) {
-            return JSON.stringify(masked);
-          }
-          return out;
-        }
-      } catch {
-        // Not JSON after all: the rules below still apply.
-      }
+  /** The shape-only rules, also used on already-read documents and mapping names. */
+  text(input: string): string {
+    this.chargeText(input.length);
+    return this.scanText(input);
+  }
+
+  /** The input has already been charged to the shared text budget. */
+  private scanText(input: string): string {
+    if (input.length > MAX_YAML_CHARS) {
+      return this.unreadable();
     }
+    if (PLAIN_WORD.test(input)) return input;
+    let out = input;
     out = out.replace(PEM_PRIVATE, () => this.mask('pem'));
+    out = out.replace(AUTHORITY_RUN, (run: string, offset: number, source: string) => {
+      // A schemed authority is handled below; never fingerprint its replacement as another credential.
+      if (offset >= 3 && source.startsWith('://', offset - 3)) {
+        return run;
+      }
+      const at = run.indexOf('@');
+      const colon = run.indexOf(':');
+      // Also recognize bare user:password@host. An email address alone has no password delimiter.
+      return colon > 0 && at > colon + 1 && at + 1 < run.length
+        ? `${this.mask(run.slice(0, at))}${run.slice(at)}`
+        : run;
+    });
     out = out.replace(
       URL_USERINFO,
-      (_whole, scheme: string, userinfo: string) => `${scheme}${this.mask(userinfo)}@`,
+      (_whole, delimiter: string, userinfo: string) => `${delimiter}${this.mask(userinfo)}@`,
     );
     out = out.replace(
       OPAQUE_LINK,
       (_whole, scheme: string, payload: string) => `${scheme}${this.mask(payload)}`,
     );
-    out = out.replace(URL_PARAM, (whole, sep: string, name: string, value: string) =>
-      SECRET_PARAMS.has(norm(name)) && value !== '' ? `${sep}${name}=${this.mask(value)}` : whole,
-    );
-    out = out.replace(JWT, (whole) => this.mask(whole));
+    out = out.replace(URL_PARAM, (whole, sep: string, name: string, value: string) => {
+      let decoded = name;
+      try {
+        decoded = decodeURIComponent(name);
+      } catch {
+        // The literal name is still checked when percent encoding is malformed.
+      }
+      const key = norm(decoded);
+      return (key === 'key' ||
+        key === 'auth' ||
+        this.secretName(decoded) ||
+        isSecretCollectionName(decoded)) &&
+        value !== ''
+        ? `${sep}${name}=${this.mask(value)}`
+        : whole;
+    });
+    out = out.replace(JWT_RUN, (run) => {
+      if (!run.includes('.') || !run.includes('eyJ')) return run;
+      const parts = run.split('.');
+      return parts.some((head, index) => {
+        const prefix = head.indexOf('eyJ');
+        return (
+          prefix !== -1 &&
+          head.length - prefix >= 11 &&
+          (parts[index + 1]?.length ?? 0) >= 8 &&
+          (parts[index + 2]?.length ?? 0) >= 4
+        );
+      })
+        ? this.mask(run)
+        : run;
+    });
     out = out.replace(BEARER, (_whole, prefix: string) => `${prefix}${this.mask('bearer')}`);
+    out = out.replace(BASIC, (_whole, prefix: string) => `${prefix}${this.mask('basic')}`);
     return out;
+  }
+
+  /**
+   * A YAML document carried as base64 (a subscription template's `encodedTemplateYaml`): an opaque text to every other
+   * rule, so it is decoded, read, masked like any document and encoded again, with its comments dropped. What cannot be
+   * read that way is masked as a whole: it fails closed.
+   */
+  private encodedYaml(value: string, depth: number): string {
+    this.chargeText(value.length);
+    if (value.trim() === '') {
+      return value;
+    }
+    if (value.length > MAX_ENCODED_YAML_CHARS || depth > MAX_DEPTH) {
+      return this.mask(value);
+    }
+    try {
+      const decoded = Buffer.from(value, 'base64').toString('utf8');
+      const before = this.count;
+      const text = this.scrubYaml(decoded);
+      const documents = readYamlDocuments(text);
+      const [parsed] = documents ?? [];
+      if (documents?.length !== 1 || parsed === null || typeof parsed !== 'object') {
+        return this.mask(value);
+      }
+      const masked = this.walk(parsed, depth + 1, undefined, undefined);
+      // The names of a mapping are not values to the walk: the value rules run over the written text as well.
+      const written = this.scrubYaml(this.text(stringifyYaml(masked, { lineWidth: 0 })));
+      if (this.count === before && !text.includes('#')) {
+        // Nothing in it is a secret and it has no comment, which is not read and could hold one: the original stays.
+        return value;
+      }
+      return Buffer.from(written, 'utf8').toString('base64');
+    } catch (error) {
+      if (error instanceof UnsafeMaskStructure) {
+        throw error;
+      }
+      return this.mask(value);
+    }
+  }
+
+  private scrubYaml(text: string): string {
+    this.chargeText(text.length);
+    const scrubbed = this.scrubDecodedYaml?.(text);
+    this.count += scrubbed?.count ?? 0;
+    return scrubbed?.text ?? text;
+  }
+
+  /**
+   * The rule for a text that is not one clean YAML or JSON document (a parse error or warning, a repeated key, over the
+   * limits of size or aliases, an env file, a page): no rule can tell its names from its values, so it is masked as a
+   * whole. Only a trivial text is shown with the value rules: one line without a `: ` or `=` separator (an error
+   * sentence, a number, `ok`, a bare link).
+   */
+  failClosed(input: string): string {
+    if (input.length <= MAX_YAML_CHARS && isTrivialText(input)) {
+      return this.text(input);
+    }
+    return this.unreadable();
+  }
+
+  private unreadable(): string {
+    this.count += 1;
+    return UNREADABLE_DOCUMENT;
+  }
+
+  /**
+   * A string value. A trivial one (one line, no `name: value` or `name=value` in it) gets the value rules. Any other is
+   * a document in a string (`config: |` with YAML in it, a JSON text) and gets the rule of a text answer: read as one
+   * clean document, masked by its names and written again when something in it was masked (kept, with the value rules,
+   * when nothing was); not readable that way, it is masked whole. Depth and work count towards the same limits.
+   */
+  stringValue(value: string, depth = 0): string {
+    if (value.length > MAX_YAML_CHARS) {
+      return this.unreadable();
+    }
+    this.chargeText(value.length);
+    // A PEM block is a known shape on several lines (a private key is masked by the value rules, a certificate kept):
+    // a text that is trivial apart from its PEM blocks keeps the value rules.
+    if (isTrivialText(value) || isTrivialText(value.replace(PEM_BLOCK, ' '))) {
+      return this.scanText(value);
+    }
+    if (depth > MAX_DEPTH) {
+      return this.unreadable();
+    }
+    const documents = readYamlDocuments(value);
+    const [document] = documents ?? [];
+    if (documents?.length !== 1 || document === null || typeof document !== 'object') {
+      return this.unreadable();
+    }
+    const before = this.count;
+    const masked = this.walk(document, depth + 1, undefined, undefined);
+    if (this.count === before && !value.includes('#')) {
+      return this.scanText(value);
+    }
+    const start = value.trimStart();
+    const written = startsFlowDocument(start)
+      ? JSON.stringify(masked)
+      : stringifyYaml(masked, { lineWidth: 0 });
+    return this.text(written);
+  }
+
+  /**
+   * The entries of an object with their names read by the value rules too (a name can be a URL with credentials). Two
+   * names that become one after masking keep both entries: the later ones get `#1`, `#2`, ... after the name.
+   */
+  private named(entries: readonly (readonly [string, unknown])[]): Record<string, unknown> {
+    const used = new Set<string>();
+    // The next suffix to try for each masked name, so that many names that mask alike cost one step each.
+    const next = new Map<string, number>();
+    const out: [string, unknown][] = [];
+    for (const [key, value] of entries) {
+      this.visit();
+      const masked = this.scanText(key);
+      let name = masked;
+      if (used.has(name)) {
+        let index = next.get(masked) ?? 1;
+        // A suffix can be taken by a name of the object itself (`x#1`): skip it, once.
+        while (used.has(`${masked}#${String(index)}`)) {
+          this.visit();
+          index += 1;
+        }
+        name = `${masked}#${String(index)}`;
+        next.set(masked, index + 1);
+      }
+      used.add(name);
+      out.push([name, value]);
+    }
+    // `fromEntries` defines own properties: a name such as `__proto__` stays a name.
+    return Object.fromEntries(out);
   }
 
   /**
@@ -252,40 +746,104 @@ class Masker {
     key: string | undefined,
     arrayKey: string | undefined,
   ): unknown {
+    this.visit();
     if (depth > MAX_DEPTH) {
       return this.mask(null);
     }
     if (typeof value === 'string') {
-      return this.text(value, depth);
+      return this.stringValue(value, depth);
     }
     if (Array.isArray(value)) {
-      return value.map((item) => this.walk(item, depth + 1, undefined, key));
+      return this.inside(value, this.peopleMode(key), () =>
+        value.map((item) => this.walk(item, depth + 1, undefined, key)),
+      );
     }
     if (value !== null && typeof value === 'object') {
-      return this.object(value as Record<string, unknown>, depth, arrayKey);
+      const mode = this.peopleMode(arrayKey);
+      return this.inside(value, mode, () =>
+        this.object(value as Record<string, unknown>, depth, mode === 'people'),
+      );
     }
     return value;
+  }
+
+  /**
+   * A collection under a secret plural name (`accessTokens`): every scalar in it, at any depth, is masked (a list of
+   * lists, a dictionary of tokens), except the metadata of a record: in an object that is an item of the collection
+   * (or a value of a dictionary of such objects), a boolean and a plain value under a name of `COLLECTION_METADATA`
+   * (`name`, `expiresAt`, ...) stay readable.
+   */
+  private collection(value: unknown, depth: number): unknown {
+    this.visit();
+    if (depth > MAX_DEPTH) {
+      return this.mask(null);
+    }
+    const item = (entry: unknown): unknown =>
+      entry !== null && typeof entry === 'object' && !Array.isArray(entry)
+        ? this.record(entry as Record<string, unknown>, depth + 1)
+        : this.collection(entry, depth + 1);
+    if (Array.isArray(value)) {
+      return this.inside(value, 'collection', () => value.map(item));
+    }
+    if (value !== null && typeof value === 'object') {
+      return this.inside(value, 'collection', () =>
+        this.named(
+          this.keys(value as Record<string, unknown>).map(
+            (key) => [key, item((value as Record<string, unknown>)[key])] as const,
+          ),
+        ),
+      );
+    }
+    return this.maskAll(value, depth);
+  }
+
+  /** One record of a collection of secrets: its metadata stays, everything else is masked whole. */
+  private record(source: Readonly<Record<string, unknown>>, depth: number): unknown {
+    this.visit();
+    return this.inside(source, 'record', () =>
+      this.named(
+        this.keys(source).map((key): [string, unknown] => {
+          const entry = source[key];
+          // The names the caller's profile hides (the console's profile for people hides `uuid`) are hidden here too:
+          // the metadata list never makes a value readable that the profile hides.
+          if (this.extra.has(norm(key))) {
+            return [key, this.maskAll(entry, depth + 1)];
+          }
+          if (typeof entry === 'boolean' || entry === null) {
+            return [key, entry];
+          }
+          if (
+            COLLECTION_METADATA.has(norm(key)) &&
+            (typeof entry === 'string' || typeof entry === 'number')
+          ) {
+            return [key, typeof entry === 'string' ? this.stringValue(entry, depth + 1) : entry];
+          }
+          return [key, this.maskAll(entry, depth + 1)];
+        }),
+      ),
+    );
   }
 
   private object(
     source: Readonly<Record<string, unknown>>,
     depth: number,
-    arrayKey: string | undefined,
+    inPeople: boolean,
   ): Record<string, unknown> {
-    const inPeople = this.people && arrayKey !== undefined && PEOPLE_KEYS.has(norm(arrayKey));
-    // `{ "name": "Authorization", "value": "..." }` and `{ "key": "x-api-key", "value": "..." }` pairs.
-    const hasValue = Object.hasOwn(source, 'value');
-    let pairName: string | undefined;
-    if (hasValue) {
-      for (const candidate of Object.keys(source)) {
+    // `{ "name": "Authorization", "value": "..." }` and `{ "key": "x-api-key", "value": "..." }` pairs, in any case and
+    // order of their properties: the value is secret when ANY of the naming properties names a secret.
+    const keys = this.keys(source);
+    const hasValue = keys.some((candidate) => norm(candidate) === 'value');
+    const sensitivePair =
+      hasValue &&
+      keys.some((candidate) => {
+        if (!NAME_KEYS.has(norm(candidate))) return false;
         const given = source[candidate];
-        if (NAME_KEYS.has(norm(candidate)) && typeof given === 'string') {
-          pairName = given;
-          break;
-        }
-      }
-    }
-    const entries = Object.entries(source).map(([name, item]): [string, unknown] => {
+        if (typeof given !== 'string') return false;
+        this.chargeText(given.length);
+        return this.secretName(given) || isSecretCollectionName(given);
+      });
+    const entries = keys.map((name): [string, unknown] => {
+      const item = source[name];
       const n = norm(name);
       if (n === 'auth') {
         // Xray's `"auth": "password"` is a mode, not a secret; a plain mode word stays readable.
@@ -306,6 +864,9 @@ class Masker {
             : this.walk(item, depth + 1, name, undefined),
         ];
       }
+      if (ENCODED_YAML.test(n) && typeof item === 'string') {
+        return [name, this.encodedYaml(item, depth)];
+      }
       if (n === 'key' && !hasValue) {
         return [name, this.maskAll(item, depth + 1)];
       }
@@ -315,27 +876,68 @@ class Masker {
       if (inPeople && PEOPLE_FIELDS.has(n)) {
         return [name, this.maskAll(item, depth + 1)];
       }
-      if (hasValue && n === 'value' && pairName !== undefined && this.secretName(pairName)) {
+      if (sensitivePair && n === 'value') {
         return [name, this.maskAll(item, depth + 1)];
+      }
+      if (isSecretCollectionName(name)) {
+        return [name, this.collection(item, depth + 1)];
       }
       return [name, this.walk(item, depth + 1, name, undefined)];
     });
-    return Object.fromEntries(entries);
+    return this.named(entries);
   }
 }
 
 /** Masks every secret in a JSON-like value. The input is not changed; the result shares nothing with it. */
 export function maskSecrets<T>(value: T, options: MaskOptions = {}): Masked<T> {
   const masker = new Masker(options);
-  const masked = masker.walk(value, 0, undefined, undefined) as T;
-  return { value: masked, count: masker.count };
+  try {
+    const masked = masker.walk(value, 0, undefined, undefined) as T;
+    return { value: masked, count: masker.count };
+  } catch (error) {
+    if (error instanceof UnsafeMaskStructure) {
+      // An alias changes masking context or the structure takes too much work: nothing of it is shown.
+      return { value: refusalMask(error) as T, count: masker.count + 1 };
+    }
+    throw error;
+  }
 }
 
 /** Masks the credentials and secret parameters in a URL or any text that holds one (a node's proxy URL). */
 export function maskText(value: string, options: MaskOptions = {}): Masked<string> {
+  if (value.length > MAX_YAML_CHARS) {
+    return { value: UNREADABLE_DOCUMENT, count: 1 };
+  }
   const masker = new Masker(options);
-  const masked = masker.text(value);
-  return { value: masked, count: masker.count };
+  try {
+    const masked = startsFlowDocument(value.trimStart())
+      ? masker.stringValue(value)
+      : masker.text(value);
+    return { value: masked, count: masker.count };
+  } catch (error) {
+    if (error instanceof UnsafeMaskStructure) {
+      return { value: refusalMask(error), count: masker.count + 1 };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Masks a text that is not one clean YAML or JSON document (a repeated key, a syntax error, too large, an env or INI
+ * file, a page): fails closed. It becomes `UNREADABLE_DOCUMENT`, unless it is a trivial text (one line without `:` or
+ * `=`), which gets the value rules of `maskText`.
+ */
+export function maskTextFailClosed(value: string, options: MaskOptions = {}): Masked<string> {
+  const masker = new Masker(options);
+  try {
+    const masked = masker.failClosed(value);
+    return { value: masked, count: masker.count };
+  } catch (error) {
+    if (error instanceof UnsafeMaskStructure) {
+      return { value: refusalMask(error), count: masker.count + 1 };
+    }
+    throw error;
+  }
 }
 
 // ---- canonical JSON and the content hash -----------------------------------------------------------------------

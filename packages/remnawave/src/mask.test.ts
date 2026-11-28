@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { canonicalJson, contentHash, MASK, maskSecrets, maskText } from './mask.js';
+import {
+  canonicalJson,
+  contentHash,
+  MASK,
+  maskSecrets,
+  maskText,
+  UNREADABLE_DOCUMENT,
+} from './mask.js';
 
 const KEY = 'a-test-key-for-fingerprints';
 /** The character a URL with credentials has before its host, and PEM lines: kept out of the literals. */
@@ -12,6 +19,96 @@ const end = (kind: string): string => `-----END ${kind} KEY-----`;
 const text = (value: unknown): string => JSON.stringify(value);
 
 describe('masking secrets', () => {
+  it('removes all userinfo before the last at sign in a URL authority', () => {
+    const url = `http://synthetic:part${AT}tail${AT}example.com/path`;
+    assert.deepEqual(maskText(url), { value: `http://${MASK}${AT}example.com/path`, count: 1 });
+    assert.deepEqual(maskText(`http://example.com/path${AT}label`), {
+      value: `http://example.com/path${AT}label`,
+      count: 0,
+    });
+  });
+
+  it('keeps large ordinary lists within the visit and text limits', () => {
+    const small = Array.from({ length: 60_000 }, (_, id) => ({ id, name: 'fixture' }));
+    const longer = Array.from({ length: 30_000 }, () => ({ note: 'x'.repeat(100) }));
+    assert.deepEqual(maskSecrets(small), { value: small, count: 0 });
+    assert.deepEqual(maskSecrets(longer), { value: longer, count: 0 });
+  });
+
+  it('masks URL userinfo exactly once with a fingerprint key', () => {
+    const options = { fingerprintKey: 'fixture-key' };
+    const bare = maskText(`synthetic:sample${AT}example.com`, options);
+    assert.deepEqual(maskText(`https://synthetic:sample${AT}example.com`, options), {
+      value: `https://${bare.value}`,
+      count: 1,
+    });
+  });
+
+  it('masks a query value through the next parameter even when it contains a question mark', () => {
+    const url = 'https://example.com/?client_secret=synthetic?sample&format=json';
+    assert.equal(maskText(url).value, `https://example.com/?client_secret=${MASK}&format=json`);
+  });
+
+  it('charges encoded template input to the shared text budget before checking for blank text', () => {
+    const blank = ' '.repeat(60_000);
+    assert.equal(
+      maskSecrets(Array.from({ length: 80 }, () => ({ encodedTemplateYaml: blank }))).value,
+      '[masked: too large]',
+    );
+  });
+
+  it('does not scan oversized text or key names for credential shapes', () => {
+    for (const piece of ['a.', 'a-', 'a+', 'eyJsynthetic-']) {
+      const value = piece.repeat(Math.ceil(66_000 / piece.length));
+      assert.deepEqual(maskSecrets({ value }).value, { value: UNREADABLE_DOCUMENT });
+      assert.deepEqual(maskSecrets({ [value]: 1 }).value, { [UNREADABLE_DOCUMENT]: 1 });
+    }
+  });
+
+  it('does not read the values of an object wider than the masking budget', () => {
+    let reads = 0;
+    const wide: Record<string, number> = {};
+    for (let index = 0; index < 250_001; index += 1) {
+      Object.defineProperty(wide, `k${String(index)}`, { enumerable: true, get: () => ++reads });
+    }
+    assert.equal(maskSecrets(wide).value, '[masked: too large]');
+    assert.equal(reads, 0);
+  });
+
+  it('routes punctuation-separated credential labels through masking', () => {
+    for (const value of [
+      'my/secret: sample-hidden',
+      'db(password): sample-hidden',
+      'a+password: sample-hidden',
+      'a%password: sample-hidden',
+      'x|password: sample-hidden',
+      '(password=sample-hidden)',
+      'x/password=sample-hidden',
+      '--password sample-hidden',
+      'curl -u admin:sample-hidden https://example.com',
+      'Server=a;Password=sample-hidden',
+      'x password:sample-hidden',
+      'a\u000bpassword: sample-hidden',
+      'password:\u00a0sample-hidden',
+    ]) {
+      assert.ok(!maskSecrets({ value }).value.value.includes('sample-hidden'), value);
+    }
+    for (const value of ['12:34', 'YQ==', 'https://example.com/?format=json']) {
+      assert.equal(maskSecrets({ value }).value.value, value);
+    }
+  });
+
+  it('uses the same secret names for query parameters and masks Basic and bare URL credentials', () => {
+    const url =
+      'https://example.com/?client_secret=one&refresh_token=two&id_token=three&format=json';
+    assert.equal(
+      maskText(url).value,
+      `https://example.com/?client_secret=${MASK}&refresh_token=${MASK}&id_token=${MASK}&format=json`,
+    );
+    const basic = Buffer.from('synthetic:sample').toString('base64');
+    assert.equal(maskText(`Basic ${basic}`).value, `Basic ${MASK}`);
+    assert.equal(maskText(`synthetic:sample${AT}example.com`).value, `${MASK}${AT}example.com`);
+  });
   it('masks REALITY keys, short ids and passwords by the name of the key', () => {
     const { value, count } = maskSecrets({
       realitySettings: {
@@ -185,7 +282,7 @@ describe('masking secrets', () => {
     assert.ok(out.includes('visible'));
     assert.equal(count, 2);
     // A string that only looks like JSON is left alone.
-    assert.equal(maskSecrets({ x: '{ not json' }).value.x, '{ not json');
+    assert.equal(maskSecrets({ x: '{ not json' }).value.x, UNREADABLE_DOCUMENT);
     // A document without a secret is returned as it was (not rewritten).
     const plain = '{ "a" : 1 }';
     assert.equal(maskSecrets({ x: plain }).value.x, plain);

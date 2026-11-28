@@ -77,7 +77,7 @@ export const PluginRuntimeSchema = z
     state: z.enum(PLUGIN_RUNTIME_STATES),
     startedAt: z.iso.datetime().nullable(),
     calls: z.number().int().describe('Calls made since the process started.'),
-    lastError: z.string().nullable().describe('Why it failed; null while it has not.'),
+    lastError: z.string().nullable().describe('A diagnostic from the core, or null.'),
     modules: z
       .array(z.object({ kind: z.string(), methods: z.array(z.string()) }))
       .describe('What the process loaded: each extension kind and the methods it offers.'),

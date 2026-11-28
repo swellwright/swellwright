@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { SECRET_TYPES, type SecretType } from '@swellwright/contracts';
 import { type Database } from '@swellwright/db';
 import {
@@ -102,7 +102,7 @@ export class PluginBroker {
   }
 
   /** The value of the secret bound to a settings field, if the plugin may have it and the vault is open. */
-  async secret(context: BrokerContext, field: string): Promise<string> {
+  async secret(context: BrokerContext, field: string, auditDelivery = false): Promise<string> {
     const declared =
       context.schema === undefined
         ? undefined
@@ -128,15 +128,33 @@ export class PluginBroker {
     try {
       value = await this.vault.readForPlugin(bound, type, { kind: 'plugin', id: context.id });
     } catch (error) {
+      if (!(
+        error instanceof CodedHttpException ||
+        error instanceof NotFoundException ||
+        error instanceof ConflictException
+      )) {
+        throw error;
+      }
       const code = error instanceof CodedHttpException ? error.apiCode : undefined;
-      const text = error instanceof Error ? error.message : 'The secret could not be read.';
+      const text = error.message;
       // A plugin sees only the text: an expired secret starts it with the stable code, so that it can tell (ADR 0042).
       throw new PluginBrokerError(
         code === 'secret_expired' ? `secret_expired: ${text}` : text,
         code,
       );
     }
-    this.noteUse(context.id, field, bound);
+    if (auditDelivery) {
+      await this.audit.record({
+        action: 'plugin.secret.used',
+        outcome: 'success',
+        actor: null,
+        object: { type: 'plugin', id: context.id },
+        details: { field, secret: bound },
+        meta: { ip: undefined, requestId: undefined },
+      });
+    } else {
+      this.noteUse(context.id, field, bound);
+    }
     return value;
   }
 

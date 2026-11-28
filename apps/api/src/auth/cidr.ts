@@ -89,25 +89,33 @@ export function parseAddress(raw: string | undefined): ParsedAddress | null {
 /**
  * The source an address counts as for the limits of sign-in attempts (ADR 0049): an IPv4 address on its own (in any
  * spelling, also mapped into IPv6), an IPv6 address by its /64, which one host usually holds whole and can rotate
- * through freely. A missing or unreadable address is the single source `unknown`. The full address still goes into the
- * session and the audit record; this is only the key of a counter.
+ * through freely. A missing or unreadable address is the single source `unknown`. This key does not replace the
+ * address recorded for a session or its authentication audit.
  */
 export function addressBucket(raw: string | undefined): string {
+  return sourcePrefix(raw);
+}
+
+/** Group IPv6 sources without recording their interface identifier. IPv4 uses one address. */
+export function auditAddressPrefix(raw: string | undefined): string {
+  return sourcePrefix(raw);
+}
+
+function sourcePrefix(raw: string | undefined): string {
   const parsed = parseAddress(raw);
-  if (!parsed) {
+  if (parsed === null) {
     return 'unknown';
   }
   if (parsed.family === 4) {
     return parsed.address;
   }
   const words = expandIpv6(parsed.address);
-  if (!words) {
-    return 'unknown';
-  }
-  return `${words
-    .slice(0, 4)
-    .map((word) => word.toString(16))
-    .join(':')}::/64`;
+  return words === null
+    ? 'unknown'
+    : `${words
+        .slice(0, 4)
+        .map((word) => word.toString(16))
+        .join(':')}::/64`;
 }
 
 /** A range of one family. A mapped IPv6 range of /96 or narrower is the IPv4 range it covers. */

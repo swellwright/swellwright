@@ -11,24 +11,41 @@ import { stringify } from 'yaml';
  * core and the container talk over HTTP on an internal network, each proving itself with a token.
  */
 
-const TOKEN_CONTEXT = 'swellwright:plugin-sidecar:v1';
+const TOKEN_CONTEXT = 'swellwright:plugin-sidecar:v2';
 
 /**
- * The token of a plugin's sidecar: an HMAC over the plugin id and the digest of its files, with a key derived from
- * `SW_AUTH_KEY`. It is not stored. It is valid only for the plugin as it was approved: change a file and it is
- * another token, so a sidecar built for the old plugin proves nothing to the new one.
+ * The token of a plugin's sidecar: an HMAC over the plugin id, digest and approval time, with a key derived
+ * from `SW_AUTH_KEY`. It is not stored, and a new approval always issues a different token.
  */
-export function sidecarToken(authKey: Buffer, id: string, digest: string): string {
+export function sidecarToken(
+  authKey: Buffer,
+  id: string,
+  digest: string,
+  approvedAt: Date,
+): string {
   const key = Buffer.from(hkdfSync('sha256', authKey, Buffer.alloc(0), TOKEN_CONTEXT, 32));
-  return createHmac('sha256', key).update(`${id}\0${digest}`).digest('hex');
+  return createHmac('sha256', key)
+    .update(`${id}\0${digest}\0${approvedAt.toISOString()}`)
+    .digest('hex');
 }
 
-/** True when the `Authorization` header carries the expected token. Constant time in the length of the token. */
+function bearerToken(header: string | undefined): string | undefined {
+  return header?.length === 71 ? /^Bearer ([0-9a-f]{64})$/u.exec(header)?.[1] : undefined;
+}
+
+/** Malformed headers can be rejected without looking up a stored plugin approval. */
+export const hasSidecarToken = (header: string | undefined): boolean =>
+  bearerToken(header) !== undefined;
+
+/** The `Authorization` header carries the expected token. Compare valid tokens in constant time. */
 export function tokenMatches(expected: string, header: string | undefined): boolean {
-  const given = /^Bearer ([0-9a-f]{64})$/u.exec(header ?? '')?.[1];
-  const a = Buffer.from(given ?? '0'.repeat(64));
+  const given = bearerToken(header);
+  if (given === undefined) {
+    return false;
+  }
+  const a = Buffer.from(given);
   const b = Buffer.from(expected);
-  return a.length === b.length && timingSafeEqual(a, b) && given !== undefined;
+  return a.length === b.length && timingSafeEqual(a, b);
 }
 
 /** Where the core reaches a sidecar, from the template of the configuration. */
@@ -69,6 +86,12 @@ async function exchange(
   const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
   const payload = body === undefined ? undefined : JSON.stringify(body);
   return new Promise<unknown>((resolve, reject) => {
+    /** Why the core ended the exchange itself, when it did: that is the answer, whatever error follows. */
+    let ended: SidecarError | undefined;
+    const end = (error: SidecarError): void => {
+      ended ??= error;
+      request.destroy(error);
+    };
     const request = send(
       url,
       {
@@ -88,7 +111,7 @@ async function exchange(
         response.on('data', (chunk: Buffer) => {
           size += chunk.length;
           if (size > MAX_ANSWER_BYTES) {
-            request.destroy(new SidecarError('The sidecar answered with too much.', 'invalid'));
+            end(new SidecarError('The sidecar answered with too much.', 'invalid'));
             return;
           }
           chunks.push(chunk);
@@ -112,14 +135,27 @@ async function exchange(
             reject(new SidecarError('The sidecar did not answer with JSON.', 'invalid'));
           }
         });
-        response.on('error', reject);
+        response.on('error', () => {
+          reject(
+            ended ?? new SidecarError('The answer of the sidecar was cut off.', 'unreachable'),
+          );
+        });
       },
     );
+    // The deadline is for the whole exchange: an answer that keeps trickling in is ended too.
+    const deadline = setTimeout(() => {
+      end(new SidecarError('The sidecar did not answer in time.', 'timeout'));
+    }, timeoutMs);
+    request.on('close', () => {
+      clearTimeout(deadline);
+    });
     request.on('timeout', () => {
-      request.destroy(new SidecarError('The sidecar did not answer in time.', 'timeout'));
+      end(new SidecarError('The sidecar did not answer in time.', 'timeout'));
     });
     request.on('error', (error) => {
-      if (error instanceof SidecarError) {
+      if (ended !== undefined) {
+        reject(ended);
+      } else if (error instanceof SidecarError) {
         reject(error);
       } else {
         reject(
@@ -192,8 +228,8 @@ export async function callSidecar(
 
 /**
  * The compose fragment that runs a sidecar (ADR 0031): on a network with no way out (`internal`), read-only, without
- * privileges, no new privileges, limited in memory, cpu and processes, from an image pinned by digest. The core
- * joins the same network to reach it, and the sidecar reaches the world only through the core's gateway.
+ * privileges, no new privileges, limited in memory, cpu and processes, from an image pinned by digest. Each sidecar
+ * has a network of its own that only the core joins, and reaches the world only through the core's gateway.
  */
 export function composeFragment(options: {
   readonly id: string;
@@ -207,6 +243,9 @@ export function composeFragment(options: {
 }): string {
   const { id, sidecar } = options;
   const service = `plugin-${id}`;
+  // A network of its own for each sidecar, shared only with the core: sidecars do not see one another, and none of
+  // them sees anything else the core is connected to (ADR 0050).
+  const network = `${options.network}-${id}`;
   const document = {
     services: {
       [service]: {
@@ -216,7 +255,7 @@ export function composeFragment(options: {
         user: '65532:65532',
         cap_drop: ['ALL'],
         security_opt: ['no-new-privileges:true'],
-        networks: [options.network],
+        networks: [network],
         environment: {
           SW_PLUGIN_ID: id,
           SW_PLUGIN_PORT: String(sidecar.port),
@@ -229,17 +268,17 @@ export function composeFragment(options: {
         pids_limit: 128,
         tmpfs: ['/tmp:size=16m,mode=1777'],
       },
-      // Swellwright joins the network of the sidecars to reach them.
-      [options.coreService]: { networks: [options.network] },
+      // Swellwright joins the network of this sidecar to reach it.
+      [options.coreService]: { networks: [network] },
     },
-    networks: { [options.network]: { internal: true } },
+    networks: { [network]: { internal: true } },
   };
   const header = [
     `# Swellwright plugin ${id} ${options.version}, files ${options.digest.slice(0, 12)}.`,
     '# Generated for the plugin as approved. It holds the token the sidecar proves itself with: keep it like a secret.',
     '# Add it to the stack next to your compose file and bring the sidecar up:',
     `#   docker compose -f docker-compose.yml -f plugin-${id}.yml up -d ${service} ${options.coreService}`,
-    `# The service "${options.coreService}" must already list its networks (it joins "${options.network}" here).`,
+    `# The service "${options.coreService}" must already list its networks (it joins "${network}" here).`,
     '',
   ].join('\n');
   return header + stringify(document, { lineWidth: 0 });
